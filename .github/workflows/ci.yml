@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Set up Python
+        run: uv python install 3.11
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Run Architecture Prohibition Gate
+        run: uv run pytest -q tests/architecture
+      - name: Run Product Tests
+        run: uv run pytest -q tests/product
+      - name: Run Core-V1 Benchmark Tests
+        run: uv run pytest -q tests/benchmark
+      - name: Run Ruff
+        run: uv run ruff check product tests
+      - name: Run Pyright
+        run: uv run pyright product
+      - name: Build Wheel and SDist
+        run: uv build
+      - name: Clean Environment Wheel Install Smoke
+        run: |
+          python -m venv .smoke_venv
+          .smoke_venv/bin/pip install dist/nexus_core-*.whl
+          .smoke_venv/bin/nexus-certify --help
