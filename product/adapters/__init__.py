@@ -1,0 +1,1 @@
+"""External compatibility adapters."""
