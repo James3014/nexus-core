@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import tests.product.changeset_certification_facade as facade
 import product.adapters.changeset_certification_v2 as adapter
+import tests.product.changeset_certification_facade as facade
 from product.certification import CertificationDisposition, CertificationPolicy, certify_result
 from product.evidence import EvidenceCondition, validate_normalized_paths
 from product.protocol import IMPLEMENTATION_SCHEMA, PUBLIC_PROTOCOL_VERSION
