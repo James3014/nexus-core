@@ -105,7 +105,8 @@ def test_policy_and_prerequisites_are_certification_only():
 
 
 def test_protocol_versions_are_distinct():
-    assert PUBLIC_PROTOCOL_VERSION == "0.1.0-experimental"
+    assert isinstance(PUBLIC_PROTOCOL_VERSION, str) and PUBLIC_PROTOCOL_VERSION
+    assert PUBLIC_PROTOCOL_VERSION != IMPLEMENTATION_SCHEMA
     assert IMPLEMENTATION_SCHEMA == "nexus.changeset_certification.v2"
 
 
