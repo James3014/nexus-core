@@ -1,0 +1,83 @@
+name: TG6 Physical Negative Evidence
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-negative-controls:
+    runs-on: ubuntu-latest
+    env:
+      EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: latest
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Sync locked dependencies
+        run: uv sync --locked
+
+      - name: Prove controller artifacts are absent in hosted evidence realm
+        run: |
+          set -eu
+          test ! -e /private/tmp/nexus-core-v1-predecessor/nexus_singularity-28.3.0-py3-none-any.whl
+          test ! -e /private/tmp/nexus-core-v1-wheelhouse/wheelhouse-manifest.json
+          test ! -e /private/tmp/nexus-core-v1-evidence/tg7/tg5-receipt.json
+
+      - name: Run exact missing-dependency falsification matrix
+        run: |
+          set -eu
+          mkdir -p evidence
+          run_probe() {
+            selector="$1"
+            log="evidence/${selector}.log"
+            set +e
+            uv run pytest -q tests/product/test_client_conformance.py -k "$selector" >"$log" 2>&1
+            code=$?
+            set -e
+            cat "$log"
+            test "$code" -ne 0
+            grep -F "PHYSICAL_ACCEPTANCE_DEPENDENCY_MISSING" "$log" >/dev/null
+            printf '%s\tFAIL_CLOSED\t%s\n' "$selector" "$code" >> evidence/results.tsv
+          }
+          run_probe predecessor_artifact
+          run_probe wheelhouse_manifest
+          run_probe install_upgrade_rollback
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          rows = []
+          for line in Path('evidence/results.tsv').read_text().splitlines():
+              selector, result, exit_code = line.split('\t')
+              rows.append({'selector': selector, 'result': result, 'exit_code': int(exit_code)})
+          payload = {
+              'schema': 'nexus.core.tg6-physical-negative-evidence.v1',
+              'head_sha': os.environ['EVIDENCE_HEAD_SHA'],
+              'realm': 'github-hosted-ubuntu-latest',
+              'controller_artifacts_present': False,
+              'results': rows,
+              'claim_ceiling': 'NEGATIVE_CONTROLS_ONLY',
+          }
+          Path('evidence/summary.json').write_text(json.dumps(payload, sort_keys=True, indent=2) + '\n')
+          print(json.dumps(payload, sort_keys=True))
+          PY
+
+      - name: Upload negative evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: tg6-physical-negative-${{ github.event.pull_request.head.sha }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
