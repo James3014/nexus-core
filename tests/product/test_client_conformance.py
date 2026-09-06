@@ -16,6 +16,7 @@ import json
 import subprocess
 import sys
 import zipfile
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +58,7 @@ CANONICAL_REQUEST: dict[str, Any] = {
     "implementation_schema": IMPLEMENTATION_SCHEMA,
     "repository": {
         "owner": "James3014",
-        "name": "Nexus-new",
+        "name": "nexus-core",
         "pr_number": 635,
         "expected_base_sha": "a" * 40,
         "expected_head_sha": "b" * 40,
@@ -109,7 +110,7 @@ CANONICAL_RESPONSE: dict[str, Any] = {
     "generation": 1,
     "acquisition": {
         "owner": "James3014",
-        "name": "Nexus-new",
+        "name": "nexus-core",
         "pr_number": 635,
         "base_sha": "a" * 40,
         "head_sha": "b" * 40,
@@ -340,10 +341,19 @@ CONTROLLER_PREDECESSOR = Path(
 )
 CONTROLLER_WHEELHOUSE = Path("/private/tmp/nexus-core-v1-wheelhouse")
 CONTROLLER_TG5_RECEIPT = Path("/private/tmp/nexus-core-v1-evidence/tg7/tg5-receipt.json")
+SUCCESSOR_DISTRIBUTION_VERSION = distribution_version("nexus-core")
+SUCCESSOR_WHEEL_NAME = f"nexus_core-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
 _PHYSICAL_ACCEPTANCE_SELECTORS = frozenset(
     {"predecessor_artifact", "wheelhouse_manifest", "install_upgrade_rollback"}
 )
 _NON_ACCEPTANCE_REASON = "NON_ACCEPTANCE_PHYSICAL_DEPENDENCY_REQUIRED"
+
+
+def test_standalone_physical_canary_identity():
+    assert CANONICAL_REQUEST["repository"]["name"] == "nexus-core"
+    assert CANONICAL_RESPONSE["acquisition"]["name"] == "nexus-core"
+    assert SUCCESSOR_DISTRIBUTION_VERSION == distribution_version("nexus-core")
+    assert SUCCESSOR_WHEEL_NAME == f"nexus_core-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
 
 
 def _require_physical_acceptance(
@@ -423,7 +433,7 @@ def test_wheelhouse_manifest(request: pytest.FixtureRequest):
 def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest):
     pred_path = CONTROLLER_PREDECESSOR
     wh_dir = CONTROLLER_WHEELHOUSE
-    succ_whl = wh_dir / "nexus_core-28.3.0-py3-none-any.whl"
+    succ_whl = wh_dir / SUCCESSOR_WHEEL_NAME
     receipt_source = CONTROLLER_TG5_RECEIPT
     if not _require_physical_acceptance(
         request, "install_upgrade_rollback", (pred_path, succ_whl, receipt_source)
@@ -459,7 +469,7 @@ def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest
             "install",
             "--no-index",
             f"--find-links={wh_dir}",
-            "nexus-core==28.3.0",
+            f"nexus-core=={SUCCESSOR_DISTRIBUTION_VERSION}",
         ],
         check=True,
     )
