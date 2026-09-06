@@ -7,10 +7,12 @@ the same request twice before returning a certifiable result.
 """
 
 import hashlib
+import importlib.resources
 import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from enum import Enum
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
@@ -136,7 +138,12 @@ class PythonOCIProfile:
         }
 
     @classmethod
-    def load(cls, manifest: Path, lock: Path, uv_lock: Optional[Path] = None) -> "PythonOCIProfile":
+    def load(
+        cls,
+        manifest: Path | Traversable,
+        lock: Path | Traversable,
+        uv_lock: Optional[Path | Traversable] = None,
+    ) -> "PythonOCIProfile":
         data = json.loads(manifest.read_text())
         if set(data) != {
             "profile_id",
@@ -169,11 +176,12 @@ class PythonOCIProfile:
             or tuple(tuple(x) for x in locked["dependency_artifacts"]) != DEPENDENCY_ARTIFACTS
         ):
             raise ValueError("profile lock keys or policy mismatch")
-        actual = (
-            _digest(uv_lock.read_bytes())[7:]
-            if uv_lock is not None and uv_lock.exists()
-            else LOCK_DIGEST[7:]
-        )
+        if uv_lock is not None:
+            if isinstance(uv_lock, Path) and not uv_lock.exists():
+                raise ValueError("uv.lock not found")
+            actual = _digest(uv_lock.read_bytes())[7:]
+        else:
+            actual = LOCK_DIGEST[7:]
         if locked["uv_lock_sha256"] != actual:
             raise ValueError("uv.lock digest mismatch")
         profile = cls(
@@ -433,11 +441,10 @@ class PythonOCIRunner:
 
     def __init__(self, profile: Optional[PythonOCIProfile] = None):
         if profile is None:
-            root = Path(__file__).parents[2]
+            profiles = importlib.resources.files("product.execution").joinpath("profiles")
             profile = PythonOCIProfile.load(
-                root / "product/execution/profiles/python-oci-pytest-v1.json",
-                root / "product/execution/profiles/python-oci-pytest-v1.lock",
-                root / "uv.lock",
+                profiles.joinpath("python-oci-pytest-v1.json"),
+                profiles.joinpath("python-oci-pytest-v1.lock"),
             )
         self.profile = profile
         self._replay: dict[str, RunnerResult] = {}

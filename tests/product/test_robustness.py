@@ -117,7 +117,21 @@ def test_verification_result_rejects_contradictory_states():
             VerificationResult(*args)  # type: ignore[call-arg]
 
 
-def test_poetry_packages_include_product_without_version_change():
-    text = (Path(__file__).parents[2] / "pyproject.toml").read_text()
-    assert '{include = "product"}' in text
-    assert 'version = "28.3.0"' in text
+def test_standalone_distribution_metadata_contract():
+    import tomllib
+
+    pyproject_path = Path(__file__).parents[2] / "pyproject.toml"
+    data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    project = data.get("project", {})
+    assert project.get("name") == "nexus-core"
+    assert project.get("version") == "0.1.0"
+    scripts = project.get("scripts", {})
+    assert scripts.get("nexus-certify") == "product.clients.cli:main"
+
+    setuptools_cfg = data.get("tool", {}).get("setuptools", {})
+    packages = setuptools_cfg.get("packages", {}).get("find", {}).get("include", [])
+    assert "product*" in packages
+
+    package_data = setuptools_cfg.get("package-data", {})
+    profiles_data = package_data.get("product.execution.profiles", [])
+    assert "*.json" in profiles_data and "*.lock" in profiles_data

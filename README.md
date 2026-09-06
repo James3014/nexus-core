@@ -20,3 +20,9 @@ uv run pytest -q tests/benchmark
 uv run ruff check product tests
 uv run nexus-certify --help
 ```
+
+## Compatibility and Coexistence Boundary
+
+Do not install `nexus-core` and `nexus-legacy` into the same Python environment until the legacy product namespace / console script is removed from `Nexus-new`.
+
+`nexus-core` packages the standalone `product` namespace and exposes the `nexus-certify` console script. Developing or testing `nexus-core` requires an isolated virtual environment to prevent shadowing or collision with legacy `product` artifacts.
