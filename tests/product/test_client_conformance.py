@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -337,10 +338,19 @@ def test_client_exit_code_matrix(test_env, capsys):
 
 
 CONTROLLER_PREDECESSOR = Path(
-    "/private/tmp/nexus-core-v1-predecessor/nexus_singularity-28.3.0-py3-none-any.whl"
+    os.getenv(
+        "NEXUS_CORE_PREDECESSOR_WHEEL",
+        "/private/tmp/nexus-core-v1-predecessor/nexus_singularity-28.3.0-py3-none-any.whl",
+    )
 )
-CONTROLLER_WHEELHOUSE = Path("/private/tmp/nexus-core-v1-wheelhouse")
-CONTROLLER_TG5_RECEIPT = Path("/private/tmp/nexus-core-v1-evidence/tg7/tg5-receipt.json")
+CONTROLLER_WHEELHOUSE = Path(
+    os.getenv("NEXUS_CORE_WHEELHOUSE", "/private/tmp/nexus-core-v1-wheelhouse")
+)
+CONTROLLER_TG5_RECEIPT = Path(
+    os.getenv(
+        "NEXUS_CORE_TG5_RECEIPT", "/private/tmp/nexus-core-v1-evidence/tg7/tg5-receipt.json"
+    )
+)
 SUCCESSOR_DISTRIBUTION_VERSION = distribution_version("nexus-core")
 SUCCESSOR_WHEEL_NAME = f"nexus_core-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
 _PHYSICAL_ACCEPTANCE_SELECTORS = frozenset(

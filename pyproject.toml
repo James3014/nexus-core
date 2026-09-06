@@ -32,6 +32,12 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["product*"]
 
+[tool.setuptools.package-data]
+"product.execution.profiles" = [
+    "*.json",
+    "*.lock",
+]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100
@@ -48,10 +54,6 @@ known-first-party = ["product"]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
-
-# Legacy package metadata compatibility fixture:
-# packages = [{include = "product"}]
-# version = "28.3.0"
 
 [tool.pyright]
 include = ["product"]
