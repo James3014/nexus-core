@@ -10,7 +10,7 @@
 
 | Rule | Specification | Configuration |
 |---|---|---|
-| Target | `refs/heads/main` | `include: ["~DEFAULT_BRANCH", "refs/heads/main"]` |
+| Target | `refs/heads/main` | `include: ["refs/heads/main"]` |
 | Direct Push | Blocked | Enforcement active |
 | Pull Request | Required | `required_approving_review_count: 0`<br>`require_last_push_approval: false`<br>`dismiss_stale_reviews_on_push: false`<br>`require_code_owner_review: false` |
 | Conversations | Required | `required_review_thread_resolution: true` |
