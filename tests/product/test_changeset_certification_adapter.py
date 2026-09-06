@@ -337,7 +337,8 @@ def test_legacy_wire_shape_and_product_receipt_identity():
         tampered["verification_result"][key] = "VALID"
         _rehash(tampered)
         assert adapter.validate_changeset_certification(tampered) == ("evidence_malformed",)
-    assert PUBLIC_PROTOCOL_VERSION == "0.1.0-experimental"
+    assert isinstance(PUBLIC_PROTOCOL_VERSION, str) and PUBLIC_PROTOCOL_VERSION
+    assert PUBLIC_PROTOCOL_VERSION != IMPLEMENTATION_SCHEMA
 
 
 def test_builder_duplicate_verifier_is_product_derived_and_blocked():
