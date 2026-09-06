@@ -1,4 +1,4 @@
-PUBLIC_PROTOCOL_VERSION = "1.0.0-rc.1"
+PUBLIC_PROTOCOL_VERSION = "1.0.0-rc.2"
 IMPLEMENTATION_SCHEMA = "nexus.changeset_certification.v2"
 EVIDENCE_BUNDLE_SCHEMA = "nexus.evidence_bundle.v1-experimental"
 CERTIFICATION_RECEIPT_SCHEMA = "nexus.certification_receipt.v1-experimental"
