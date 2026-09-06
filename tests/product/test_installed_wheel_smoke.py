@@ -12,13 +12,13 @@ def test_installed_wheel_smoke_in_isolated_venv(tmp_path: Path):
     dist_dir = repo_root / "dist"
     wheels = sorted(dist_dir.glob("nexus_core-*.whl"))
     if not wheels:
-        try:
-            subprocess.run(["uv", "build"], cwd=str(repo_root), check=True)
-            wheels = sorted(dist_dir.glob("nexus_core-*.whl"))
-        except Exception:
-            pass
+        res_build = subprocess.run(["uv", "build"], cwd=str(repo_root), capture_output=True, text=True)
+        if res_build.returncode != 0:
+            pytest.fail(f"Failed to build nexus-core wheel: {res_build.stderr}")
+        wheels = sorted(dist_dir.glob("nexus_core-*.whl"))
+
     if not wheels:
-        pytest.skip("No nexus-core wheel found in dist/ and uv build not available.")
+        pytest.fail("No nexus-core wheel found in dist/ after build attempt.")
 
     target_wheel = wheels[-1]
 
