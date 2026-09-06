@@ -169,7 +169,7 @@ def validate_auth_header(
 
 def create_auth_middleware(
     expected_token: str,
-) -> Callable[[web.Request, Callable[[web.Request], Any]], Any]:
+) -> Any:
     """Create aiohttp middleware enforcing constant-time Bearer authentication.
 
     Runs before route disclosure so unauthenticated requests to unknown paths receive 401.

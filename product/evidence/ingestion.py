@@ -133,7 +133,7 @@ def _native_junit_counts(data: bytes, exit_code: int) -> tuple[int, int, int]:
         or (exit_code == 0 and failures + errors)
     ):
         raise ValueError("inadequate junit oracle")
-    return counts
+    return (tests, failures, errors)
 
 
 def _native_normalized_junit(data: bytes) -> object:
@@ -825,7 +825,7 @@ def make_identity_envelope(
         raise ValueError("CROSS_BOUND:external_receipt")
     if (
         type(trust_reference) is not TrustReference
-        or verifier is None
+        or not isinstance(verifier, ExternalEd25519VerifierPort)
         or payload is None
         or signature is None
         or observed_at is None
@@ -946,11 +946,23 @@ def load_identity_envelope(payload: Mapping[str, object]) -> EvidenceIdentityEnv
         raise ValueError("external_receipt_hashes must be a list")
     if hashes != sorted(hashes) or len(hashes) != len(set(hashes)):
         raise ValueError("external_receipt_hashes must be sorted and unique")
-    return EvidenceIdentityEnvelope(**{
-        key: (tuple(payload[key]) if key == "external_receipt_hashes" else payload[key])
-        for key in required
-        if key != "schema"
-    })
+    return EvidenceIdentityEnvelope(
+        context_hash=str(payload["context_hash"]),
+        profile_hash=str(payload["profile_hash"]),
+        bundle_hash=str(payload["bundle_hash"]),
+        ingestion_receipt_hash=str(payload["ingestion_receipt_hash"]),
+        subject_hash=str(payload["subject_hash"]),
+        execution_id=str(payload["execution_id"]),
+        attempt_id=str(payload["attempt_id"]),
+        generation=str(payload["generation"]),
+        producer_id=str(payload["producer_id"]),
+        issuer_id=str(payload["issuer_id"]),
+        acquisition_snapshot_hash=str(payload["acquisition_snapshot_hash"]),
+        runner_result_hash=str(payload["runner_result_hash"]),
+        verification_receipt_hash=str(payload["verification_receipt_hash"]),
+        external_receipt_hashes=tuple(str(h) for h in hashes),
+        identity_hash=str(payload["identity_hash"]),
+    )
 
 
 @runtime_checkable
@@ -1088,7 +1100,17 @@ def load_external_verification_receipt(
     fields = set(ExternalVerificationReceipt.__dataclass_fields__)
     if set(payload) != fields | {"schema"}:
         raise ValueError("malformed external verification receipt")
-    return ExternalVerificationReceipt(**{key: payload[key] for key in fields})
+    return ExternalVerificationReceipt(
+        issuer_id=str(payload["issuer_id"]),
+        algorithm=str(payload["algorithm"]),
+        key_id=str(payload["key_id"]),
+        payload_hash=str(payload["payload_hash"]),
+        signature_hash=str(payload["signature_hash"]),
+        external_receipt_hash=str(payload["external_receipt_hash"]),
+        revoked=bool(payload["revoked"]),
+        status=str(payload["status"]),
+        receipt_hash=str(payload["receipt_hash"]),
+    )
 
 
 def verify_external_ed25519(

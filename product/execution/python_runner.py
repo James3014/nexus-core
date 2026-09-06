@@ -176,7 +176,19 @@ class PythonOCIProfile:
         )
         if locked["uv_lock_sha256"] != actual:
             raise ValueError("uv.lock digest mismatch")
-        profile = cls(**{k: tuple(v) if k == "command" else v for k, v in data.items()})
+        profile = cls(
+            profile_id=str(data["profile_id"]),
+            image=str(data["image"]),
+            image_digest=str(data["image_digest"]),
+            lock_digest=str(data["lock_digest"]),
+            network=str(data["network"]),
+            rootfs=str(data["rootfs"]),
+            command=tuple(data["command"]),
+            timeout_seconds=int(data["timeout_seconds"]),
+            memory_bytes=int(data["memory_bytes"]),
+            cpu_seconds=int(data["cpu_seconds"]),
+            dependency_artifacts_hash=str(data["dependency_artifacts_hash"]),
+        )
         if (
             locked["profile_id"] != profile.profile_id
             or locked["image"] != profile.image
@@ -445,16 +457,21 @@ class PythonOCIRunner:
             return self._unknown(("MISSING_BINDING",))
         try:
             for key in required:
-                if type(request[key]) is not str:
+                val = request[key]
+                if not isinstance(val, str):
                     raise ValueError(f"{key} must be string")
-                _text(request[key], key)
+                _text(val, key)
             for key in ("source_revision", "source_tree"):
-                if len(request[key]) != 40 or any(
-                    c not in "0123456789abcdef" for c in request[key]
+                val = request[key]
+                if not isinstance(val, str) or len(val) != 40 or any(
+                    c not in "0123456789abcdef" for c in val
                 ):
                     raise ValueError(f"{key} must be lowercase git identity")
             for key in ("contract_hash", "plan_hash", "environment_hash"):
-                _hash(request[key], key)
+                val = request[key]
+                if not isinstance(val, str):
+                    raise ValueError(f"{key} must be string")
+                _hash(val, key)
             key = self._request_key(request)
         except (TypeError, ValueError):
             return self._unknown(("MALFORMED_REQUEST",))
@@ -538,15 +555,18 @@ class PythonOCIRunner:
         if any(raw[key] != value for key, value in expected.items()):
             raise ValueError("observed execution identity mismatch")
         execution_id = raw["execution_id"]
+        if not isinstance(execution_id, str):
+            raise ValueError("execution_id must be str")
         _text(execution_id, "execution_id")
         stdout = raw.get("stdout", b"")
         stderr = raw.get("stderr", b"")
         junit = raw.get("junit", b"")
-        if not all(isinstance(value, bytes) for value in (stdout, stderr, junit)):
+        if not isinstance(stdout, bytes) or not isinstance(stderr, bytes) or not isinstance(junit, bytes):
             raise ValueError("execution streams must be bytes")
-        if any(len(value) > MAX_OUTPUT_BYTES for value in (stdout, stderr, junit)):
+        if len(stdout) > MAX_OUTPUT_BYTES or len(stderr) > MAX_OUTPUT_BYTES or len(junit) > MAX_OUTPUT_BYTES:
             raise ValueError("execution evidence exceeds size limit")
-        argv = tuple(raw.get("argv", self.profile.command))
+        raw_argv = raw.get("argv", self.profile.command)
+        argv = tuple(raw_argv) if isinstance(raw_argv, (tuple, list)) else self.profile.command
         if argv != self.profile.command:
             raise ValueError("unexpected argv")
         exit_code = raw.get("exit_code")
