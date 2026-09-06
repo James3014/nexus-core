@@ -18,8 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from . import compatibility_gate_kernel as _kernel
-from .compatibility_gate_kernel import *  # noqa: F403
+import product.protocol.compatibility_gate_kernel as _kernel
+from product.protocol.compatibility_gate_kernel import *  # noqa: F403
 
 CANONICAL_REPOSITORY = "James3014/nexus-core"
 LEGACY_ACCEPTANCE_REPOSITORY = "James3014/Nexus-new"
