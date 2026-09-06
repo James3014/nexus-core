@@ -1027,46 +1027,53 @@ def adjudicate(
 
     denominator = false_count = 0
     tg5 = docs["tg5_receipt"]
-    tg7r = docs["tg7_report"]
+    tg7_sel = docs.get("tg7_selection")
+    tg7_corp = docs.get("tg7_corpus")
+    tg7_shad = docs.get("tg7_shadow")
+    tg7_rep = docs.get("tg7_report")
     if (
-        all(
-            docs[k] is not None for k in ("tg7_selection", "tg7_corpus", "tg7_shadow", "tg7_report")
-        )
+        isinstance(tg7_sel, Mapping)
+        and isinstance(tg7_corp, Mapping)
+        and isinstance(tg7_shad, Mapping)
+        and isinstance(tg7_rep, Mapping)
         and isinstance(tg5, Mapping)
         and thresholds_valid
         and isinstance(deps, Mapping)
     ):
         se, sf = _tg7(
-            docs["tg7_selection"],
-            docs["tg7_corpus"],
-            docs["tg7_shadow"],
-            docs["tg7_report"],
+            tg7_sel,
+            tg7_corp,
+            tg7_shad,
+            tg7_rep,
             deps["tg7"],
             str(tg5.get("certification_receipt_hash")),
         )
         structural += se
         failures += sf
-        denominator_value = tg7r.get("denominator", 0)
-        false_count_value = tg7r.get("false_certification_count", 0)
+        denominator_value = tg7_rep.get("denominator", 0)
+        false_count_value = tg7_rep.get("false_certification_count", 0)
         denominator = denominator_value if type(denominator_value) is int else 0
         false_count = false_count_value if type(false_count_value) is int else 0
 
     runs: list[dict[str, Any]] = []
     stable_failures: list[str] = []
+    compat = docs.get("compatibility")
+    conformance = docs.get("conformance")
+    upgrade_rb = docs.get("upgrade_rollback")
     if (
         thresholds_valid
-        and all(
-            isinstance(docs[k], Mapping)
-            for k in ("compatibility", "conformance", "upgrade_rollback", "tg7_report")
-        )
+        and isinstance(compat, Mapping)
+        and isinstance(conformance, Mapping)
+        and isinstance(upgrade_rb, Mapping)
+        and isinstance(tg7_rep, Mapping)
         and isinstance(tg5, Mapping)
     ):
         bindings = {
-            "compatibility_hash": str(docs["compatibility"]["matrix_hash"]),
-            "conformance_hash": str(docs["conformance"]["report_hash"]),
-            "upgrade_rollback_hash": str(docs["upgrade_rollback"]["report_hash"]),
+            "compatibility_hash": str(compat.get("matrix_hash", "")),
+            "conformance_hash": str(conformance.get("report_hash", "")),
+            "upgrade_rollback_hash": str(upgrade_rb.get("report_hash", "")),
             "tg5_receipt_hash": str(tg5.get("certification_receipt_hash")),
-            "tg7_report_hash": str(tg7r.get("report_hash")),
+            "tg7_report_hash": str(tg7_rep.get("report_hash")),
         }
         for i, path in enumerate(stable_run_paths, 1):
             run, errs = _load(path, f"STABLE_RUN_{i}", optional=True)

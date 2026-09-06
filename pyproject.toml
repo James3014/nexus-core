@@ -55,5 +55,5 @@ asyncio_mode = "auto"
 
 [tool.pyright]
 include = ["product"]
-typeCheckingMode = "off"
+typeCheckingMode = "basic"
 

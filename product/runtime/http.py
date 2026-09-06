@@ -45,7 +45,7 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _limits_middleware() -> Callable[[web.Request, Callable[[web.Request], Any]], Any]:
+def _limits_middleware() -> Any:
     """Enforce path length, body size limits, and canonical error envelope."""
 
     @web.middleware
@@ -108,12 +108,13 @@ def create_app(
     bearer_token: str,
 ) -> web.Application:
     """Create canonical aiohttp application with route handlers and middleware without listening."""
+    app_middlewares: list[Any] = [
+        create_auth_middleware(bearer_token),
+        _limits_middleware(),
+    ]
     app = web.Application(
         client_max_size=MAX_REQUEST_BODY_BYTES,
-        middlewares=[
-            create_auth_middleware(bearer_token),
-            _limits_middleware(),
-        ],
+        middlewares=app_middlewares,
     )
     app[SERVICE_APP_KEY] = service
 
@@ -291,8 +292,9 @@ async def start_runtime(
     assigned_port = port
     if port == 0:
         server = site._server
-        if server and server.sockets:
-            assigned_port = server.sockets[0].getsockname()[1]
+        sockets = getattr(server, "sockets", None)
+        if server and sockets:
+            assigned_port = sockets[0].getsockname()[1]
 
     return RuntimeHandle(
         host=host,

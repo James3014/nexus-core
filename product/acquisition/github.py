@@ -98,9 +98,9 @@ def _hash(value: object, field: str) -> str:
 
 
 def _paths(value: object, field: str, *, allow_empty: bool = True) -> tuple[str, ...]:
-    if type(value) not in (list, tuple):
+    if not isinstance(value, (list, tuple)):
         raise AcquisitionError(f"{field} must be a path list")
-    result = tuple(value)
+    result = tuple(str(x) for x in value)
     if not allow_empty and not result:
         raise AcquisitionError(f"{field} must be non-empty")
     if len(result) != len(set(result)):
@@ -277,24 +277,42 @@ def _parse(
         or values["pr_number"] != locator.pr_number
     ):
         raise AcquisitionDriftError("response locator differs from requested locator")
-    if type(values["diff_bytes"]) is not bytes:
+    diff_bytes = values["diff_bytes"]
+    if not isinstance(diff_bytes, bytes):
         raise AcquisitionError("diff_bytes must be bytes from the read port")
     checks = values["checks"]
-    if type(checks) not in (list, tuple):
+    if not isinstance(checks, (list, tuple)):
         raise AcquisitionError("checks must be a list")
-    values["checks"] = tuple(tuple(x) for x in checks)
-    values["changed_paths"] = (
-        tuple(values["changed_paths"])
-        if type(values["changed_paths"]) in (list, tuple)
-        else values["changed_paths"]
+    checks_tuple: tuple[tuple[str, str], ...] = tuple(
+        (str(x[0]), str(x[1]))
+        for x in checks
+        if isinstance(x, (list, tuple)) and len(x) == 2
     )
-    values["deleted_paths"] = (
-        tuple(values["deleted_paths"])
-        if type(values["deleted_paths"]) in (list, tuple)
-        else values["deleted_paths"]
+    changed_paths = values["changed_paths"]
+    changed_tuple = tuple(str(x) for x in changed_paths) if isinstance(changed_paths, (list, tuple)) else ()
+    deleted_paths = values["deleted_paths"]
+    deleted_tuple = tuple(str(x) for x in deleted_paths) if isinstance(deleted_paths, (list, tuple)) else ()
+    raw_pr = values["pr_number"]
+    pr_num = raw_pr if isinstance(raw_pr, int) else int(str(raw_pr))
+    return GitHubAcquisitionSnapshot(
+        repository_owner=str(values["repository_owner"]),
+        repository_name=str(values["repository_name"]),
+        pr_number=pr_num,
+        base_sha=str(values["base_sha"]),
+        head_sha=str(values["head_sha"]),
+        base_tree_sha=str(values["base_tree_sha"]),
+        head_tree_sha=str(values["head_tree_sha"]),
+        merge_base_policy=str(values["merge_base_policy"]),
+        diff_bytes=diff_bytes,
+        diff_hash=str(values["diff_hash"]),
+        changed_paths=changed_tuple,
+        deleted_paths=deleted_tuple,
+        checks=checks_tuple,
+        pagination_complete=bool(values["pagination_complete"]),
+        observed_at=str(values["observed_at"]),
+        freshness_cas=str(values["freshness_cas"]),
+        locator_hash=locator.locator_hash,
     )
-    values["locator_hash"] = locator.locator_hash
-    return GitHubAcquisitionSnapshot(**values)
 
 
 def acquire_github_pull_request(
@@ -326,13 +344,41 @@ def load_github_acquisition_snapshot(payload: Mapping[str, object]) -> GitHubAcq
         raise TypeError("payload must be a mapping")
     values = dict(payload)
     try:
-        values["diff_bytes"] = bytes.fromhex(values["diff_bytes"])
-        values["checks"] = tuple(tuple(x) for x in values["checks"])
-        values["changed_paths"] = tuple(values["changed_paths"])
-        values["deleted_paths"] = tuple(values["deleted_paths"])
+        raw_diff = values["diff_bytes"]
+        diff_bytes = bytes.fromhex(str(raw_diff))
+        raw_checks = values["checks"]
+        checks_tuple: tuple[tuple[str, str], ...] = tuple(
+            (str(x[0]), str(x[1]))
+            for x in raw_checks
+            if isinstance(x, (list, tuple)) and len(x) == 2
+        ) if isinstance(raw_checks, (list, tuple)) else ()
+        raw_changed = values["changed_paths"]
+        changed_tuple = tuple(str(x) for x in raw_changed) if isinstance(raw_changed, (list, tuple)) else ()
+        raw_deleted = values["deleted_paths"]
+        deleted_tuple = tuple(str(x) for x in raw_deleted) if isinstance(raw_deleted, (list, tuple)) else ()
+        raw_pr = values["pr_number"]
+        pr_num = raw_pr if isinstance(raw_pr, int) else int(str(raw_pr))
+        return GitHubAcquisitionSnapshot(
+            repository_owner=str(values["repository_owner"]),
+            repository_name=str(values["repository_name"]),
+            pr_number=pr_num,
+            base_sha=str(values["base_sha"]),
+            head_sha=str(values["head_sha"]),
+            base_tree_sha=str(values["base_tree_sha"]),
+            head_tree_sha=str(values["head_tree_sha"]),
+            merge_base_policy=str(values["merge_base_policy"]),
+            diff_bytes=diff_bytes,
+            diff_hash=str(values["diff_hash"]),
+            changed_paths=changed_tuple,
+            deleted_paths=deleted_tuple,
+            checks=checks_tuple,
+            pagination_complete=bool(values["pagination_complete"]),
+            observed_at=str(values["observed_at"]),
+            freshness_cas=str(values["freshness_cas"]),
+            locator_hash=str(values["locator_hash"]),
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise AcquisitionError("malformed serialized acquisition snapshot") from exc
-    return GitHubAcquisitionSnapshot(**values)
 
 
 GitHubPullRequestAcquisition = GitHubAcquisitionSnapshot

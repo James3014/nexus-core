@@ -71,8 +71,9 @@ def _send_http(
             return status, res
         if hasattr(res, "status_code"):
             status = getattr(res, "status_code")
-            data = res.json() if callable(getattr(res, "json", None)) else getattr(res, "json")
-            return status, data
+            json_fn = getattr(res, "json", None)
+            data = json_fn() if callable(json_fn) else json_fn
+            return int(status), (data if isinstance(data, dict) else {"data": data})
         raise ValueError(f"unexpected response format from http_transport: {res}")
 
     # Standard urllib default
