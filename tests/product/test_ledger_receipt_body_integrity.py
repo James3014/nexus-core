@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from product.kernel import certify
 from product.ledger import LedgerAppendRequest, LedgerAppendStatus, append_or_replay, verify_chain
 from tests.product.test_evidence_receipt_hardening import _input
@@ -37,6 +39,34 @@ def _canonical_payloads() -> tuple[bytes, bytes, str]:
     receipt = certify(_input()).receipt
     receipt_bytes = json.dumps(receipt.to_dict(), sort_keys=True).encode("utf-8")
     return envelope_bytes, receipt_bytes, snapshot.locator_hash
+
+
+def test_append_rejects_tampered_receipt_body_with_preserved_hash(tmp_path: Path) -> None:
+    """Admission must reject a receipt whose body no longer matches its embedded hash."""
+    db_path = tmp_path / "nexus-core" / "ledger.sqlite3"
+    envelope_bytes, receipt_bytes, snapshot_hash = _canonical_payloads()
+    receipt = json.loads(receipt_bytes.decode("utf-8"))
+    original_hash = receipt["receipt_hash"]
+    receipt["tampered_marker"] = True
+    assert receipt["receipt_hash"] == original_hash
+    tampered_bytes = json.dumps(receipt, sort_keys=True).encode("utf-8")
+
+    request = LedgerAppendRequest(
+        ledger_id="ledger-receipt-admission",
+        request_id="req-receipt-admission",
+        idempotency_key="idem-receipt-admission",
+        expected_generation=0,
+        attempt=1,
+        canonical_request={"operation": "certify", "target": "receipt-admission"},
+        identity_envelope_bytes=envelope_bytes,
+        completion_receipt_bytes=tampered_bytes,
+        source_snapshot_hash=snapshot_hash,
+    )
+
+    with pytest.raises(ValueError, match="completion receipt hash mismatch"):
+        append_or_replay(request, db_path=db_path)
+
+    assert not db_path.exists()
 
 
 def test_verify_chain_rejects_tampered_receipt_body_with_preserved_hash(tmp_path: Path) -> None:
