@@ -70,6 +70,10 @@ class InFlightJob:
     error_message: Optional[str] = None
 
 
+class _DurableLedgerReadError(RuntimeError):
+    """Raised when an existing durable ledger cannot be read reliably."""
+
+
 class RuntimeCertificationService:
     """Core V1 runtime service coordinating live PR acquisition, execution, trust, and ledger."""
 
@@ -108,8 +112,8 @@ class RuntimeCertificationService:
                 return row[0] if row else 0
             finally:
                 conn.close()
-        except Exception:
-            return 0
+        except (sqlite3.Error, OSError) as exc:
+            raise _DurableLedgerReadError("durable ledger read failed") from exc
 
     def _get_ledger_entry_by_idempotency(
         self, idempotency_key: str
@@ -132,8 +136,8 @@ class RuntimeCertificationService:
                 return None
             finally:
                 conn.close()
-        except Exception:
-            return None
+        except (sqlite3.Error, OSError) as exc:
+            raise _DurableLedgerReadError("durable ledger read failed") from exc
 
     async def submit_certification(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         """Submit certification request.
@@ -143,7 +147,7 @@ class RuntimeCertificationService:
         - 200: exact replay of terminal request
         - 409: IDEMPOTENCY_CONFLICT, STALE_GENERATION, STALE_SOURCE
         - 400/415/422: malformed/unsupported schema
-        - 503: SERVICE_UNAVAILABLE (admission stopped)
+        - 503: SERVICE_UNAVAILABLE (admission stopped or durable ledger unreadable)
         """
         if self._admission_stopped:
             return 503, make_http_error(
@@ -168,7 +172,14 @@ class RuntimeCertificationService:
         exp_gen = payload["expected_generation"]
 
         # 1. Check existing committed ledger entry for this idempotency_key
-        existing_ledger = self._get_ledger_entry_by_idempotency(ikey)
+        try:
+            existing_ledger = self._get_ledger_entry_by_idempotency(ikey)
+        except _DurableLedgerReadError:
+            return 503, make_http_error(
+                code="SERVICE_UNAVAILABLE",
+                request_id=None,
+                message="durable ledger is unavailable",
+            )
         if existing_ledger:
             stored_req_id, stored_req_hash, stored_gen, receipt_b, env_b, disp = existing_ledger
             if stored_req_hash != req_hash:
@@ -221,7 +232,14 @@ class RuntimeCertificationService:
                 )
 
         # 3. CAS Check: expected_generation must match current durable generation
-        cur_gen = self._get_current_ledger_generation()
+        try:
+            cur_gen = self._get_current_ledger_generation()
+        except _DurableLedgerReadError:
+            return 503, make_http_error(
+                code="SERVICE_UNAVAILABLE",
+                request_id=None,
+                message="durable ledger is unavailable",
+            )
         if exp_gen != cur_gen:
             return 409, make_http_error(
                 code="STALE_GENERATION",
