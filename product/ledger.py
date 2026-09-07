@@ -397,7 +397,6 @@ def _row_to_entry(row: tuple) -> LedgerEntry:
         sig,
         created,
     ) = row
-
     s_meta = json.loads(s_meta_str) if s_meta_str else None
     claim_ceiling = tuple(json.loads(claim_ceil_str))
     return LedgerEntry(
@@ -456,9 +455,13 @@ def append_or_replay(
             or rec_dict.get("receipt_schema") != CERTIFICATION_RECEIPT_SCHEMA
         ):
             raise ValueError("invalid completion receipt schema")
-        computed_rec_hash = rec_dict.get("receipt_hash")
-        if not computed_rec_hash or not isinstance(computed_rec_hash, str):
+        embedded_rec_hash = rec_dict.get("receipt_hash")
+        if not embedded_rec_hash or not isinstance(embedded_rec_hash, str):
             raise ValueError("completion receipt missing receipt_hash")
+        receipt_body = {key: value for key, value in rec_dict.items() if key != "receipt_hash"}
+        computed_rec_hash = _hash(receipt_body)
+        if computed_rec_hash != embedded_rec_hash:
+            raise ValueError("completion receipt hash mismatch")
         factual_disposition = rec_dict["certification"]["disposition"]
         claim_ceiling = tuple(rec_dict["claim_ceiling"])
     except Exception as exc:
