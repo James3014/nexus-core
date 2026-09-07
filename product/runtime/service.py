@@ -74,6 +74,30 @@ class _DurableLedgerReadError(RuntimeError):
     """Raised when an existing durable ledger cannot be read reliably."""
 
 
+def _decode_durable_payloads(
+    receipt_bytes: bytes,
+    envelope_bytes: bytes,
+    *,
+    receipt_hash: str,
+    envelope_hash: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Decode and verify carried durable payloads before reporting terminal replay."""
+    try:
+        receipt = json.loads(receipt_bytes.decode("utf-8"))
+        envelope = json.loads(envelope_bytes.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _DurableLedgerReadError("durable ledger payload is corrupt") from exc
+    if not isinstance(receipt, dict) or not isinstance(envelope, dict):
+        raise _DurableLedgerReadError("durable ledger payload is corrupt")
+    if _hash(envelope) != envelope_hash:
+        raise _DurableLedgerReadError("durable ledger envelope integrity failed")
+    embedded_receipt_hash = receipt.get("receipt_hash")
+    receipt_body = {key: value for key, value in receipt.items() if key != "receipt_hash"}
+    if embedded_receipt_hash != receipt_hash or _hash(receipt_body) != receipt_hash:
+        raise _DurableLedgerReadError("durable ledger receipt integrity failed")
+    return receipt, envelope
+
+
 class RuntimeCertificationService:
     """Core V1 runtime service coordinating live PR acquisition, execution, trust, and ledger."""
 
@@ -117,8 +141,8 @@ class RuntimeCertificationService:
 
     def _get_ledger_entry_by_idempotency(
         self, idempotency_key: str
-    ) -> Optional[tuple[str, str, int, bytes, bytes, str]]:
-        """Find entry by idempotency key: (request_id, request_hash, generation, receipt_bytes, envelope_bytes, disposition)."""
+    ) -> Optional[tuple[str, str, int, bytes, bytes, str, str, str]]:
+        """Find entry by idempotency key with carried payload integrity hashes."""
         if not self.db_path.exists():
             return None
         try:
@@ -126,13 +150,14 @@ class RuntimeCertificationService:
             try:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT request_id, request_hash, committed_generation, receipt_bytes, envelope_bytes, factual_disposition "
+                    "SELECT request_id, request_hash, committed_generation, receipt_bytes, envelope_bytes, "
+                    "receipt_hash, envelope_hash, factual_disposition "
                     "FROM ledger_entries WHERE idempotency_key = ?;",
                     (idempotency_key,),
                 )
                 row = cur.fetchone()
                 if row:
-                    return (row[0], row[1], row[2], row[3], row[4], row[5])
+                    return (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7])
                 return None
             finally:
                 conn.close()
@@ -181,22 +206,35 @@ class RuntimeCertificationService:
                 message="durable ledger is unavailable",
             )
         if existing_ledger:
-            stored_req_id, stored_req_hash, stored_gen, receipt_b, env_b, disp = existing_ledger
+            (
+                stored_req_id,
+                stored_req_hash,
+                stored_gen,
+                receipt_b,
+                env_b,
+                receipt_hash,
+                envelope_hash,
+                disp,
+            ) = existing_ledger
             if stored_req_hash != req_hash:
                 return 409, make_http_error(
                     code="IDEMPOTENCY_CONFLICT",
                     request_id=None,
                     message="idempotency key reused with different canonical request hash",
                 )
-            # Exact replay of durable entry -> 200
             try:
-                receipt_dict = json.loads(receipt_b.decode("utf-8"))
-            except Exception:
-                receipt_dict = None
-            try:
-                env_dict = json.loads(env_b.decode("utf-8"))
-            except Exception:
-                env_dict = None
+                receipt_dict, env_dict = _decode_durable_payloads(
+                    receipt_b,
+                    env_b,
+                    receipt_hash=receipt_hash,
+                    envelope_hash=envelope_hash,
+                )
+            except _DurableLedgerReadError:
+                return 503, make_http_error(
+                    code="SERVICE_UNAVAILABLE",
+                    request_id=None,
+                    message="durable ledger is unavailable",
+                )
 
             resp = make_http_response(
                 request_id=stored_req_id,
@@ -205,7 +243,7 @@ class RuntimeCertificationService:
                 acquisition=None,
                 execution=None,
                 evidence=env_dict,
-                verification=receipt_dict.get("verification") if receipt_dict else None,
+                verification=receipt_dict.get("verification"),
                 disposition=disp,
                 receipt=receipt_dict,
                 claim_ceiling=CLAIM_CEILING,
@@ -488,13 +526,18 @@ class RuntimeCertificationService:
 
         entry = res.entry
         try:
-            receipt_dict = json.loads(entry.receipt_bytes.decode("utf-8"))
-        except Exception:
-            receipt_dict = None
-        try:
-            env_dict = json.loads(entry.envelope_bytes.decode("utf-8"))
-        except Exception:
-            env_dict = None
+            receipt_dict, env_dict = _decode_durable_payloads(
+                entry.receipt_bytes,
+                entry.envelope_bytes,
+                receipt_hash=entry.receipt_hash,
+                envelope_hash=entry.envelope_hash,
+            )
+        except _DurableLedgerReadError:
+            return 503, make_http_error(
+                code="SERVICE_UNAVAILABLE",
+                request_id=request_id,
+                message="durable ledger is unavailable",
+            )
 
         resp = make_http_response(
             request_id=request_id,
@@ -503,7 +546,7 @@ class RuntimeCertificationService:
             acquisition=None,
             execution=None,
             evidence=env_dict,
-            verification=receipt_dict.get("verification") if receipt_dict else None,
+            verification=receipt_dict.get("verification"),
             disposition=entry.factual_disposition,
             receipt=receipt_dict,
             claim_ceiling=entry.claim_ceiling,
