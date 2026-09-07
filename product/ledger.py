@@ -912,6 +912,18 @@ def verify_chain(
                         head_hash=entry.entry_hash,
                         error_reason=f"receipt hash {entry.receipt_hash} tampered",
                     )
+                receipt_body = {key: value for key, value in rec_dict.items() if key != "receipt_hash"}
+                recomputed_receipt_hash = _hash(receipt_body)
+                if recomputed_receipt_hash != entry.receipt_hash:
+                    return LedgerVerificationResult(
+                        valid=False,
+                        status="RECEIPT_TAMPERED",
+                        entries_count=len(rows),
+                        head_sequence=entry.sequence,
+                        head_generation=entry.committed_generation,
+                        head_hash=entry.entry_hash,
+                        error_reason=f"receipt body hash {entry.receipt_hash} tampered",
+                    )
             except Exception as exc:
                 return LedgerVerificationResult(
                     valid=False,
