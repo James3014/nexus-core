@@ -43,6 +43,7 @@ from product.runtime.schemas import (
     validate_certification_request,
 )
 from tests.product.test_evidence_receipt_hardening import _input
+from tests.product.test_generic_verification_protocol import _payload as _generic_payload
 
 pytest_plugins = ["tests.product.test_http_e2e"]
 
@@ -377,6 +378,52 @@ async def test_receipt_verify_endpoint(isolated_env):
             assert data["scope"] == "FULL_RECOMPUTED"
             assert data["status"] == "UNVERIFIABLE"
             assert "MISSING_ORIGINAL_INPUTS" in data["reason_codes"]
+    finally:
+        await handle.stop()
+
+
+@pytest.mark.asyncio
+async def test_generic_verification_http_and_protocol_descriptor_are_authenticated(isolated_env):
+    handle = await start_runtime(
+        host="127.0.0.1",
+        port=0,
+        token_path=isolated_env["token_path"],
+        db_path=isolated_env["db_path"],
+    )
+    base_url = f"http://127.0.0.1:{handle.port}"
+    headers = {"Authorization": f"Bearer {handle.token}", "Content-Type": "application/json"}
+
+    try:
+        async with httpx.AsyncClient(base_url=base_url) as client:
+            unauthenticated = await client.get("/v1/protocol/generic-verification")
+            assert unauthenticated.status_code == 401
+
+            descriptor = await client.get(
+                "/v1/protocol/generic-verification",
+                headers={"Authorization": f"Bearer {handle.token}"},
+            )
+            assert descriptor.status_code == 200
+            descriptor_body = descriptor.json()
+            assert descriptor_body["protocol_version"] == PUBLIC_PROTOCOL_VERSION
+            assert descriptor_body["conformance_vectors"]["acceptance_contract"]["expected_hash"].startswith(
+                "sha256:"
+            )
+
+            verified = await client.post(
+                "/v1/changesets/verify", headers=headers, json=_generic_payload()
+            )
+            assert verified.status_code == 200
+            body = verified.json()
+            assert body["verification"]["status"] == "VERIFIED"
+            assert body["certification"] is None
+
+            bad_media = await client.post(
+                "/v1/changesets/verify",
+                headers={"Authorization": f"Bearer {handle.token}", "Content-Type": "text/plain"},
+                content="{}",
+            )
+            assert bad_media.status_code == 415
+            assert bad_media.json()["code"] == "UNSUPPORTED_MEDIA_TYPE"
     finally:
         await handle.stop()
 

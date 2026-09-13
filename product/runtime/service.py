@@ -381,6 +381,7 @@ class RuntimeCertificationService:
                 target_revision=snapshot.head_sha,
                 diff_hash=snapshot.diff_hash,
                 paths=snapshot.changed_paths,
+                deleted_paths=snapshot.deleted_paths,
             )
 
             raw_plan = job.payload["verification_plan"]
@@ -651,6 +652,7 @@ class RuntimeCertificationService:
                     target_revision=raw_cs["target_revision"],
                     diff_hash=raw_cs["diff_hash"],
                     paths=tuple(raw_cs["paths"]),
+                    deleted_paths=tuple(raw_cs.get("deleted_paths", ())),
                 )
                 plan = VerificationPlan(
                     plan_id=raw_p["plan_id"],

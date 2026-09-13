@@ -158,6 +158,8 @@ def _make_verify(
         evidence_data = vars(evidence)
         if set(change_data["paths"]) - set(contract_data["allowed_paths"]):
             return reducer(integrity_status.SCOPE_ESCAPE)
+        if contract_data["deletion_policy"] == "FORBID" and change_data["deleted_paths"]:
+            return reducer(integrity_status.SCOPE_ESCAPE, reasons=("DELETION_FORBIDDEN",))
         if set(contract_data["required_verifier_ids"]) != set(plan_data["required_verifier_ids"]):
             return reducer(integrity_status.MISSING)
         observations = evidence_data["observations"]
