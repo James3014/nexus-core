@@ -169,7 +169,17 @@ def is_hash(value: Any) -> bool:
     return type(value) is str and _HASH_RE.fullmatch(value) is not None
 
 
-_PATH_SCHEMA: dict[str, Any] = {"type": "string", "minLength": 1, "pattern": _PATH_PATTERN}
+_NORMALIZED_TEXT_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "minLength": 1,
+    "x-nexus-normalized-text": True,
+    "x-nexus-max-utf8-bytes": 512,
+}
+_PATH_SCHEMA: dict[str, Any] = {
+    **_NORMALIZED_TEXT_SCHEMA,
+    "pattern": _PATH_PATTERN,
+    "x-nexus-repository-relative-path": True,
+}
 _HASH_SCHEMA: dict[str, Any] = {"type": "string", "pattern": _HASH_PATTERN}
 _REVISION_SCHEMA: dict[str, Any] = {"type": "string", "pattern": _GIT_REVISION_PATTERN}
 _TREE_SCHEMA: dict[str, Any] = {"type": "string", "pattern": _GIT_TREE_PATTERN}
@@ -188,13 +198,13 @@ ACCEPTANCE_CONTRACT_SCHEMA: dict[str, Any] = {
         "deletion_policy",
     ],
     "properties": {
-        "contract_id": {"type": "string", "minLength": 1},
+        "contract_id": _NORMALIZED_TEXT_SCHEMA,
         "requirements_hash": _HASH_SCHEMA,
         "required_verifier_ids": {
             "type": "array",
             "minItems": 1,
             "uniqueItems": True,
-            "items": {"type": "string", "minLength": 1},
+            "items": _NORMALIZED_TEXT_SCHEMA,
         },
         "allowed_paths": {
             "type": "array",
@@ -220,7 +230,7 @@ CHANGE_SET_SCHEMA: dict[str, Any] = {
         "deleted_paths",
     ],
     "properties": {
-        "change_set_id": {"type": "string", "minLength": 1},
+        "change_set_id": _NORMALIZED_TEXT_SCHEMA,
         "source_revision": _REVISION_SCHEMA,
         "target_revision": _REVISION_SCHEMA,
         "diff_hash": _HASH_SCHEMA,
@@ -250,14 +260,14 @@ VERIFICATION_PLAN_SCHEMA: dict[str, Any] = {
         "required_verifier_ids",
     ],
     "properties": {
-        "plan_id": {"type": "string", "minLength": 1},
+        "plan_id": _NORMALIZED_TEXT_SCHEMA,
         "acceptance_contract_hash": _HASH_SCHEMA,
         "change_set_hash": _HASH_SCHEMA,
         "required_verifier_ids": {
             "type": "array",
             "minItems": 1,
             "uniqueItems": True,
-            "items": {"type": "string", "minLength": 1},
+            "items": _NORMALIZED_TEXT_SCHEMA,
         },
     },
     "additionalProperties": False,
@@ -269,8 +279,8 @@ OBSERVATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["verifier_id", "artifact_id", "artifact_hash", "status"],
     "properties": {
-        "verifier_id": {"type": "string", "minLength": 1},
-        "artifact_id": {"type": "string", "minLength": 1},
+        "verifier_id": _NORMALIZED_TEXT_SCHEMA,
+        "artifact_id": _NORMALIZED_TEXT_SCHEMA,
         "artifact_hash": _HASH_SCHEMA,
         "status": {"type": "string", "enum": ["PASS", "FAIL"]},
     },
@@ -290,7 +300,7 @@ EVIDENCE_BUNDLE_INPUT_SCHEMA: dict[str, Any] = {
         "claimed_bundle_hash",
     ],
     "properties": {
-        "bundle_id": {"type": "string", "minLength": 1},
+        "bundle_id": _NORMALIZED_TEXT_SCHEMA,
         "acceptance_contract_hash": _HASH_SCHEMA,
         "change_set_hash": _HASH_SCHEMA,
         "verification_plan_hash": _HASH_SCHEMA,
@@ -594,6 +604,205 @@ GENERIC_PROTOCOL_CONFORMANCE_VECTORS: dict[str, Any] = {
 }
 
 
+def _request_conformance_vector() -> dict[str, Any]:
+    manifest = {
+        "source_tree": "git-tree:" + "a" * 40,
+        "target_tree": "git-tree:" + "b" * 40,
+        "entries": [
+            {
+                "path": "src/a.py",
+                "change_type": "MODIFY",
+                "before_oid": "1" * 40,
+                "after_oid": "2" * 40,
+                "before_mode": "100644",
+                "after_mode": "100644",
+            }
+        ],
+    }
+    contract = {
+        "contract_id": "ac-request-vector-1",
+        "requirements_hash": "sha256:" + "c" * 64,
+        "required_verifier_ids": ["unit"],
+        "allowed_paths": ["src/a.py"],
+        "deletion_policy": "FORBID",
+    }
+    change_set = {
+        "change_set_id": "cs-request-vector-1",
+        "source_revision": "git-commit:" + "d" * 40,
+        "target_revision": manifest["target_tree"],
+        "diff_hash": change_manifest_hash(manifest),
+        "paths": ["src/a.py"],
+        "deleted_paths": [],
+    }
+    plan = {
+        "plan_id": "vp-request-vector-1",
+        "acceptance_contract_hash": acceptance_contract_hash(contract),
+        "change_set_hash": change_set_hash(change_set),
+        "required_verifier_ids": ["unit"],
+    }
+    evidence = {
+        "bundle_id": "eb-request-vector-1",
+        "acceptance_contract_hash": plan["acceptance_contract_hash"],
+        "change_set_hash": plan["change_set_hash"],
+        "verification_plan_hash": verification_plan_hash(plan),
+        "observations": [
+            {
+                "verifier_id": "unit",
+                "artifact_id": "artifact-request-vector-1",
+                "artifact_hash": "sha256:" + "e" * 64,
+                "status": "PASS",
+            }
+        ],
+        "claimed_bundle_hash": None,
+    }
+    return {
+        "protocol_version": PUBLIC_PROTOCOL_VERSION,
+        "schema": GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
+        "acceptance_contract": contract,
+        "change_set": change_set,
+        "change_manifest": manifest,
+        "verification_plan": plan,
+        "evidence_bundle": evidence,
+        "certification_policy": None,
+    }
+
+
+GENERIC_PROTOCOL_REQUEST_CONFORMANCE_VECTOR = _request_conformance_vector()
+
+GENERIC_PROTOCOL_ORDERING_CONFORMANCE_VECTORS: dict[str, Any] = {
+    "json_object_field_order": {
+        "left": {"b": 2, "a": 1},
+        "right": {"a": 1, "b": 2},
+        "expected_canonical_json": '{"a":1,"b":2}',
+        "expected_hash": "sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777",
+    },
+    "acceptance_path_and_verifier_order": {
+        "left": {
+            "contract_id": "ac-order-vector-1",
+            "requirements_hash": "sha256:" + "f" * 64,
+            "required_verifier_ids": ["lint", "unit"],
+            "allowed_paths": ["src/a.py", "tests/test_a.py"],
+            "deletion_policy": "FORBID",
+        },
+        "right": {
+            "deletion_policy": "FORBID",
+            "allowed_paths": ["tests/test_a.py", "src/a.py"],
+            "required_verifier_ids": ["unit", "lint"],
+            "requirements_hash": "sha256:" + "f" * 64,
+            "contract_id": "ac-order-vector-1",
+        },
+    },
+    "evidence_observation_order": {
+        "left": {
+            "bundle_id": "eb-order-vector-1",
+            "acceptance_contract_hash": "sha256:" + "1" * 64,
+            "change_set_hash": "sha256:" + "2" * 64,
+            "verification_plan_hash": "sha256:" + "3" * 64,
+            "observations": [
+                {
+                    "verifier_id": "unit",
+                    "artifact_id": "artifact-unit",
+                    "artifact_hash": "sha256:" + "4" * 64,
+                    "status": "PASS",
+                },
+                {
+                    "verifier_id": "lint",
+                    "artifact_id": "artifact-lint",
+                    "artifact_hash": "sha256:" + "5" * 64,
+                    "status": "PASS",
+                },
+            ],
+            "claimed_bundle_hash": None,
+        },
+        "right": {
+            "claimed_bundle_hash": None,
+            "observations": [
+                {
+                    "status": "PASS",
+                    "artifact_hash": "sha256:" + "5" * 64,
+                    "artifact_id": "artifact-lint",
+                    "verifier_id": "lint",
+                },
+                {
+                    "status": "PASS",
+                    "artifact_hash": "sha256:" + "4" * 64,
+                    "artifact_id": "artifact-unit",
+                    "verifier_id": "unit",
+                },
+            ],
+            "verification_plan_hash": "sha256:" + "3" * 64,
+            "change_set_hash": "sha256:" + "2" * 64,
+            "acceptance_contract_hash": "sha256:" + "1" * 64,
+            "bundle_id": "eb-order-vector-1",
+        },
+    },
+}
+
+GENERIC_PROTOCOL_NEGATIVE_CONFORMANCE_VECTORS: dict[str, Any] = {
+    "invalid_path": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/allowed_paths",
+        "value": ["../escape.py"],
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.allowed_paths"},
+    },
+    "invalid_deletion_policy": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/deletion_policy",
+        "value": "MAYBE",
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.deletion_policy"},
+    },
+    "malformed_hash": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/requirements_hash",
+        "value": "sha256:not-a-hash",
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.requirements_hash"},
+    },
+    "duplicate_verifier_ids": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/required_verifier_ids",
+        "value": ["unit", "unit"],
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.required_verifier_ids"},
+    },
+    "padded_identifier": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/contract_id",
+        "value": " ac-request-vector-1 ",
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.contract_id"},
+    },
+    "overlong_utf8_identifier": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/contract_id",
+        "value": "雪" * 171,
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.contract_id"},
+    },
+}
+
+GENERIC_PROTOCOL_VALIDATION_CONSTRAINTS: dict[str, Any] = {
+    "normalized_text": {
+        "nonblank": True,
+        "leading_or_trailing_strip_characters_forbidden": True,
+        "nul_forbidden": True,
+        "max_utf8_bytes": 512,
+        "normative_rule": "type(value) is str and bool(value) and value == value.strip() and NUL not in value and len(value.encode('utf-8')) <= 512",
+    },
+    "repository_relative_path": {
+        "inherits": "normalized_text",
+        "absolute_forbidden": True,
+        "backslash_forbidden": True,
+        "empty_segment_forbidden": True,
+        "dot_segment_forbidden": True,
+        "dotdot_segment_forbidden": True,
+    },
+}
+
+
+
 def protocol_descriptor() -> dict[str, Any]:
     return {
         "schema": GENERIC_PROTOCOL_DESCRIPTOR_SCHEMA_ID,
@@ -614,6 +823,10 @@ def protocol_descriptor() -> dict[str, Any]:
             "diff_hash": "sha256 of canonical nexus.core.git-change-manifest.v1-experimental value",
         },
         "conformance_vectors": GENERIC_PROTOCOL_CONFORMANCE_VECTORS,
+        "request_conformance_vector": GENERIC_PROTOCOL_REQUEST_CONFORMANCE_VECTOR,
+        "ordering_conformance_vectors": GENERIC_PROTOCOL_ORDERING_CONFORMANCE_VECTORS,
+        "negative_conformance_vectors": GENERIC_PROTOCOL_NEGATIVE_CONFORMANCE_VECTORS,
+        "validation_constraints": GENERIC_PROTOCOL_VALIDATION_CONSTRAINTS,
     }
 
 
@@ -624,6 +837,10 @@ __all__ = [
     "CHANGE_SET_SCHEMA",
     "EVIDENCE_BUNDLE_INPUT_SCHEMA",
     "GENERIC_PROTOCOL_CONFORMANCE_VECTORS",
+    "GENERIC_PROTOCOL_NEGATIVE_CONFORMANCE_VECTORS",
+    "GENERIC_PROTOCOL_ORDERING_CONFORMANCE_VECTORS",
+    "GENERIC_PROTOCOL_REQUEST_CONFORMANCE_VECTOR",
+    "GENERIC_PROTOCOL_VALIDATION_CONSTRAINTS",
     "GENERIC_PROTOCOL_DESCRIPTOR_SCHEMA_ID",
     "GENERIC_PROTOCOL_SCHEMA_BUNDLE",
     "GENERIC_PROTOCOL_SCHEMA_BUNDLE_HASH",

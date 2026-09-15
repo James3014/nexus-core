@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+import product.protocol.generic_verification as generic_protocol
 from product.adapters.generic_verification import verify_generic_changeset
 from product.evidence import AcceptanceContract, ChangeSet, _hash
 from product.protocol import PUBLIC_PROTOCOL_VERSION
@@ -390,3 +391,48 @@ def test_unknown_top_level_field_is_rejected_not_ignored():
 
 def test_legacy_hash_helper_still_remains_available_for_existing_tests():
     assert _hash("stable") == _hash("stable")
+
+
+
+def _replace_pointer(value, pointer, replacement):
+    parts = [part.replace("~1", "/").replace("~0", "~") for part in pointer.split("/")[1:]]
+    target = value
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] = replacement
+
+
+def test_public_ordering_conformance_vectors_cover_object_path_verifier_and_observation_order():
+    vectors = generic_protocol.GENERIC_PROTOCOL_ORDERING_CONFORMANCE_VECTORS
+    object_order = vectors["json_object_field_order"]
+    assert generic_protocol.canonical_json(object_order["left"]) == object_order["expected_canonical_json"]
+    assert generic_protocol.canonical_json(object_order["right"]) == object_order["expected_canonical_json"]
+    assert generic_protocol.canonical_hash(object_order["left"]) == object_order["expected_hash"]
+    assert generic_protocol.canonical_hash(object_order["right"]) == object_order["expected_hash"]
+
+    acceptance = vectors["acceptance_path_and_verifier_order"]
+    assert acceptance_contract_hash(acceptance["left"]) == acceptance_contract_hash(acceptance["right"])
+
+    evidence = vectors["evidence_observation_order"]
+    assert evidence_bundle_hash(evidence["left"]) == evidence_bundle_hash(evidence["right"])
+
+
+def test_public_negative_conformance_vectors_are_executable_fail_closed_cases():
+    descriptor = protocol_descriptor()
+    assert descriptor["request_conformance_vector"] == generic_protocol.GENERIC_PROTOCOL_REQUEST_CONFORMANCE_VECTOR
+    for name, vector in descriptor["negative_conformance_vectors"].items():
+        payload = copy.deepcopy(descriptor["request_conformance_vector"])
+        _replace_pointer(payload, vector["replace_pointer"], vector["value"])
+        status, body = verify_generic_changeset(payload)
+        assert status == vector["expected_http_status"], name
+        assert body["error"] == vector["expected_error"], name
+
+
+def test_public_descriptor_exposes_parser_normalization_and_utf8_byte_limit():
+    constraints = protocol_descriptor()["validation_constraints"]
+    assert constraints["normalized_text"]["max_utf8_bytes"] == 512
+    assert constraints["normalized_text"]["nul_forbidden"] is True
+    assert constraints["normalized_text"]["leading_or_trailing_strip_characters_forbidden"] is True
+    assert constraints["repository_relative_path"]["dotdot_segment_forbidden"] is True
+    assert generic_protocol.ACCEPTANCE_CONTRACT_SCHEMA["properties"]["contract_id"]["x-nexus-max-utf8-bytes"] == 512
+    assert generic_protocol.ACCEPTANCE_CONTRACT_SCHEMA["properties"]["allowed_paths"]["items"]["x-nexus-repository-relative-path"] is True
