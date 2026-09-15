@@ -1,0 +1,40 @@
+name: Temporary Core 29 conformance patch
+
+on:
+  push:
+    branches:
+      - chatgpt/issue-28-generic-verification-protocol
+    paths:
+      - .github/workflows/tmp-core29-conformance-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.repository == 'James3014/nexus-core'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/issue-28-generic-verification-protocol
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Apply bounded patch
+        run: python .github/scripts/tmp_core29_conformance_patch.py
+      - name: Focused verification
+        run: |
+          uv sync --locked
+          uv run pytest -q tests/product/test_generic_verification_protocol.py
+          uv run ruff check product/protocol/generic_verification.py tests/product/test_generic_verification_protocol.py
+          uv run pyright product/protocol/generic_verification.py
+          git diff --check
+      - name: Commit exact Candidate update and self-delete helper
+        run: |
+          rm .github/workflows/tmp-core29-conformance-patch.yml
+          rm .github/scripts/tmp_core29_conformance_patch.py
+          git add -A
+          git config user.name "James3014"
+          git config user.email "liligogo523@gmail.com"
+          git commit -m "fix(protocol): publish complete conformance constraints"
+          git push origin HEAD:chatgpt/issue-28-generic-verification-protocol
