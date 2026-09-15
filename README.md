@@ -34,6 +34,11 @@ uv run nexus-certify --help
 
 ## Compatibility and Coexistence Boundary
 
-Do not install `nexus-core` and `nexus-legacy` into the same Python environment until the legacy product namespace / console script is removed from `Nexus-new`.
+`nexus-core` and the current `nexus-legacy` package in `Nexus-new` have distinct package and console-script ownership:
 
-`nexus-core` packages the standalone `product` namespace and exposes the `nexus-certify` console script. Developing or testing `nexus-core` requires an isolated virtual environment to prevent shadowing or collision with legacy `product` artifacts.
+- `nexus-core` owns the `product` package and `nexus-certify` console script.
+- `nexus-legacy` owns the `nexus` and `scripts` packages and the `nexus` console script.
+
+The current package definitions therefore no longer have the historical `product` namespace / `nexus-certify` console-script collision described by the previous README.
+
+Use separate virtual environments for normal development and testing because the repositories have different dependency sets and operational roles. That isolation is development hygiene, not a requirement caused by the retired namespace/script collision.
