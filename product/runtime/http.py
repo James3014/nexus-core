@@ -11,7 +11,9 @@ from typing import Any, Callable, Optional
 
 from aiohttp import web
 
+from product.adapters.generic_verification import verify_generic_changeset
 from product.ledger import resolve_ledger_path, verify_chain
+from product.protocol.generic_verification import protocol_descriptor
 from product.runtime.auth import (
     create_auth_middleware,
     read_bearer_token,
@@ -181,6 +183,44 @@ def create_app(
         status_code, resp = await service.get_receipt(req_id)
         return web.json_response(resp, status=status_code)
 
+    async def handle_verify_generic_changeset(request: web.Request) -> web.Response:
+        if not request.content_type or "application/json" not in request.content_type:
+            return web.json_response(
+                make_http_error(
+                    code="UNSUPPORTED_MEDIA_TYPE",
+                    request_id=None,
+                    message="Content-Type must be application/json",
+                ),
+                status=415,
+            )
+        try:
+            body = await request.read()
+            if len(body) > MAX_REQUEST_BODY_BYTES:
+                return web.json_response(
+                    make_http_error(
+                        code="REQUEST_TOO_LARGE",
+                        request_id=None,
+                        message="request body exceeds 1 MB",
+                    ),
+                    status=413,
+                )
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return web.json_response(
+                make_http_error(
+                    code="MALFORMED_REQUEST",
+                    request_id=None,
+                    message="malformed JSON body",
+                ),
+                status=400,
+            )
+
+        status_code, resp = verify_generic_changeset(payload)
+        return web.json_response(resp, status=status_code)
+
+    async def handle_get_generic_protocol(request: web.Request) -> web.Response:
+        return web.json_response(protocol_descriptor())
+
     async def handle_verify_receipt(request: web.Request) -> web.Response:
         if not request.content_type or "application/json" not in request.content_type:
             return web.json_response(
@@ -216,11 +256,15 @@ def create_app(
         status_code, resp = await service.verify_receipt(payload)
         return web.json_response(resp, status=status_code)
 
-    # Register canonical four routes
+    # Register the legacy PR-certification routes plus the transport-neutral
+    # generic verification protocol. Both remain behind the same loopback/auth
+    # boundary.
     app.router.add_post("/v1/certifications", handle_post_certifications)
     app.router.add_get("/v1/certifications/{request_id}", handle_get_status)
     app.router.add_get("/v1/certifications/{request_id}/receipt", handle_get_receipt)
     app.router.add_post("/v1/receipts/verify", handle_verify_receipt)
+    app.router.add_post("/v1/changesets/verify", handle_verify_generic_changeset)
+    app.router.add_get("/v1/protocol/generic-verification", handle_get_generic_protocol)
 
     return app
 

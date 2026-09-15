@@ -192,6 +192,7 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
             "target_revision": data["head_sha"],
             "diff_hash": data["diff_hash"],
             "paths": tuple(sorted(data["changed_paths"])),
+            "deleted_paths": (),
         }
         if type(result) is not change_set_type or vars(result) != expected:
             raise ValueError("malformed mapped ChangeSet")

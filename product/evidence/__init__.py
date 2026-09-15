@@ -215,6 +215,7 @@ class ChangeSet:
     target_revision: str
     diff_hash: str
     paths: tuple[str, ...]
+    deleted_paths: tuple[str, ...] = ()
 
     def __post_init__(self):
         _require_text(self.change_set_id, "change_set_id")
@@ -222,18 +223,33 @@ class ChangeSet:
         _require_text(self.target_revision, "target_revision")
         _require_hash(self.diff_hash, "diff_hash")
         _require_paths(self.paths, "paths")
+        if type(self.deleted_paths) is not tuple:
+            raise TypeError("deleted_paths must be a tuple")
+        if len(self.deleted_paths) != len(set(self.deleted_paths)):
+            raise ValueError("deleted_paths must not contain duplicates")
+        for path in self.deleted_paths:
+            _require_text(path, "deleted_paths")
+            if (
+                path.startswith("/")
+                or "\\" in path
+                or any(part in {"", ".", ".."} for part in path.split("/"))
+            ):
+                raise ValueError("deleted_paths must contain relative paths")
+        if not set(self.deleted_paths).issubset(self.paths):
+            raise ValueError("deleted_paths must be a subset of paths")
 
     @property
     def hash(self):
-        return _CS_HASH(
-            (
-                self.change_set_id,
-                self.source_revision,
-                self.target_revision,
-                self.diff_hash,
-                tuple(sorted(self.paths)),
-            )
+        canonical = (
+            self.change_set_id,
+            self.source_revision,
+            self.target_revision,
+            self.diff_hash,
+            tuple(sorted(self.paths)),
         )
+        if self.deleted_paths:
+            canonical += (tuple(sorted(self.deleted_paths)),)
+        return _CS_HASH(canonical)
 
 
 @dataclass(frozen=True)
@@ -466,11 +482,14 @@ AcceptanceContract.hash = _make_identity_property(  # pyright: ignore[reportAttr
 ChangeSet.hash = _make_identity_property(  # pyright: ignore[reportAttributeAccessIssue]
     _CS_HASH,
     lambda value: (
-        value.change_set_id,
-        value.source_revision,
-        value.target_revision,
-        value.diff_hash,
-        tuple(sorted(value.paths)),
+        (
+            value.change_set_id,
+            value.source_revision,
+            value.target_revision,
+            value.diff_hash,
+            tuple(sorted(value.paths)),
+        )
+        + ((tuple(sorted(value.deleted_paths)),) if value.deleted_paths else ())
     ),
 )
 VerificationPlan.hash = _make_identity_property(  # pyright: ignore[reportAttributeAccessIssue]
@@ -562,6 +581,14 @@ def _make_subject_validator(
                 require_paths(cs["paths"], "paths")
             except (TypeError, ValueError, KeyError):
                 errors.append("MALFORMED:change_set.paths")
+            deleted_paths = cs.get("deleted_paths")
+            if deleted_paths:
+                try:
+                    require_paths(deleted_paths, "deleted_paths")
+                except (TypeError, ValueError):
+                    errors.append("MALFORMED:change_set.deleted_paths")
+            if type(deleted_paths) is not tuple or not set(deleted_paths).issubset(cs.get("paths", ())):
+                errors.append("MALFORMED:change_set.deleted_paths")
         if p is not None:
             text(p, "plan_id", "plan")
             for key in ("acceptance_contract_hash", "change_set_hash"):
@@ -641,15 +668,16 @@ def _make_integrity_deriver(
                 c["deletion_policy"],
             )
         )
-        change_hash = hash_change_set(
-            (
-                cs["change_set_id"],
-                cs["source_revision"],
-                cs["target_revision"],
-                cs["diff_hash"],
-                tuple(sorted(cs["paths"])),
-            )
+        change_canonical = (
+            cs["change_set_id"],
+            cs["source_revision"],
+            cs["target_revision"],
+            cs["diff_hash"],
+            tuple(sorted(cs["paths"])),
         )
+        if cs["deleted_paths"]:
+            change_canonical += (tuple(sorted(cs["deleted_paths"])),)
+        change_hash = hash_change_set(change_canonical)
         plan_hash = hash_plan(
             (
                 p["plan_id"],
