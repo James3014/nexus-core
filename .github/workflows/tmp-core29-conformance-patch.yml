@@ -25,6 +25,7 @@ jobs:
       - name: Focused verification
         run: |
           uv sync --locked
+          uv run ruff check --fix tests/product/test_generic_verification_protocol.py
           uv run pytest -q tests/product/test_generic_verification_protocol.py
           uv run ruff check product/protocol/generic_verification.py tests/product/test_generic_verification_protocol.py
           uv run pyright product/protocol/generic_verification.py
