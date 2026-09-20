@@ -16,6 +16,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from product.clients.local_golden_path import (
+    LocalCheckError,
+    check_repository,
+    doctor_repository,
+    init_repository,
+)
 from product.runtime.auth import AuthSecurityError, read_bearer_token
 from product.runtime.schemas import (
     validate_certification_request,
@@ -263,6 +269,40 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    path = init_repository(
+        args.repo,
+        base_ref=args.base_ref,
+        allowed_patterns=tuple(args.allow or ["**"]),
+        deletion_policy="ALLOW" if args.allow_deletions else "FORBID",
+        verifier_command=tuple(args.verifier),
+        timeout_seconds=args.timeout,
+        force=args.force,
+    )
+    print(f"initialized: {path}")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    result = doctor_repository(args.repo)
+    verdict = "OK" if result["healthy"] else "FAILED"
+    print(f"doctor: {verdict}")
+    for name, status in result["checks"].items():
+        print(f"  {name}: {status}")
+    if result["reason_codes"]:
+        print("  reasons: " + ", ".join(result["reason_codes"]))
+    return 0 if result["healthy"] else 2
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    result = check_repository(args.repo)
+    print(f"verification: {result['status']} (not CERTIFIED)")
+    if result["reason_codes"]:
+        print("reasons: " + ", ".join(result["reason_codes"]))
+    print(f"receipt: {result['receipt_path']}")
+    return 0 if result["status"] == "VERIFIED" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = CertifyArgumentParser(
         prog="nexus-certify",
@@ -308,6 +348,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Requested verification scope (default: AUTO)",
     )
 
+    # Local Golden Path. These commands acquire inputs and execute a verifier,
+    # but the canonical generic adapter remains the sole factual verifier.
+    p_init = subparsers.add_parser("init", help="Create local Golden Path config")
+    p_init.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_init.add_argument("--base-ref", default="main", help="Base Git ref (default: main)")
+    p_init.add_argument(
+        "--allow",
+        action="append",
+        default=None,
+        metavar="GLOB",
+        help="Allowed repository-relative path glob (repeatable; default: **)",
+    )
+    p_init.add_argument(
+        "--allow-deletions", action="store_true", help="Permit deletions in the bounded change"
+    )
+    p_init.add_argument(
+        "--verifier",
+        nargs=argparse.REMAINDER,
+        default=[sys.executable, "-m", "pytest", "-q"],
+        metavar="ARG",
+        help="Verifier argv without a shell; must be the final init option",
+    )
+    p_init.add_argument("--timeout", type=int, default=300, help="Verifier timeout seconds")
+    p_init.add_argument("--force", action="store_true", help="Replace an existing config")
+
+    p_doctor = subparsers.add_parser("doctor", help="Diagnose local Golden Path readiness")
+    p_doctor.add_argument("--repo", default=".", help="Git repository (default: current)")
+
+    p_check = subparsers.add_parser("check", help="Run local deterministic verification")
+    p_check.add_argument("--repo", default=".", help="Git repository (default: current)")
+
     return parser
 
 
@@ -324,12 +395,23 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_receipt(args)
         elif args.command == "verify":
             return cmd_verify(args)
+        elif args.command == "init":
+            return cmd_init(args)
+        elif args.command == "doctor":
+            return cmd_doctor(args)
+        elif args.command == "check":
+            return cmd_check(args)
         else:
             sys.stderr.write(f"unknown command: {args.command}\n")
             return 2
     except CertifyCLIError as exc:
         sys.stderr.write(f"{exc.message}\n")
         return exc.exit_code
+    except LocalCheckError as exc:
+        sys.stderr.write(f"{exc.reason_code}: {exc.detail}\n")
+        if exc.receipt_path is not None:
+            sys.stderr.write(f"receipt: {exc.receipt_path}\n")
+        return 2
     except KeyboardInterrupt:
         sys.stderr.write("interrupted\n")
         return 7
