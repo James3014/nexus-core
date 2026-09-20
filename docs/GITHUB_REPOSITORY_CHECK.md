@@ -53,4 +53,3 @@ python -m product.clients.github_action \
 That mode retains its self-hosted-runner requirement, loopback service URL
 requirement, protected token read, and canonical HTTP behavior. The two modes are
 mutually exclusive.
-

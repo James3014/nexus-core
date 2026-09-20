@@ -26,4 +26,3 @@ jobs:
         # The self-hosted runner environment must already provide nexus-core and
         # the verifier dependencies declared by .nexus-core/config.toml.
         run: python -m product.clients.github_action --repository-check --repo .
-
