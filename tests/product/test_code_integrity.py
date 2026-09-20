@@ -16,6 +16,7 @@ from product.evidence.code_integrity import (
     JUnitCaseV1,
     ProducerExecutionState,
     analyze_code_integrity,
+    observation_from_code_integrity,
 )
 from product.evidence.code_integrity import (
     TestTargetV1 as IntegrityTestTargetV1,
@@ -581,6 +582,7 @@ def test_internal_analyzer_failure_is_unavailable_without_report():
     assert result.integrity_status is None
     assert result.report is None
     assert result.reason_codes == ("INTERNAL_ANALYZER_ERROR",)
+    assert observation_from_code_integrity(result) is None
 
 
 def test_profile_hash_is_content_addressed_and_stable_shape():

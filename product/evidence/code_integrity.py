@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping
 
-from product.evidence import ChangeSet, _hash, canonical_json
+from product.evidence import ChangeSet, Observation, ObservationStatus, _hash, canonical_json
 
 VERIFIER_ID = "code_integrity_v1"
 PROFILE_ID = "python-code-integrity-v1"
@@ -775,6 +775,29 @@ def analyze_code_integrity(
     )
 
 
+def observation_from_code_integrity(
+    result: CodeIntegrityAnalysisResult,
+) -> Observation | None:
+    """Project a completed PASS/FAIL report into the existing Core Observation type."""
+    if (
+        result.execution_state is not ProducerExecutionState.COMPLETED
+        or result.report is None
+        or result.integrity_status not in {CodeIntegrityStatus.PASS, CodeIntegrityStatus.FAIL}
+    ):
+        return None
+    status = (
+        ObservationStatus.PASS
+        if result.integrity_status is CodeIntegrityStatus.PASS
+        else ObservationStatus.FAIL
+    )
+    return Observation(
+        verifier_id=VERIFIER_ID,
+        artifact_id=result.report.artifact_id,
+        artifact_hash=result.report.artifact_hash,
+        status=status,
+    )
+
+
 __all__ = [
     "CI001",
     "CI002",
@@ -797,4 +820,5 @@ __all__ = [
     "ProducerExecutionState",
     "TestTargetV1",
     "analyze_code_integrity",
+    "observation_from_code_integrity",
 ]
