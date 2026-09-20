@@ -32,6 +32,8 @@ The package intentionally introduces no new dependency and does not modify
 the public protocol schema, protocol version, or existing Core authority.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
