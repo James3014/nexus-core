@@ -38,6 +38,10 @@ See [Local Golden Path Contract](docs/LOCAL_GOLDEN_PATH.md) for the exact config
 negative controls, receipt validation contract, and the not-yet-executed G4
 fresh-environment canary contract.
 
+For trusted same-repository GitHub `push` and `pull_request` events on self-hosted
+runners, see the [G2 GitHub Repository Golden Path](docs/GITHUB_REPOSITORY_CHECK.md).
+Fork PRs and GitHub-hosted runners are explicitly unsupported by that path.
+
 ## Generic ChangeSet Verification (experimental)
 
 The loopback HTTP runtime also exposes a transport-neutral, non-GitHub verification seam for bounded consumers such as DevSpace or Open SWE:
