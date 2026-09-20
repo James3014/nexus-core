@@ -351,8 +351,8 @@ CONTROLLER_TG5_RECEIPT = Path(
         "NEXUS_CORE_TG5_RECEIPT", "/private/tmp/nexus-core-v1-evidence/tg7/tg5-receipt.json"
     )
 )
-SUCCESSOR_DISTRIBUTION_VERSION = distribution_version("nexus-core")
-SUCCESSOR_WHEEL_NAME = f"nexus_core-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
+SUCCESSOR_DISTRIBUTION_VERSION = distribution_version("nexus-certify")
+SUCCESSOR_WHEEL_NAME = f"nexus_certify-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
 _PHYSICAL_ACCEPTANCE_SELECTORS = frozenset(
     {"predecessor_artifact", "wheelhouse_manifest", "install_upgrade_rollback"}
 )
@@ -362,8 +362,8 @@ _NON_ACCEPTANCE_REASON = "NON_ACCEPTANCE_PHYSICAL_DEPENDENCY_REQUIRED"
 def test_standalone_physical_canary_identity():
     assert CANONICAL_REQUEST["repository"]["name"] == "nexus-core"
     assert CANONICAL_RESPONSE["acquisition"]["name"] == "nexus-core"
-    assert SUCCESSOR_DISTRIBUTION_VERSION == distribution_version("nexus-core")
-    assert SUCCESSOR_WHEEL_NAME == f"nexus_core-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
+    assert SUCCESSOR_DISTRIBUTION_VERSION == distribution_version("nexus-certify")
+    assert SUCCESSOR_WHEEL_NAME == f"nexus_certify-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
 
 
 def _require_physical_acceptance(
@@ -479,7 +479,7 @@ def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest
             "install",
             "--no-index",
             f"--find-links={wh_dir}",
-            f"nexus-core=={SUCCESSOR_DISTRIBUTION_VERSION}",
+            f"nexus-certify=={SUCCESSOR_DISTRIBUTION_VERSION}",
         ],
         check=True,
     )
@@ -508,7 +508,7 @@ def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest
             "install",
             "--no-index",
             f"--find-links={wh_dir}",
-            "nexus-core==99.99.99",
+            "nexus-certify==99.99.99",
         ],
         capture_output=True,
         text=True,
@@ -518,7 +518,7 @@ def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest
         [str(succ_bin), "--help"], capture_output=True, text=True, check=True
     )
     assert "nexus-certify" in res_succ_post_abort.stdout
-    subprocess.run([str(venv_pip), "uninstall", "-y", "nexus-core"], check=True)
+    subprocess.run([str(venv_pip), "uninstall", "-y", "nexus-certify"], check=True)
     assert not succ_bin.exists(), "successor binary remained after rollback uninstall"
     subprocess.run([str(venv_pip), "install", "--no-deps", str(pred_path)], check=True)
     assert pred_bin.is_file(), "predecessor binary not restored after rollback"

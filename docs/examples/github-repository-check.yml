@@ -23,6 +23,6 @@ jobs:
         with:
           fetch-depth: 0
       - name: Verify repository through Nexus Core Golden Path
-        # The self-hosted runner environment must already provide nexus-core and
+        # The self-hosted runner environment must already provide nexus-certify and
         # the verifier dependencies declared by .nexus-core/config.toml.
         run: python -m product.clients.github_action --repository-check --repo .

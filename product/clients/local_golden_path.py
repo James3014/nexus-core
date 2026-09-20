@@ -76,7 +76,7 @@ class _GitSnapshot:
 
 def _product_version() -> str:
     try:
-        return version("nexus-core")
+        return version("nexus-certify")
     except PackageNotFoundError:
         return "0+unknown"
 

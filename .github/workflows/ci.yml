@@ -34,5 +34,5 @@ jobs:
       - name: Clean Environment Wheel Install Smoke
         run: |
           python -m venv .smoke_venv
-          .smoke_venv/bin/pip install dist/nexus_core-*.whl
+          .smoke_venv/bin/pip install dist/nexus_certify-*.whl
           .smoke_venv/bin/nexus-certify --help
