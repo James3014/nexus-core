@@ -53,6 +53,48 @@ Generic revision identities are typed as `git-commit:<40-lowercase-hex>` or `git
 
 `verification=VERIFIED` does not imply `CERTIFIED`, Candidate acceptance, merge authorization, release, deployment, or production readiness. This interface does not select execution lanes, workers, models, routes, or workspaces.
 
+## Completion Evidence Applicability and Freshness Contract
+
+`product.completion` is an additive Completion Core capability that binds a
+completion claim to the exact source/artifact state it claims, then decides
+whether verification evidence actually applies to that final state. It is
+deterministic, model-independent, and advisory: the completion claim's
+`asserted_by` identity never confers authority, and certification remains with
+`product.kernel.certify`.
+
+It derives three explicit semantic states:
+
+- `CLAIMS_COMPLETE` — a completion claim is present, revision-bound to the
+  change set's `target_revision`, and covers every changed non-deleted path
+  with a claimed final content hash.
+- `VERIFICATION_APPLIES` — every required verifier has an evidence observation
+  that is bound to a changed path, observes the claimed final content hash
+  (freshness by content-hash comparison), and reports `PASS`.
+- `CLAIMS_VERIFIED` — the conjunction of the two states above with the existing
+  deterministic `verify()` reduction. A claim assertion can never substitute
+  for a physical observation.
+
+Per-verifier `EvidenceDisposition` values (`ACCEPTED`, `REJECTED_STALE`,
+`REJECTED_IRRELEVANT`, `REJECTED_MISSING`, `REJECTED_CONTRADICTORY`,
+`REJECTED_FAILED`) let Completion Core explain exactly which evidence was
+accepted, rejected, stale, missing, or contradictory. Original API:
+
+```python
+from product.completion import analyze_completion_evidence, validate_completion_evidence_analysis
+
+analysis = analyze_completion_evidence(claim, contract, change_set, plan, evidence)
+assert analysis.claims_verified         # all three states
+assert validate_completion_evidence_analysis(analysis, claim, contract, change_set, plan, evidence)
+```
+
+Freshness and execution ordering are derived from content hash comparison
+rather than wall-clock timestamps: an observation whose artifact content hash
+differs from the claimed final content hash predates a later mutation and is
+stale unless the hashes are equal (equivalence proven by the trusted hash
+machinery). See `tests/product/test_completion_evidence_applicability.py` for
+the `modify -> test PASS -> modify again` and irrelevant-verification
+regressions.
+
 ## Development
 
 ```bash
