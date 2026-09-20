@@ -18,7 +18,7 @@ from typing import Callable, Mapping, Optional
 
 IMAGE = "python:3.12-alpine"
 IMAGE_DIGEST = "sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
-LOCK_DIGEST = "sha256:604c10c45cf64e2d00242e8c761ac9d1460aa7c6a81f7f9d14f0a8e9d4e7a076"
+LOCK_DIGEST = "sha256:3f30256399123b5547cce7a432401ec0f59d52cc25bf776a18f41656eece2193"
 PROFILE_ID = "python-oci-pytest-v1"
 MAX_OUTPUT_BYTES = 1_048_576
 DEPENDENCY_ARTIFACTS = (

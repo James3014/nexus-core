@@ -761,7 +761,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nexus-core"
+name = "nexus-certify"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

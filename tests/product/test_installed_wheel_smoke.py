@@ -1,4 +1,4 @@
-"""Test that the built standalone nexus-core wheel installs and executes cleanly."""
+"""Test that the built standalone nexus-certify wheel installs and executes cleanly."""
 
 import subprocess
 import sys
@@ -10,15 +10,15 @@ import pytest
 def test_installed_wheel_smoke_in_isolated_venv(tmp_path: Path):
     repo_root = Path(__file__).parents[2].resolve()
     dist_dir = repo_root / "dist"
-    wheels = sorted(dist_dir.glob("nexus_core-*.whl"))
+    wheels = sorted(dist_dir.glob("nexus_certify-*.whl"))
     if not wheels:
         res_build = subprocess.run(["uv", "build"], cwd=str(repo_root), capture_output=True, text=True)
         if res_build.returncode != 0:
-            pytest.fail(f"Failed to build nexus-core wheel: {res_build.stderr}")
-        wheels = sorted(dist_dir.glob("nexus_core-*.whl"))
+            pytest.fail(f"Failed to build nexus-certify wheel: {res_build.stderr}")
+        wheels = sorted(dist_dir.glob("nexus_certify-*.whl"))
 
     if not wheels:
-        pytest.fail("No nexus-core wheel found in dist/ after build attempt.")
+        pytest.fail("No nexus-certify wheel found in dist/ after build attempt.")
 
     target_wheel = wheels[-1]
 

@@ -1,5 +1,5 @@
 [project]
-name = "nexus-core"
+name = "nexus-certify"
 version = "0.1.0"
 description = "Nexus Evidence Trust Core and Completion Core"
 requires-python = ">=3.11"

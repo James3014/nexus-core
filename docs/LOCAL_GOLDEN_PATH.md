@@ -1,7 +1,7 @@
 # Local Golden Path Contract (G0/G1)
 
 This is the frozen external-user contract for an ordinary Python Git repository.
-The user installs only `nexus-core`. Nexus-new, DevSpace, nexus-runtime,
+The user installs only the Nexus Core distribution, `nexus-certify`. Nexus-new, DevSpace, nexus-runtime,
 nexus-learning, nexus-open-swe-runtime, model routing, and any particular human or
 agent author are not part of this flow.
 
@@ -13,16 +13,12 @@ receipt, execution, routing, merge, or certification authority.
 
 ## Exact first-use journey
 
-Until G3 proves a public, versioned distribution, install from the candidate source
-in a development environment:
-
-```bash
-python -m pip install /path/to/nexus-core
-```
-
-The target G3 public install command is `python -m pip install nexus-core`. G0/G1
-does not claim that public path is currently available. From the external
-repository, the otherwise-frozen first-use product journey is:
+The distribution identity is `nexus-certify`. Until an authorized G3 public
+release exists, install from the candidate source or a locally built wheel in a
+development environment. After publication, the supported registry install command
+is `python -m pip install nexus-certify`. This source integration does not claim
+that the public artifact has been released. From the external repository, the
+otherwise-frozen first-use product journey is:
 
 ```bash
 nexus-certify init \
@@ -124,8 +120,9 @@ service state:
 
 1. create an ordinary Python Git repository with a base commit and a feature
    change;
-2. create a new virtual environment and install only the candidate `nexus-core`
-   wheel plus the external repository's declared verifier dependencies;
+2. create a new virtual environment and install only the candidate
+   `nexus-certify` wheel plus the external repository's declared verifier
+   dependencies;
 3. assert imports and executable paths resolve from that environment, not a source
    checkout or sibling repository;
 4. run `init`, `doctor`, and `check` exactly as documented;

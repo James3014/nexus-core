@@ -16,10 +16,10 @@ It provides the standalone `nexus-certify` CLI and HTTP/deterministic runtime in
 An external Python Git repository can verify a committed or dirty change without
 running the HTTP service or hand-authoring protocol JSON:
 
-Until G3 proves a public, versioned distribution, install the candidate source in
-a development environment (for example, `python -m pip install /path/to/nexus-core`).
-The target G3 public install command is `python -m pip install nexus-core`; this
-G0/G1 implementation does not claim that public path is available yet.
+The public distribution identity is `nexus-certify`. Until the release gate
+publishes a versioned artifact, install the candidate source or locally built wheel
+in a development environment. After an authorized public release, the supported
+registry install command is `python -m pip install nexus-certify`.
 
 ```bash
 nexus-certify init --base-ref main --allow 'src/**' --allow 'tests/**' \
@@ -109,7 +109,8 @@ uv run nexus-certify --help
 
 `nexus-core` and the current `nexus-legacy` package in `Nexus-new` have distinct package and console-script ownership:
 
-- `nexus-core` owns the `product` package and `nexus-certify` console script.
+- Nexus Core is distributed as `nexus-certify` while continuing to own the
+  internal `product` Python package and `nexus-certify` console script.
 - `nexus-legacy` owns the `nexus` and `scripts` packages and the `nexus` console script.
 
 The current package definitions therefore no longer have the historical `product` namespace / `nexus-certify` console-script collision described by the previous README.

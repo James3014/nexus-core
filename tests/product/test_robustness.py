@@ -123,7 +123,7 @@ def test_standalone_distribution_metadata_contract():
     pyproject_path = Path(__file__).parents[2] / "pyproject.toml"
     data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
     project = data.get("project", {})
-    assert project.get("name") == "nexus-core"
+    assert project.get("name") == "nexus-certify"
     assert project.get("version") == "0.1.0"
     scripts = project.get("scripts", {})
     assert scripts.get("nexus-certify") == "product.clients.cli:main"

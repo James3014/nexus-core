@@ -16,7 +16,7 @@ designed sandbox/security boundary for that future use case.
 
 Copy [`examples/github-repository-check.yml`](examples/github-repository-check.yml)
 to the consuming repository's `.github/workflows/` directory. The self-hosted
-runner must already have the candidate `nexus-core` package and the repository's
+runner must already have the candidate `nexus-certify` distribution and the repository's
 verifier dependencies installed. G2 makes no public package release or GitHub
 Marketplace claim.
 
