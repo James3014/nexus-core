@@ -11,6 +11,37 @@ Its truth authorities are Evidence Trust Core and Completion Core.
 
 It provides the standalone `nexus-certify` CLI and HTTP/deterministic runtime interfaces.
 
+## Local Golden Path
+
+An external Python Git repository can verify a committed or dirty change without
+running the HTTP service or hand-authoring protocol JSON:
+
+Until G3 proves a public, versioned distribution, install the candidate source in
+a development environment (for example, `python -m pip install /path/to/nexus-core`).
+The target G3 public install command is `python -m pip install nexus-core`; this
+G0/G1 implementation does not claim that public path is available yet.
+
+```bash
+nexus-certify init --base-ref main --allow 'src/**' --allow 'tests/**' \
+  --verifier python -m pytest -q
+nexus-certify doctor
+nexus-certify check
+```
+
+The local shell derives real Git object identities and the canonical manifest,
+runs the configured verifier, delegates the verdict to the existing generic Core
+adapter, and persists a verification receipt under `.nexus-core/receipts/`.
+`VERIFIED` remains distinct from `CERTIFIED`; the local receipt is not a
+Certification receipt or merge/release authority.
+
+See [Local Golden Path Contract](docs/LOCAL_GOLDEN_PATH.md) for the exact config,
+negative controls, receipt validation contract, and the not-yet-executed G4
+fresh-environment canary contract.
+
+For trusted same-repository GitHub `push` and `pull_request` events on self-hosted
+runners, see the [G2 GitHub Repository Golden Path](docs/GITHUB_REPOSITORY_CHECK.md).
+Fork PRs and GitHub-hosted runners are explicitly unsupported by that path.
+
 ## Generic ChangeSet Verification (experimental)
 
 The loopback HTTP runtime also exposes a transport-neutral, non-GitHub verification seam for bounded consumers such as DevSpace or Open SWE:

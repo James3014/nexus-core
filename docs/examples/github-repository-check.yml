@@ -1,0 +1,28 @@
+name: Nexus Core repository verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # G2 does not support untrusted/fork PR execution. Keep this guard before checkout.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.repo.fork == false)
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify repository through Nexus Core Golden Path
+        # The self-hosted runner environment must already provide nexus-core and
+        # the verifier dependencies declared by .nexus-core/config.toml.
+        run: python -m product.clients.github_action --repository-check --repo .
