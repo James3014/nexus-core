@@ -13,12 +13,12 @@ receipt, execution, routing, merge, or certification authority.
 
 ## Exact first-use journey
 
-The distribution identity is `nexus-certify`. Until an authorized G3 public
-release exists, install from the candidate source or a locally built wheel in a
-development environment. After publication, the supported registry install command
-is `python -m pip install nexus-certify`. This source integration does not claim
-that the public artifact has been released. From the external repository, the
-otherwise-frozen first-use product journey is:
+The distribution identity is `nexus-certify`. The supported public registry
+install command is `python -m pip install nexus-certify`. The first public release,
+`nexus-certify==0.1.0`, was installed from PyPI in a fresh environment and the
+external-repository Golden Path was accepted in
+[Issue #36](https://github.com/James3014/nexus-core/issues/36).
+From the external repository, the first-use product journey is:
 
 ```bash
 nexus-certify init \
@@ -112,7 +112,7 @@ Receipt validation recomputes the config, manifest, verifier artifact, envelope,
 and Core response, and can compare the preserved manifest with the referenced Git
 objects still present in the repository.
 
-## G4 fresh-environment canary contract (not executed in G0/G1)
+## Published-artifact fresh-environment canary contract
 
 G4 may claim the fresh-environment canary only when all of these are observed in a
 new temporary environment with no Nexus sibling repositories or pre-existing Nexus
@@ -135,5 +135,7 @@ service state:
 8. confirm HEAD, the normal index, and pre-existing worktree bytes are unchanged by
    acquisition and receipt validation.
 
-This section freezes the future canary acceptance contract; it does not claim G4
-has run or passed.
+This contract was executed successfully against the public `nexus-certify==0.1.0`
+artifact during Issue #36 closure. Keep the same checks as the regression contract
+for future published releases; a later release does not inherit the prior canary
+without fresh evidence.
