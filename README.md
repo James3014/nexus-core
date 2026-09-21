@@ -116,3 +116,8 @@ uv run nexus-certify --help
 The current package definitions therefore no longer have the historical `product` namespace / `nexus-certify` console-script collision described by the previous README.
 
 Use separate virtual environments for normal development and testing because the repositories have different dependency sets and operational roles. That isolation is development hygiene, not a requirement caused by the retired namespace/script collision.
+
+
+## License
+
+Nexus Core, including the `nexus-certify` distribution, is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
