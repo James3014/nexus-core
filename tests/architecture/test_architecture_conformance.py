@@ -196,3 +196,25 @@ def test_architecture_boundary_doc_is_in_sync(
     assert expected_mermaid in content, (
         "docs/architecture/BOUNDARY.md architecture diagram is out of sync with current source graph."
     )
+
+
+def test_source_discovered_components_match_architecture_policy(repo_root: Path):
+    product_dir = repo_root / "product"
+    discovered = {"product"}
+
+    for py_file in sorted(product_dir.rglob("*.py")):
+        rel = py_file.relative_to(repo_root)
+        parts = rel.parts
+        if len(parts) == 2 and parts[1] == "__init__.py":
+            discovered.add("product")
+            continue
+        if len(parts) >= 2:
+            component = parts[1].removesuffix(".py")
+            discovered.add(f"product.{component}")
+
+    policy_components = set(PACKAGE_LAYER_MAP) | {"product"}
+    assert discovered == policy_components, (
+        "Every source-derived top-level product component must be explicitly "
+        "classified in PACKAGE_LAYER_MAP. "
+        f"discovered={sorted(discovered)} policy={sorted(policy_components)}"
+    )
