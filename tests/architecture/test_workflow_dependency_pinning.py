@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HEX_40_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+DOCKER_DIGEST_PATTERN = re.compile(r"^docker://.+@sha256:[0-9a-fA-F]{64}$")
 USES_LINE_PATTERN = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", re.MULTILINE)
 
 
@@ -32,13 +33,26 @@ def check_workflow_content_for_unpinned_actions(
         if not match:
             continue
 
-        raw_target = match.group(1).strip()
+        raw_target = match.group(1).strip().strip("\"'")
 
-        # Local actions are explicitly permitted
         if raw_target.startswith("./"):
             continue
-        # Docker actions with pinned sha or digest
+
         if raw_target.startswith("docker://"):
+            if not DOCKER_DIGEST_PATTERN.match(raw_target):
+                violations.append(
+                    WorkflowPinViolation(
+                        workflow_path=workflow_rel_path,
+                        lineno=idx,
+                        raw_action_ref=raw_target,
+                        action_name=raw_target,
+                        action_ref="",
+                        message=(
+                            f"Docker action '{raw_target}' is not pinned to an immutable "
+                            "sha256 image digest."
+                        ),
+                    )
+                )
             continue
 
         if "@" not in raw_target:
@@ -102,7 +116,9 @@ def test_negative_control_movable_tag_rejected():
         "    steps:\n"
         "      - uses: actions/checkout@v4\n"
     )
-    violations = check_workflow_content_for_unpinned_actions(sample, ".github/workflows/fake_ci.yml")
+    violations = check_workflow_content_for_unpinned_actions(
+        sample, ".github/workflows/fake_ci.yml"
+    )
     assert len(violations) == 1
     v = violations[0]
     assert v.lineno == 5
@@ -119,7 +135,9 @@ def test_negative_control_movable_branch_rejected():
         "    steps:\n"
         "      - uses: astral-sh/setup-uv@main\n"
     )
-    violations = check_workflow_content_for_unpinned_actions(sample, ".github/workflows/build.yml")
+    violations = check_workflow_content_for_unpinned_actions(
+        sample, ".github/workflows/build.yml"
+    )
     assert len(violations) == 1
     v = violations[0]
     assert v.lineno == 5
@@ -127,14 +145,33 @@ def test_negative_control_movable_branch_rejected():
     assert "uses movable ref '@main'" in v.message
 
 
-def test_local_actions_and_valid_shas_accepted():
+def test_negative_control_mutable_docker_tag_rejected():
+    sample = (
+        "name: Docker\n"
+        "jobs:\n"
+        "  run:\n"
+        "    steps:\n"
+        "      - uses: docker://alpine:latest\n"
+    )
+    violations = check_workflow_content_for_unpinned_actions(
+        sample, ".github/workflows/docker.yml"
+    )
+    assert len(violations) == 1
+    assert "not pinned to an immutable sha256 image digest" in violations[0].message
+
+
+def test_local_actions_and_immutable_refs_accepted():
+    docker_digest = "a" * 64
     sample = (
         "name: Valid\n"
         "jobs:\n"
         "  check:\n"
         "    steps:\n"
         "      - uses: ./.github/actions/local-setup\n"
-        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2\n"
+        "      - uses: \"actions/checkout@11d5960a326750d5838078e36cf38b85af677262\"\n"
+        f"      - uses: docker://alpine@sha256:{docker_digest}\n"
     )
-    violations = check_workflow_content_for_unpinned_actions(sample, ".github/workflows/valid.yml")
+    violations = check_workflow_content_for_unpinned_actions(
+        sample, ".github/workflows/valid.yml"
+    )
     assert not violations
