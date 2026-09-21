@@ -102,6 +102,32 @@ Nexus Core materializes the target Git state with an isolated temporary index. I
 
 Your configured verifier is still real executable code and runs with the permissions of your shell. Nexus Core invokes the configured argv directly rather than through a shell, but you should only configure verifier commands you trust.
 
+## Security and privacy
+
+For the local Golden Path (`init`, `doctor`, `check`):
+
+- no Nexus account, API key, bearer token, or remote Nexus service is required;
+- the local verification path does not upload your repository contents or verification receipt to a Nexus service;
+- `doctor` is read-only;
+- Git acquisition uses an isolated temporary index rather than staging into your normal index;
+- `check` writes only its receipt directory in addition to whatever your configured verifier itself may write.
+
+The verifier command is deliberately under your control. It executes locally with your user permissions, so review verifier commands before running them, just as you would review any test or build command.
+
+Nexus Core is open source under Apache-2.0. The package dependencies are declared in [`pyproject.toml`](pyproject.toml), and CI builds the wheel/sdist and performs a clean-environment wheel-install smoke test.
+
+### Optional install verification
+
+After installation:
+
+```bash
+python -m pip show nexus-certify
+python -m pip check
+nexus-certify --help
+```
+
+These commands let you confirm the installed package identity, dependency consistency, and CLI entry point before using it on a repository.
+
 ## What Nexus Core checks
 
 The local path fails closed rather than returning `VERIFIED` when it encounters conditions such as:
