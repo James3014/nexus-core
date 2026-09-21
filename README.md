@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
 [![Python versions](https://img.shields.io/pypi/pyversions/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
 [![CI](https://github.com/James3014/nexus-core/actions/workflows/ci.yml/badge.svg)](https://github.com/James3014/nexus-core/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/James3014/nexus-core/blob/main/LICENSE)
 
 **Nexus Core verifies whether a code change is backed by real, current evidence before you trust a “done” claim from a human or AI agent.**
 
@@ -114,7 +114,7 @@ For the local Golden Path (`init`, `doctor`, `check`):
 
 The verifier command is deliberately under your control. It executes locally with your user permissions, so review verifier commands before running them, just as you would review any test or build command.
 
-Nexus Core is open source under Apache-2.0. The package dependencies are declared in [`pyproject.toml`](pyproject.toml), and CI builds the wheel/sdist and performs a clean-environment wheel-install smoke test.
+Nexus Core is open source under Apache-2.0. The package dependencies are declared in [`pyproject.toml`](https://github.com/James3014/nexus-core/blob/main/pyproject.toml), and CI builds the wheel/sdist and performs a clean-environment wheel-install smoke test.
 
 ### Optional install verification
 
@@ -142,7 +142,7 @@ The local path fails closed rather than returning `VERIFIED` when it encounters 
 
 The receipt binds the installed Nexus Core version, Git source/target identity, manifest, verifier evidence, canonical request, Core response, and integrity hashes.
 
-See the [Local Golden Path Contract](docs/LOCAL_GOLDEN_PATH.md) for the exact behavior and negative controls.
+See the [Local Golden Path Contract](https://github.com/James3014/nexus-core/blob/main/docs/LOCAL_GOLDEN_PATH.md) for the exact behavior and negative controls.
 
 ## Why you can evaluate it independently
 
@@ -215,7 +215,7 @@ Freshness is derived from content-hash comparison rather than wall-clock timesta
 
 ## GitHub repository integration
 
-For trusted same-repository GitHub `push` and `pull_request` events on self-hosted runners, see the [GitHub Repository Golden Path](docs/GITHUB_REPOSITORY_CHECK.md).
+For trusted same-repository GitHub `push` and `pull_request` events on self-hosted runners, see the [GitHub Repository Golden Path](https://github.com/James3014/nexus-core/blob/main/docs/GITHUB_REPOSITORY_CHECK.md).
 
 Fork PRs and GitHub-hosted runners are explicitly unsupported by that path.
 
@@ -241,6 +241,6 @@ Use separate virtual environments for normal development and testing because the
 
 ## License
 
-Nexus Core, including the `nexus-certify` distribution, is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+Nexus Core, including the `nexus-certify` distribution, is licensed under the Apache License, Version 2.0. See the [Apache-2.0 LICENSE](https://github.com/James3014/nexus-core/blob/main/LICENSE).
 
 The published `0.1.0` package metadata declares Apache-2.0. Starting with the next release after `0.1.0`, CI also requires the full `LICENSE` file to be physically present in both wheel and source-distribution artifacts.
