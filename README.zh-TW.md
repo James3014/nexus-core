@@ -118,6 +118,8 @@ verifier 指令完全由你控制。它會在本機以你的使用者權限執�
 
 Nexus Core 使用 Apache-2.0 開源授權。套件相依性宣告在 [`pyproject.toml`](https://github.com/James3014/nexus-core/blob/main/pyproject.toml)，CI 會建立 wheel/sdist，並在乾淨環境執行 wheel installation smoke test。
 
+關於完整的威脅模型、信任邊界、`VERIFIED` 宣告上限與安全漏洞回報流程，請參閱 [`SECURITY.md`](SECURITY.md)。
+
 ### 可選的安裝後檢查
 
 ```bash

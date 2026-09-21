@@ -118,6 +118,8 @@ The verifier command is deliberately under your control. It executes locally wit
 
 Nexus Core is open source under Apache-2.0. The package dependencies are declared in [`pyproject.toml`](https://github.com/James3014/nexus-core/blob/main/pyproject.toml), and CI builds the wheel/sdist and performs a clean-environment wheel-install smoke test.
 
+For the full threat model, trust boundaries, `VERIFIED` claim ceilings, and vulnerability reporting procedures, see [`SECURITY.md`](SECURITY.md).
+
 ### Optional install verification
 
 After installation:
