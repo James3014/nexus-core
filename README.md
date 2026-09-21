@@ -53,10 +53,10 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-For a reproducible install of the currently published release:
+For a reproducible install of this release after publication:
 
 ```bash
-python -m pip install nexus-certify==0.1.0
+python -m pip install nexus-certify==0.1.1
 ```
 
 If you use the pytest example below, make sure pytest is installed in the same environment:
@@ -160,7 +160,7 @@ The public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh en
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Current public version:** `0.1.0`
+- **Release version in this source:** `0.1.1`
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
@@ -243,4 +243,4 @@ Use separate virtual environments for normal development and testing because the
 
 Nexus Core, including the `nexus-certify` distribution, is licensed under the Apache License, Version 2.0. See the [Apache-2.0 LICENSE](https://github.com/James3014/nexus-core/blob/main/LICENSE).
 
-The published `0.1.0` package metadata declares Apache-2.0. Starting with the next release after `0.1.0`, CI also requires the full `LICENSE` file to be physically present in both wheel and source-distribution artifacts.
+Starting with `0.1.1`, both the wheel and source distribution physically include the full Apache-2.0 `LICENSE` file, and CI verifies that packaging invariant.
