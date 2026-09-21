@@ -1,4 +1,4 @@
-# Nexus Core
+# nexus-certify
 
 [![PyPI version](https://img.shields.io/pypi/v/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
 [![Python versions](https://img.shields.io/pypi/pyversions/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
@@ -8,6 +8,10 @@
 **Nexus Core verifies whether a code change is backed by real, current evidence before you trust a “done” claim from a human or AI agent.**
 
 The standalone package is **`nexus-certify`**. For the local Golden Path, it works inside an ordinary Git repository and does **not** require Nexus-new, DevSpace, another Nexus service, a model provider, or an API token.
+
+### Naming and affiliation
+
+`nexus-certify` is the public Python distribution. **Nexus Core** is this project's repository and architecture name. This is an independent project and is not affiliated with or endorsed by Sonatype, Inc., Sonatype Nexus Repository, or other software projects that use the name “Nexus Core”.
 
 ## Why use it
 
@@ -56,7 +60,7 @@ nexus-certify --help
 For a reproducible install of the currently published release:
 
 ```bash
-python -m pip install nexus-certify==0.1.0
+python -m pip install nexus-certify==0.1.1
 ```
 
 If you use the pytest example below, make sure pytest is installed in the same environment:
@@ -155,12 +159,12 @@ Nexus Core is designed so that trust does not depend on the author of the code c
 - **Fail-closed behavior** — missing or contradictory evidence does not become a green result.
 - **Authority separation** — verification does not silently become approval, merge, release, or deployment authority.
 
-The public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including fail-closed negative cases. The acceptance record is preserved in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
+The initial public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including fail-closed negative cases. The `0.1.1` release is a packaging, licensing, and documentation synchronization release; runtime verification semantics are unchanged. The acceptance record is preserved in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
 
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Current public version:** `0.1.0`
+- **Current public version:** `0.1.1`
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
@@ -243,4 +247,4 @@ Use separate virtual environments for normal development and testing because the
 
 Nexus Core, including the `nexus-certify` distribution, is licensed under the Apache License, Version 2.0. See the [Apache-2.0 LICENSE](https://github.com/James3014/nexus-core/blob/main/LICENSE).
 
-The published `0.1.0` package metadata declares Apache-2.0. Starting with the next release after `0.1.0`, CI also requires the full `LICENSE` file to be physically present in both wheel and source-distribution artifacts.
+The published `0.1.0` package metadata declared Apache-2.0. Starting with `0.1.1`, CI requires the full `LICENSE` and `THIRD_PARTY_NOTICES.md` files to be physically present in both wheel and source-distribution artifacts.

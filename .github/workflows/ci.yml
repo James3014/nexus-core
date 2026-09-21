@@ -47,10 +47,12 @@ jobs:
           with zipfile.ZipFile(wheel[0]) as archive:
               names = archive.namelist()
               assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names), names
+              assert any(name.endswith(".dist-info/licenses/THIRD_PARTY_NOTICES.md") for name in names), names
 
           with tarfile.open(sdist[0], "r:gz") as archive:
               names = archive.getnames()
               assert any(name.endswith("/LICENSE") for name in names), names
+              assert any(name.endswith("/THIRD_PARTY_NOTICES.md") for name in names), names
           PY
       - name: Clean Environment Wheel Install Smoke
         run: |

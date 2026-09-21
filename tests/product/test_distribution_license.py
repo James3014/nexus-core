@@ -10,9 +10,18 @@ def test_distribution_license_metadata_matches_root_license() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
     assert project["license"] == "Apache-2.0"
-    assert project["license-files"] == ["LICENSE"]
+    assert project["license-files"] == ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     assert "Apache License" in license_text
     assert "Version 2.0, January 2004" in license_text
     assert "END OF TERMS AND CONDITIONS" in license_text
+
+
+def test_direct_dependency_notices_are_present() -> None:
+    third_party_text = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+
+    assert "aiohttp" in third_party_text
+    assert "Apache-2.0" in third_party_text
+    assert "PyGithub" in third_party_text
+    assert "LGPL-3.0-or-later" in third_party_text
