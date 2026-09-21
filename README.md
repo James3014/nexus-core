@@ -1,5 +1,7 @@
 # Nexus Core
 
+**Language:** [English](https://github.com/James3014/nexus-core/blob/main/README.md) | [繁體中文](https://github.com/James3014/nexus-core/blob/main/README.zh-TW.md)
+
 [![PyPI version](https://img.shields.io/pypi/v/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
 [![Python versions](https://img.shields.io/pypi/pyversions/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
 [![CI](https://github.com/James3014/nexus-core/actions/workflows/ci.yml/badge.svg)](https://github.com/James3014/nexus-core/actions/workflows/ci.yml)
@@ -142,7 +144,7 @@ The local path fails closed rather than returning `VERIFIED` when it encounters 
 
 The receipt binds the installed Nexus Core version, Git source/target identity, manifest, verifier evidence, canonical request, Core response, and integrity hashes.
 
-See the [Local Golden Path Contract](https://github.com/James3014/nexus-core/blob/main/docs/LOCAL_GOLDEN_PATH.md) for the exact behavior and negative controls.
+See the [Local Golden Path Contract](https://github.com/James3014/nexus-core/blob/main/docs/LOCAL_GOLDEN_PATH.md) ([繁體中文](https://github.com/James3014/nexus-core/blob/main/docs/LOCAL_GOLDEN_PATH.zh-TW.md)) for the exact behavior and negative controls.
 
 ## Why you can evaluate it independently
 
@@ -155,7 +157,7 @@ Nexus Core is designed so that trust does not depend on the author of the code c
 - **Fail-closed behavior** — missing or contradictory evidence does not become a green result.
 - **Authority separation** — verification does not silently become approval, merge, release, or deployment authority.
 
-The public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including fail-closed negative cases. The acceptance record is preserved in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
+The public `nexus-certify==0.1.1` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including a positive `VERIFIED (not CERTIFIED)` path and fail-closed negative cases. The release acceptance record is preserved in [PR #44](https://github.com/James3014/nexus-core/pull/44), with the original external-repository Golden Path acceptance in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
 
 ## Current maturity
 
