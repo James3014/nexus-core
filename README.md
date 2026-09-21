@@ -53,7 +53,7 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-For a reproducible install of the currently published release:
+For a reproducible install of this release after publication:
 
 ```bash
 python -m pip install nexus-certify==0.1.1
@@ -160,7 +160,7 @@ The public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh en
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Current public version:** `0.1.1`
+- **Release version in this source:** `0.1.1`
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
