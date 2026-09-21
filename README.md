@@ -5,7 +5,7 @@
 [![CI](https://github.com/James3014/nexus-core/actions/workflows/ci.yml/badge.svg)](https://github.com/James3014/nexus-core/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/James3014/nexus-core/blob/main/LICENSE)
 
-**Nexus Core verifies whether a code change is backed by real, current evidence before you trust a “done” claim from a human or AI agent.**
+**`nexus-certify` verifies whether a code change is backed by real, current evidence before you trust a “done” claim from a human or AI agent.**
 
 The standalone package is **`nexus-certify`**. For the local Golden Path, it works inside an ordinary Git repository and does **not** require Nexus-new, DevSpace, another Nexus service, a model provider, or an API token.
 
@@ -15,7 +15,7 @@ The standalone package is **`nexus-certify`**. For the local Golden Path, it wor
 
 ## Why use it
 
-AI coding agents and humans can both say that a change is complete. Nexus Core checks the physical repository state instead of trusting that statement.
+AI coding agents and humans can both say that a change is complete. `nexus-certify` checks the physical repository state instead of trusting that statement.
 
 For a local repository, `nexus-certify check`:
 
@@ -102,9 +102,9 @@ receipt: .nexus-core/receipts/...
 - `nexus-certify doctor` is read-only.
 - `nexus-certify check` writes a verification receipt under `.nexus-core/receipts/`.
 
-Nexus Core materializes the target Git state with an isolated temporary index. Its acquisition path does not commit, checkout, stage into your normal index, merge, or rewrite your source files.
+`nexus-certify` materializes the target Git state with an isolated temporary index. Its acquisition path does not commit, checkout, stage into your normal index, merge, or rewrite your source files.
 
-Your configured verifier is still real executable code and runs with the permissions of your shell. Nexus Core invokes the configured argv directly rather than through a shell, but you should only configure verifier commands you trust.
+Your configured verifier is still real executable code and runs with the permissions of your shell. `nexus-certify` invokes the configured argv directly rather than through a shell, but you should only configure verifier commands you trust.
 
 ## Security and privacy
 
@@ -118,7 +118,7 @@ For the local Golden Path (`init`, `doctor`, `check`):
 
 The verifier command is deliberately under your control. It executes locally with your user permissions, so review verifier commands before running them, just as you would review any test or build command.
 
-Nexus Core is open source under Apache-2.0. The package dependencies are declared in [`pyproject.toml`](https://github.com/James3014/nexus-core/blob/main/pyproject.toml), and CI builds the wheel/sdist and performs a clean-environment wheel-install smoke test.
+`nexus-certify` is open source under Apache-2.0. The package dependencies are declared in [`pyproject.toml`](https://github.com/James3014/nexus-core/blob/main/pyproject.toml), and CI builds the wheel/sdist and performs a clean-environment wheel-install smoke test.
 
 ### Optional install verification
 
@@ -132,7 +132,7 @@ nexus-certify --help
 
 These commands let you confirm the installed package identity, dependency consistency, and CLI entry point before using it on a repository.
 
-## What Nexus Core checks
+## What nexus-certify checks
 
 The local path fails closed rather than returning `VERIFIED` when it encounters conditions such as:
 
@@ -150,7 +150,7 @@ See the [Local Golden Path Contract](https://github.com/James3014/nexus-core/blo
 
 ## Why you can evaluate it independently
 
-Nexus Core is designed so that trust does not depend on the author of the code change saying “it passed”.
+`nexus-certify` is designed so that trust does not depend on the author of the code change saying “it passed”.
 
 - **Physical Git binding** — verification is tied to real Git commits/trees and a deterministic manifest.
 - **Real verifier evidence** — the configured verifier actually runs.
@@ -159,12 +159,12 @@ Nexus Core is designed so that trust does not depend on the author of the code c
 - **Fail-closed behavior** — missing or contradictory evidence does not become a green result.
 - **Authority separation** — verification does not silently become approval, merge, release, or deployment authority.
 
-The initial public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including fail-closed negative cases. The `0.1.1` release is a packaging, licensing, and documentation synchronization release; runtime verification semantics are unchanged. The acceptance record is preserved in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
+The initial public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including fail-closed negative cases. Version `0.1.1` is a packaging, licensing, and documentation synchronization release; runtime verification semantics are unchanged. The acceptance record is preserved in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
 
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Current public version:** `0.1.1`
+- **Version in this source:** `0.1.1`
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
