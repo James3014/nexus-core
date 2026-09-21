@@ -31,6 +31,27 @@ jobs:
         run: uv run pyright product
       - name: Build Wheel and SDist
         run: uv build
+      - name: Verify License Included in Distribution Artifacts
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob
+          import tarfile
+          import zipfile
+
+          wheel = glob.glob("dist/nexus_certify-*.whl")
+          sdist = glob.glob("dist/nexus_certify-*.tar.gz")
+          assert len(wheel) == 1, wheel
+          assert len(sdist) == 1, sdist
+
+          with zipfile.ZipFile(wheel[0]) as archive:
+              names = archive.namelist()
+              assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names), names
+
+          with tarfile.open(sdist[0], "r:gz") as archive:
+              names = archive.getnames()
+              assert any(name.endswith("/LICENSE") for name in names), names
+          PY
       - name: Clean Environment Wheel Install Smoke
         run: |
           python -m venv .smoke_venv
