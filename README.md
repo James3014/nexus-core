@@ -1,50 +1,162 @@
 # Nexus Core
 
-Nexus Core is the standalone Evidence-to-Claim Completion Certification implementation extracted from Nexus-new.
+[![PyPI version](https://img.shields.io/pypi/v/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
+[![Python versions](https://img.shields.io/pypi/pyversions/nexus-certify.svg)](https://pypi.org/project/nexus-certify/)
+[![CI](https://github.com/James3014/nexus-core/actions/workflows/ci.yml/badge.svg)](https://github.com/James3014/nexus-core/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Its truth authorities are Evidence Trust Core and Completion Core.
+**Nexus Core verifies whether a code change is backed by real, current evidence before you trust a “done” claim from a human or AI agent.**
 
-## Scope
+The standalone package is **`nexus-certify`**. For the local Golden Path, it works inside an ordinary Git repository and does **not** require Nexus-new, DevSpace, another Nexus service, a model provider, or an API token.
 
-- **Evidence Trust Core**: Ingestion, normalization, verification, and tamper detection of execution evidence.
-- **Completion Core**: ChangeSet certification, deterministic verification reduction, and disposition enforcement.
+## Why use it
 
-It provides the standalone `nexus-certify` CLI and HTTP/deterministic runtime interfaces.
+AI coding agents and humans can both say that a change is complete. Nexus Core checks the physical repository state instead of trusting that statement.
 
-## Local Golden Path
+For a local repository, `nexus-certify check`:
 
-An external Python Git repository can verify a committed or dirty change without
-running the HTTP service or hand-authoring protocol JSON:
+1. reads the real Git source and current worktree state;
+2. enforces the paths and deletion policy you configured;
+3. runs your real verifier command, such as `python -m pytest -q`;
+4. binds the verifier evidence to the exact Git state that was checked;
+5. asks the canonical Core verifier for the factual result; and
+6. writes a durable receipt that can be re-checked later.
 
-The public distribution identity is `nexus-certify`. Until the release gate
-publishes a versioned artifact, install the candidate source or locally built wheel
-in a development environment. After an authorized public release, the supported
-registry install command is `python -m pip install nexus-certify`.
+A successful local result is:
+
+```text
+VERIFIED (not CERTIFIED)
+```
+
+That wording is intentional. `VERIFIED` does **not** mean approved, merged, released, deployed, production-ready, or `CERTIFIED`.
+
+## Install
+
+### Requirements
+
+- Python **3.11+**
+- Git
+- the verifier you want Nexus Core to run (for example, `pytest`)
+
+Using a virtual environment is recommended.
 
 ```bash
-nexus-certify init --base-ref main --allow 'src/**' --allow 'tests/**' \
+python -m venv .venv
+
+# macOS / Linux
+source .venv/bin/activate
+
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
+
+python -m pip install nexus-certify
+nexus-certify --help
+```
+
+For a reproducible install of the currently published release:
+
+```bash
+python -m pip install nexus-certify==0.1.0
+```
+
+If you use the pytest example below, make sure pytest is installed in the same environment:
+
+```bash
+python -m pip install pytest
+```
+
+PyPI: https://pypi.org/project/nexus-certify/
+
+## 2-minute quick start
+
+Run these commands from the Git repository you want to verify:
+
+```bash
+nexus-certify init \
+  --base-ref main \
+  --allow 'src/**' \
+  --allow 'tests/**' \
   --verifier python -m pytest -q
+
 nexus-certify doctor
 nexus-certify check
 ```
 
-The local shell derives real Git object identities and the canonical manifest,
-runs the configured verifier, delegates the verdict to the existing generic Core
-adapter, and persists a verification receipt under `.nexus-core/receipts/`.
-`VERIFIED` remains distinct from `CERTIFIED`; the local receipt is not a
-Certification receipt or merge/release authority.
+Adjust the `--allow` patterns for your repository. The `--verifier` option and its arguments must be the final `init` option.
 
-See [Local Golden Path Contract](docs/LOCAL_GOLDEN_PATH.md) for the exact config,
-negative controls, receipt validation contract, and the not-yet-executed G4
-fresh-environment canary contract.
+Typical healthy output looks like:
 
-For trusted same-repository GitHub `push` and `pull_request` events on self-hosted
-runners, see the [G2 GitHub Repository Golden Path](docs/GITHUB_REPOSITORY_CHECK.md).
-Fork PRs and GitHub-hosted runners are explicitly unsupported by that path.
+```text
+doctor: OK
+verification: VERIFIED (not CERTIFIED)
+receipt: .nexus-core/receipts/...
+```
+
+### What gets written to your repository
+
+- `nexus-certify init` creates `.nexus-core/config.toml`.
+- `nexus-certify doctor` is read-only.
+- `nexus-certify check` writes a verification receipt under `.nexus-core/receipts/`.
+
+Nexus Core materializes the target Git state with an isolated temporary index. Its acquisition path does not commit, checkout, stage into your normal index, merge, or rewrite your source files.
+
+Your configured verifier is still real executable code and runs with the permissions of your shell. Nexus Core invokes the configured argv directly rather than through a shell, but you should only configure verifier commands you trust.
+
+## What Nexus Core checks
+
+The local path fails closed rather than returning `VERIFIED` when it encounters conditions such as:
+
+- a missing or invalid configuration;
+- a base ref that cannot be resolved or is not an ancestor of the current HEAD;
+- a changed path outside the configured allow-list;
+- a deletion when deletions are forbidden;
+- a verifier that is unavailable, times out, or exits non-zero;
+- the target state changing while verification is running;
+- malformed, stale, mismatched, or tampered verification inputs or receipts.
+
+The receipt binds the installed Nexus Core version, Git source/target identity, manifest, verifier evidence, canonical request, Core response, and integrity hashes.
+
+See the [Local Golden Path Contract](docs/LOCAL_GOLDEN_PATH.md) for the exact behavior and negative controls.
+
+## Why you can evaluate it independently
+
+Nexus Core is designed so that trust does not depend on the author of the code change saying “it passed”.
+
+- **Physical Git binding** — verification is tied to real Git commits/trees and a deterministic manifest.
+- **Real verifier evidence** — the configured verifier actually runs.
+- **Freshness checks** — evidence that no longer applies to the final content is rejected.
+- **Tamper detection** — receipts and canonical inputs are hash-bound and re-checkable.
+- **Fail-closed behavior** — missing or contradictory evidence does not become a green result.
+- **Authority separation** — verification does not silently become approval, merge, release, or deployment authority.
+
+The public `nexus-certify==0.1.0` artifact was installed from PyPI in a fresh environment and exercised against an ordinary external repository, including fail-closed negative cases. The acceptance record is preserved in [Issue #36](https://github.com/James3014/nexus-core/issues/36).
+
+## Current maturity
+
+- **Public package:** `nexus-certify`
+- **Current public version:** `0.1.0`
+- **Local Golden Path:** published-artifact external-repository canary passed
+- **License:** Apache-2.0
+- **Python:** 3.11+
+- **Generic HTTP ChangeSet interface:** experimental
+- **Public protocol Stable:** not claimed
+
+The local Golden Path is the simplest supported entry point for external users. The HTTP/protocol surfaces below are for advanced integrations and remain experimental unless stated otherwise.
+
+## Architecture scope
+
+Nexus Core owns two truth authorities:
+
+- **Evidence Trust Core** — ingestion, normalization, verification, freshness, and tamper detection of execution evidence.
+- **Completion Core** — ChangeSet certification, deterministic verification reduction, evidence applicability, and disposition enforcement.
+
+Carrying layers such as acquisition, runtime, clients, ledger, adapters, and benchmark instrumentation do not become additional truth authorities.
+
+Nexus Core does not own agent execution, model routing, Workforce admission, merge approval, release approval, deployment, or production authority.
 
 ## Generic ChangeSet Verification (experimental)
 
-The loopback HTTP runtime also exposes a transport-neutral, non-GitHub verification seam for bounded consumers such as DevSpace or Open SWE:
+The loopback HTTP runtime exposes a transport-neutral, non-GitHub verification seam for bounded consumers such as DevSpace or Open SWE:
 
 - `GET /v1/protocol/generic-verification` — authenticated protocol descriptor, JSON schemas, canonicalization rules, schema-bundle hash, and cross-language conformance vectors.
 - `POST /v1/changesets/verify` — deterministic `AcceptanceContract + ChangeSet + VerificationPlan + EvidenceBundle` verification. Certification is optional and occurs only when the caller supplies explicit policy facts.
@@ -55,45 +167,31 @@ Generic revision identities are typed as `git-commit:<40-lowercase-hex>` or `git
 
 ## Completion Evidence Applicability and Freshness Contract
 
-`product.completion` is an additive Completion Core capability that binds a
-completion claim to the exact source/artifact state it claims, then decides
-whether verification evidence actually applies to that final state. It is
-deterministic, model-independent, and advisory: the completion claim's
-`asserted_by` identity never confers authority, and certification remains with
-`product.kernel.certify`.
+`product.completion` binds a completion claim to the exact source/artifact state it claims, then decides whether verification evidence actually applies to that final state. It is deterministic, model-independent, and advisory: the completion claim's `asserted_by` identity never confers authority, and certification remains with `product.kernel.certify`.
 
 It derives three explicit semantic states:
 
-- `CLAIMS_COMPLETE` — a completion claim is present, revision-bound to the
-  change set's `target_revision`, and covers every changed non-deleted path
-  with a claimed final content hash.
-- `VERIFICATION_APPLIES` — every required verifier has an evidence observation
-  that is bound to a changed path, observes the claimed final content hash
-  (freshness by content-hash comparison), and reports `PASS`.
-- `CLAIMS_VERIFIED` — the conjunction of the two states above with the existing
-  deterministic `verify()` reduction. A claim assertion can never substitute
-  for a physical observation.
+- `CLAIMS_COMPLETE` — a completion claim is revision-bound to the change set's `target_revision` and covers every changed non-deleted path with a claimed final content hash.
+- `VERIFICATION_APPLIES` — every required verifier has an evidence observation bound to a changed path, observes the claimed final content hash, and reports `PASS`.
+- `CLAIMS_VERIFIED` — the conjunction of the two states above with the existing deterministic `verify()` reduction.
 
-Per-verifier `EvidenceDisposition` values (`ACCEPTED`, `REJECTED_STALE`,
-`REJECTED_IRRELEVANT`, `REJECTED_MISSING`, `REJECTED_CONTRADICTORY`,
-`REJECTED_FAILED`) let Completion Core explain exactly which evidence was
-accepted, rejected, stale, missing, or contradictory. Original API:
+Per-verifier `EvidenceDisposition` values (`ACCEPTED`, `REJECTED_STALE`, `REJECTED_IRRELEVANT`, `REJECTED_MISSING`, `REJECTED_CONTRADICTORY`, `REJECTED_FAILED`) explain which evidence was accepted or rejected.
 
 ```python
 from product.completion import analyze_completion_evidence, validate_completion_evidence_analysis
 
 analysis = analyze_completion_evidence(claim, contract, change_set, plan, evidence)
-assert analysis.claims_verified         # all three states
+assert analysis.claims_verified
 assert validate_completion_evidence_analysis(analysis, claim, contract, change_set, plan, evidence)
 ```
 
-Freshness and execution ordering are derived from content hash comparison
-rather than wall-clock timestamps: an observation whose artifact content hash
-differs from the claimed final content hash predates a later mutation and is
-stale unless the hashes are equal (equivalence proven by the trusted hash
-machinery). See `tests/product/test_completion_evidence_applicability.py` for
-the `modify -> test PASS -> modify again` and irrelevant-verification
-regressions.
+Freshness is derived from content-hash comparison rather than wall-clock timestamps. See `tests/product/test_completion_evidence_applicability.py` for the `modify -> test PASS -> modify again` and irrelevant-verification regressions.
+
+## GitHub repository integration
+
+For trusted same-repository GitHub `push` and `pull_request` events on self-hosted runners, see the [GitHub Repository Golden Path](docs/GITHUB_REPOSITORY_CHECK.md).
+
+Fork PRs and GitHub-hosted runners are explicitly unsupported by that path.
 
 ## Development
 
@@ -102,22 +200,21 @@ uv sync
 uv run pytest -q tests/product
 uv run pytest -q tests/benchmark
 uv run ruff check product tests
+uv run pyright product
 uv run nexus-certify --help
 ```
 
-## Compatibility and Coexistence Boundary
+## Compatibility and coexistence
 
 `nexus-core` and the current `nexus-legacy` package in `Nexus-new` have distinct package and console-script ownership:
 
-- Nexus Core is distributed as `nexus-certify` while continuing to own the
-  internal `product` Python package and `nexus-certify` console script.
+- Nexus Core is distributed as `nexus-certify` while continuing to own the internal `product` Python package and `nexus-certify` console script.
 - `nexus-legacy` owns the `nexus` and `scripts` packages and the `nexus` console script.
 
-The current package definitions therefore no longer have the historical `product` namespace / `nexus-certify` console-script collision described by the previous README.
-
-Use separate virtual environments for normal development and testing because the repositories have different dependency sets and operational roles. That isolation is development hygiene, not a requirement caused by the retired namespace/script collision.
-
+Use separate virtual environments for normal development and testing because the repositories have different dependency sets and operational roles.
 
 ## License
 
 Nexus Core, including the `nexus-certify` distribution, is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+The published `0.1.0` package metadata declares Apache-2.0. Starting with the next release after `0.1.0`, CI also requires the full `LICENSE` file to be physically present in both wheel and source-distribution artifacts.
