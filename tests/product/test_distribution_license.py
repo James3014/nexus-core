@@ -22,6 +22,6 @@ def test_direct_dependency_notices_are_present() -> None:
     third_party_text = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
 
     assert "aiohttp" in third_party_text
-    assert "Apache-2.0" in third_party_text
+    assert "Apache-2.0 AND MIT" in third_party_text
     assert "PyGithub" in third_party_text
-    assert "LGPL-3.0-or-later" in third_party_text
+    assert "LGPL v3" in third_party_text
