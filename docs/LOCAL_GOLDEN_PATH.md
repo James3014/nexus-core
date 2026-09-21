@@ -1,5 +1,7 @@
 # Local Golden Path Contract (G0/G1)
 
+**Language:** [English](https://github.com/James3014/nexus-core/blob/main/docs/LOCAL_GOLDEN_PATH.md) | [繁體中文](https://github.com/James3014/nexus-core/blob/main/docs/LOCAL_GOLDEN_PATH.zh-TW.md)
+
 This is the frozen external-user contract for an ordinary Python Git repository.
 The user installs only the Nexus Core distribution, `nexus-certify`. Nexus-new, DevSpace, nexus-runtime,
 nexus-learning, nexus-open-swe-runtime, model routing, and any particular human or
@@ -136,6 +138,8 @@ service state:
    acquisition and receipt validation.
 
 This contract was executed successfully against the public `nexus-certify==0.1.0`
-artifact during Issue #36 closure. Keep the same checks as the regression contract
-for future published releases; a later release does not inherit the prior canary
-without fresh evidence.
+artifact during Issue #36 closure. The public `nexus-certify==0.1.1` artifact was
+also installed from PyPI and exercised during its release acceptance, including a
+positive `VERIFIED (not CERTIFIED)` path and a fail-closed forbidden-path negative.
+Keep the same checks as the regression contract for future published releases; a
+later release does not inherit the prior canary without fresh evidence.
