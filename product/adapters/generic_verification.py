@@ -12,16 +12,18 @@ from typing import Any, Mapping
 
 from product.evidence import (
     AcceptanceContract,
+    Applicability,
     ChangeSet,
     EvidenceBundle,
+    ExpectedEvidenceSubject,
     Observation,
     ObservationStatus,
+    RequirementMode,
     VerificationPlan,
 )
 from product.kernel import CertificationInput, certify
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
-    ACCEPTANCE_CONTRACT_SCHEMA,
     GENERIC_VERIFICATION_ERROR_SCHEMA_ID,
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
     GENERIC_VERIFICATION_RESPONSE_SCHEMA_ID,
@@ -79,6 +81,12 @@ def _exact(value: Any, keys: set[str]) -> bool:
     return type(value) is dict and set(value) == keys
 
 
+def _subset_exact(value: Any, required: set[str], optional: set[str]) -> bool:
+    return type(value) is dict and required.issubset(value) and set(value).issubset(
+        required | optional
+    )
+
+
 def _git_oid_or_none(value: Any) -> bool:
     return value is None or (
         type(value) is str
@@ -93,9 +101,32 @@ def _git_mode_or_none(value: Any) -> bool:
     )
 
 
+def _validate_subject(value: Any) -> str | None:
+    if not _exact(
+        value,
+        {"logical_subject_id", "evidence_kind", "requirement_mode", "applicability"},
+    ):
+        return None
+    if not _text(value["logical_subject_id"]):
+        return None
+    if not _text(value["evidence_kind"]):
+        return None
+    if value["requirement_mode"] not in {"REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"}:
+        return None
+    if value["applicability"] not in {"APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"}:
+        return None
+    return value
+
+
 def _validate_contract(value: Any) -> str | None:
-    keys = set(ACCEPTANCE_CONTRACT_SCHEMA["required"])
-    if not _exact(value, keys):
+    required = {
+        "contract_id",
+        "requirements_hash",
+        "required_verifier_ids",
+        "allowed_paths",
+        "deletion_policy",
+    }
+    if not _subset_exact(value, required, {"expected_subjects", "universe_generation"}):
         return "acceptance_contract"
     if not _text(value["contract_id"]):
         return "acceptance_contract.contract_id"
@@ -107,6 +138,31 @@ def _validate_contract(value: Any) -> str | None:
         return "acceptance_contract.allowed_paths"
     if value["deletion_policy"] not in {"FORBID", "ALLOW"}:
         return "acceptance_contract.deletion_policy"
+    expected = value.get("expected_subjects")
+    generation = value.get("universe_generation")
+    if expected is None and generation is None:
+        return None
+    if expected is None or generation is None:
+        return "acceptance_contract.expected_subjects"
+    if type(expected) is not list or not expected:
+        return "acceptance_contract.expected_subjects"
+    if type(generation) is not int or isinstance(generation, bool) or generation < 0:
+        return "acceptance_contract.universe_generation"
+    logical_ids: list[str] = []
+    for index, subject in enumerate(expected):
+        prefix = f"acceptance_contract.expected_subjects[{index}]"
+        if _validate_subject(subject) is None:
+            return prefix
+        if subject["requirement_mode"] == "REQUIRED" and subject["applicability"] != "APPLICABLE":
+            return prefix + ".applicability"
+        if (
+            subject["requirement_mode"] == "NOT_APPLICABLE"
+            and subject["applicability"] != "NOT_APPLICABLE"
+        ):
+            return prefix + ".applicability"
+        logical_ids.append(subject["logical_subject_id"])
+    if len(logical_ids) != len(set(logical_ids)):
+        return "acceptance_contract.expected_subjects"
     return None
 
 
@@ -233,16 +289,30 @@ def _validate_evidence(value: Any) -> str | None:
         return "evidence_bundle.observations"
     verifier_ids: set[str] = set()
     artifact_ids: set[str] = set()
+    logical_ids: set[str] = set()
     for index, row in enumerate(observations):
         prefix = f"evidence_bundle.observations[{index}]"
-        if not _exact(row, {"verifier_id", "artifact_id", "artifact_hash", "status"}):
+        if not _subset_exact(
+            row,
+            {"verifier_id", "artifact_id", "artifact_hash", "status"},
+            {"logical_subject_id", "evidence_kind"},
+        ):
             return prefix
+        if (row.get("logical_subject_id") is None) != (row.get("evidence_kind") is None):
+            return prefix + ".logical_subject_id"
         if not _text(row["verifier_id"]) or row["verifier_id"] in verifier_ids:
             return prefix + ".verifier_id"
         if not _text(row["artifact_id"]) or row["artifact_id"] in artifact_ids:
             return prefix + ".artifact_id"
         verifier_ids.add(row["verifier_id"])
         artifact_ids.add(row["artifact_id"])
+        logical_subject_id = row.get("logical_subject_id")
+        if logical_subject_id is not None:
+            if not _text(logical_subject_id) or logical_subject_id in logical_ids:
+                return prefix + ".logical_subject_id"
+            if not _text(row["evidence_kind"]):
+                return prefix + ".evidence_kind"
+            logical_ids.add(logical_subject_id)
         if not is_hash(row["artifact_hash"]):
             return prefix + ".artifact_hash"
         if row["status"] not in {"PASS", "FAIL"}:
@@ -334,12 +404,25 @@ def _domain_objects(payload: Mapping[str, Any]) -> tuple[AcceptanceContract, Cha
     plan_value = payload["verification_plan"]
     evidence_value = payload["evidence_bundle"]
 
+    expected = contract_value.get("expected_subjects")
     contract = AcceptanceContract(
         contract_value["contract_id"],
         contract_value["requirements_hash"],
         tuple(contract_value["required_verifier_ids"]),
         tuple(contract_value["allowed_paths"]),
         contract_value["deletion_policy"],
+        tuple(
+            ExpectedEvidenceSubject(
+                subject["logical_subject_id"],
+                subject["evidence_kind"],
+                RequirementMode(subject["requirement_mode"]),
+                Applicability(subject["applicability"]),
+            )
+            for subject in expected
+        )
+        if expected
+        else (),
+        contract_value.get("universe_generation", 0),
     )
     change_set = ChangeSet(
         change_value["change_set_id"],
@@ -366,6 +449,8 @@ def _domain_objects(payload: Mapping[str, Any]) -> tuple[AcceptanceContract, Cha
                 row["artifact_id"],
                 row["artifact_hash"],
                 ObservationStatus(row["status"]),
+                row.get("logical_subject_id"),
+                row.get("evidence_kind"),
             )
             for row in evidence_value["observations"]
         ),
@@ -382,14 +467,17 @@ def verify_generic_changeset(payload: Any) -> tuple[int, dict[str, Any]]:
 
     contract, change_set, plan, evidence = _domain_objects(payload)
     result = verify(contract, change_set, plan, evidence)
+    verification_value: dict[str, Any] = {
+        "status": result.status.value,
+        "reason_codes": list(result.reason_codes),
+        "integrity": result.integrity.value,
+    }
+    if result.coverage is not None:
+        verification_value["coverage"] = result.coverage.to_dict()
     response: dict[str, Any] = {
         "protocol_version": PUBLIC_PROTOCOL_VERSION,
         "schema": GENERIC_VERIFICATION_RESPONSE_SCHEMA_ID,
-        "verification": {
-            "status": result.status.value,
-            "reason_codes": list(result.reason_codes),
-            "integrity": result.integrity.value,
-        },
+        "verification": verification_value,
         "hashes": {
             "acceptance_contract_hash": contract.hash,
             "change_set_hash": change_set.hash,

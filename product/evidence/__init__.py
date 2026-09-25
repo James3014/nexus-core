@@ -81,6 +81,60 @@ class ObservationStatus(str, Enum):
     FAIL = "FAIL"
 
 
+class RequirementMode(str, Enum):
+    REQUIRED = "REQUIRED"
+    CONDITIONALLY_REQUIRED = "CONDITIONALLY_REQUIRED"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class Applicability(str, Enum):
+    APPLICABLE = "APPLICABLE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    UNRESOLVED = "UNRESOLVED"
+
+
+@dataclass(frozen=True)
+class ExpectedEvidenceSubject:
+    """A prospectively declared logical evidence subject in the expected universe.
+
+    The universe is authored upstream (never by the verifier). ``requirement_mode``
+    and ``applicability`` are typed, frozen contract data; applicability is resolved
+    by the writer and consumed deterministically by the verifier.
+    """
+
+    logical_subject_id: str
+    evidence_kind: str
+    requirement_mode: RequirementMode
+    applicability: Applicability = Applicability.APPLICABLE
+
+    def __post_init__(self):
+        _require_text(self.logical_subject_id, "logical_subject_id")
+        _require_text(self.evidence_kind, "evidence_kind")
+        if type(self.requirement_mode) is not RequirementMode:
+            raise TypeError("requirement_mode must be RequirementMode")
+        if type(self.applicability) is not Applicability:
+            raise TypeError("applicability must be Applicability")
+        if (
+            self.requirement_mode is RequirementMode.REQUIRED
+            and self.applicability is not Applicability.APPLICABLE
+        ):
+            raise ValueError("REQUIRED subjects require APPLICABLE applicability")
+        if (
+            self.requirement_mode is RequirementMode.NOT_APPLICABLE
+            and self.applicability is not Applicability.NOT_APPLICABLE
+        ):
+            raise ValueError("NOT_APPLICABLE subjects require NOT_APPLICABLE applicability")
+
+    @property
+    def canonical_value(self):
+        return (
+            self.logical_subject_id,
+            self.evidence_kind,
+            self.requirement_mode.value,
+            self.applicability.value,
+        )
+
+
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SEALED_HASH_RE_FULLMATCH = _HASH_RE.fullmatch
 
@@ -186,6 +240,8 @@ class AcceptanceContract:
     required_verifier_ids: tuple[str, ...]
     allowed_paths: tuple[str, ...]
     deletion_policy: str
+    expected_subjects: tuple[ExpectedEvidenceSubject, ...] = ()
+    universe_generation: int = 0
 
     def __post_init__(self):
         _require_text(self.contract_id, "contract_id")
@@ -194,18 +250,49 @@ class AcceptanceContract:
         _require_paths(self.allowed_paths, "allowed_paths")
         if type(self.deletion_policy) is not str or self.deletion_policy not in {"FORBID", "ALLOW"}:
             raise ValueError("deletion_policy must be FORBID or ALLOW")
+        if type(self.expected_subjects) is not tuple:
+            raise TypeError("expected_subjects must be a tuple")
+        if any(type(subject) is not ExpectedEvidenceSubject for subject in self.expected_subjects):
+            raise TypeError("expected_subjects must contain ExpectedEvidenceSubject values")
+        if len({subject.logical_subject_id for subject in self.expected_subjects}) != len(
+            self.expected_subjects
+        ):
+            raise ValueError("expected_subjects must not contain duplicate logical_subject_id")
+        if (
+            type(self.universe_generation) is not int
+            or isinstance(self.universe_generation, bool)
+            or self.universe_generation < 0
+        ):
+            raise ValueError("universe_generation must be a non-negative int")
+        if not self.expected_subjects and self.universe_generation:
+            raise ValueError("universe_generation requires a declared expected_subjects universe")
+
+    @property
+    def universe_identity(self) -> str | None:
+        if not self.expected_subjects:
+            return None
+        return _hash(
+            (
+                self.universe_generation,
+                tuple(sorted(subject.canonical_value for subject in self.expected_subjects)),
+            )
+        )
 
     @property
     def hash(self):
-        return _AC_HASH(
-            (
-                self.contract_id,
-                self.requirements_hash,
-                tuple(sorted(self.required_verifier_ids)),
-                tuple(sorted(self.allowed_paths)),
-                self.deletion_policy,
-            )
+        value = (
+            self.contract_id,
+            self.requirements_hash,
+            tuple(sorted(self.required_verifier_ids)),
+            tuple(sorted(self.allowed_paths)),
+            self.deletion_policy,
         )
+        if self.expected_subjects:
+            value += (
+                self.universe_generation,
+                tuple(sorted(subject.canonical_value for subject in self.expected_subjects)),
+            )
+        return _AC_HASH(value)
 
 
 @dataclass(frozen=True)
@@ -283,6 +370,8 @@ class Observation:
     artifact_id: str
     artifact_hash: str
     status: ObservationStatus
+    logical_subject_id: str | None = None
+    evidence_kind: str | None = None
 
     def __post_init__(self):
         _require_text(self.verifier_id, "verifier_id")
@@ -290,6 +379,35 @@ class Observation:
         _require_hash(self.artifact_hash, "artifact_hash")
         if type(self.status) is not ObservationStatus:
             raise TypeError("status must be ObservationStatus")
+        if (self.logical_subject_id is None) != (self.evidence_kind is None):
+            raise ValueError("logical_subject_id and evidence_kind must be provided together")
+        if self.logical_subject_id is not None:
+            _require_text(self.logical_subject_id, "logical_subject_id")
+            _require_text(self.evidence_kind, "evidence_kind")
+
+    @property
+    def observed_subject(self) -> None | tuple[str, str]:
+        if self.logical_subject_id is None:
+            return None
+        return (self.logical_subject_id, self.evidence_kind)
+
+
+def _observation_row(observation):
+    """Canonical row for an observation.
+
+    Logical identity participates only when present, so legacy observation rows
+    (and their bundle hashes) are byte-identical to the pre-coverage protocol.
+    """
+    row = [
+        observation.verifier_id,
+        observation.artifact_id,
+        observation.artifact_hash,
+        observation.status.value,
+    ]
+    if observation.logical_subject_id is not None:
+        row.append(observation.logical_subject_id)
+        row.append(observation.evidence_kind)
+    return row
 
 
 @dataclass(frozen=True)
@@ -321,8 +439,10 @@ class EvidenceBundle:
             self.change_set_hash,
             self.verification_plan_hash,
             tuple(
-                (o.verifier_id, o.artifact_id, o.artifact_hash, o.status.value)
-                for o in sorted(self.observations, key=lambda x: (x.verifier_id, x.artifact_id))
+                tuple(_observation_row(observation))
+                for observation in sorted(
+                    self.observations, key=lambda x: (x.verifier_id, x.artifact_id)
+                )
             ),
         )
 
@@ -350,8 +470,13 @@ class EvidenceBundle:
             return IntegrityStatus.CROSS_BINDING_INVALID
         verifier_ids = [o.verifier_id for o in self.observations]
         artifact_ids = [o.artifact_id for o in self.observations]
-        if len(verifier_ids) != len(set(verifier_ids)) or len(artifact_ids) != len(
-            set(artifact_ids)
+        logical_ids = [
+            o.logical_subject_id for o in self.observations if o.logical_subject_id is not None
+        ]
+        if (
+            len(verifier_ids) != len(set(verifier_ids))
+            or len(artifact_ids) != len(set(artifact_ids))
+            or len(logical_ids) != len(set(logical_ids))
         ):
             return IntegrityStatus.DUPLICATE
         return IntegrityStatus.VALID
@@ -359,21 +484,27 @@ class EvidenceBundle:
     def to_dict(self):
         if self.claimed_bundle_hash is not None and self.claimed_bundle_hash != self.hash:
             raise ValueError("claimed_bundle_hash does not match computed hash")
+        observations = []
+        for observation in sorted(
+            self.observations, key=lambda x: (x.verifier_id, x.artifact_id)
+        ):
+            row = {
+                "verifier_id": observation.verifier_id,
+                "artifact_id": observation.artifact_id,
+                "artifact_hash": observation.artifact_hash,
+                "status": observation.status.value,
+            }
+            if observation.logical_subject_id is not None:
+                row["logical_subject_id"] = observation.logical_subject_id
+                row["evidence_kind"] = observation.evidence_kind
+            observations.append(row)
         body = {
             "evidence_bundle_schema": EVIDENCE_BUNDLE_SCHEMA,
             "bundle_id": self.bundle_id,
             "acceptance_contract_hash": self.acceptance_contract_hash,
             "change_set_hash": self.change_set_hash,
             "verification_plan_hash": self.verification_plan_hash,
-            "observations": [
-                {
-                    "verifier_id": o.verifier_id,
-                    "artifact_id": o.artifact_id,
-                    "artifact_hash": o.artifact_hash,
-                    "status": o.status.value,
-                }
-                for o in sorted(self.observations, key=lambda x: (x.verifier_id, x.artifact_id))
-            ],
+            "observations": observations,
         }
         body["bundle_hash"] = _EB_ENVELOPE_HASH(body)
         return body
@@ -391,12 +522,7 @@ _VALIDATOR_EB_ENVELOPE_HASH = _SEALED_EB_ENVELOPE_HASH
 def _make_bundle_core_serializer():
     def serialize(bundle):
         observations = tuple(
-            (
-                vars(o)["verifier_id"],
-                vars(o)["artifact_id"],
-                vars(o)["artifact_hash"],
-                vars(o)["status"].value,
-            )
+            tuple(_observation_row(o))
             for o in sorted(
                 vars(bundle)["observations"],
                 key=lambda x: (vars(x)["verifier_id"], vars(x)["artifact_id"]),
@@ -442,6 +568,14 @@ def _make_bundle_serializer(envelope_hash, schema, core_hash):
                     "artifact_id": o.artifact_id,
                     "artifact_hash": o.artifact_hash,
                     "status": o.status.value,
+                    **(
+                        {
+                            "logical_subject_id": o.logical_subject_id,
+                            "evidence_kind": o.evidence_kind,
+                        }
+                        if o.logical_subject_id is not None
+                        else {}
+                    ),
                 }
                 for o in sorted(self.observations, key=lambda x: (x.verifier_id, x.artifact_id))
             ],
@@ -477,6 +611,14 @@ AcceptanceContract.hash = _make_identity_property(  # pyright: ignore[reportAttr
         tuple(sorted(value.required_verifier_ids)),
         tuple(sorted(value.allowed_paths)),
         value.deletion_policy,
+    )
+    + (
+        (
+            value.universe_generation,
+            tuple(sorted(subject.canonical_value for subject in value.expected_subjects)),
+        )
+        if value.expected_subjects
+        else ()
     ),
 )
 ChangeSet.hash = _make_identity_property(  # pyright: ignore[reportAttributeAccessIssue]
@@ -659,15 +801,24 @@ def _make_integrity_deriver(
         if subject_validator(contract, change_set, plan, evidence):
             return status_type.MALFORMED
         c, cs, p, e = (vars(contract), vars(change_set), vars(plan), vars(evidence))
-        contract_hash = hash_contract(
-            (
-                c["contract_id"],
-                c["requirements_hash"],
-                tuple(sorted(c["required_verifier_ids"])),
-                tuple(sorted(c["allowed_paths"])),
-                c["deletion_policy"],
-            )
+        contract_value = (
+            c["contract_id"],
+            c["requirements_hash"],
+            tuple(sorted(c["required_verifier_ids"])),
+            tuple(sorted(c["allowed_paths"])),
+            c["deletion_policy"],
         )
+        if c["expected_subjects"]:
+            contract_value += (
+                c["universe_generation"],
+                tuple(
+                    sorted(
+                        subject.canonical_value
+                        for subject in c["expected_subjects"]
+                    )
+                ),
+            )
+        contract_hash = hash_contract(contract_value)
         change_canonical = (
             cs["change_set_id"],
             cs["source_revision"],
@@ -693,13 +844,8 @@ def _make_integrity_deriver(
             e["change_set_hash"],
             e["verification_plan_hash"],
             tuple(
-                (
-                    vars(o)["verifier_id"],
-                    vars(o)["artifact_id"],
-                    vars(o)["artifact_hash"],
-                    vars(o)["status"].value,
-                )
-                for o in sorted(
+                tuple(_observation_row(observation))
+                for observation in sorted(
                     observations, key=lambda x: (vars(x)["verifier_id"], vars(x)["artifact_id"])
                 )
             ),
@@ -719,8 +865,13 @@ def _make_integrity_deriver(
             return status_type.CROSS_BINDING_INVALID
         verifier_ids = [vars(o)["verifier_id"] for o in observations]
         artifact_ids = [vars(o)["artifact_id"] for o in observations]
-        if len(verifier_ids) != len(set(verifier_ids)) or len(artifact_ids) != len(
-            set(artifact_ids)
+        logical_ids = [
+            vars(o)["logical_subject_id"] for o in observations if vars(o)["logical_subject_id"]
+        ]
+        if (
+            len(verifier_ids) != len(set(verifier_ids))
+            or len(artifact_ids) != len(set(artifact_ids))
+            or len(logical_ids) != len(set(logical_ids))
         ):
             return status_type.DUPLICATE
         return status_type.VALID
@@ -805,12 +956,13 @@ def validate_evidence_bundle_envelope(
         rows = []
         if type(observations) is list:
             for i, row in enumerate(observations):
-                if type(row) is not dict or set(row) != {
-                    "verifier_id",
-                    "artifact_id",
-                    "artifact_hash",
-                    "status",
-                }:
+                base_keys = {"verifier_id", "artifact_id", "artifact_hash", "status"}
+                if type(row) is not dict or not base_keys.issubset(row) or not set(row).issubset(
+                    base_keys | {"logical_subject_id", "evidence_kind"}
+                ):
+                    errors.append(f"MALFORMED:observations[{i}]")
+                    continue
+                if (row.get("logical_subject_id") is None) != (row.get("evidence_kind") is None):
                     errors.append(f"MALFORMED:observations[{i}]")
                     continue
                 if not all(
@@ -825,12 +977,26 @@ def validate_evidence_bundle_envelope(
                     _require_text(row["verifier_id"], "verifier_id")
                     _require_text(row["artifact_id"], "artifact_id")
                     _VALIDATOR_REQUIRE_HASH(row["artifact_hash"], "artifact_hash")
+                    if row.get("logical_subject_id") is not None:
+                        _require_text(row["logical_subject_id"], "logical_subject_id")
+                        _require_text(row["evidence_kind"], "evidence_kind")
                 except (TypeError, ValueError):
                     errors.append(f"MALFORMED:observations[{i}]")
                 rows.append(
-                    (row["verifier_id"], row["artifact_id"], row["artifact_hash"], row["status"])
+                    (
+                        row["verifier_id"],
+                        row["artifact_id"],
+                        row["artifact_hash"],
+                        row["status"],
+                        row.get("logical_subject_id"),
+                        row.get("evidence_kind"),
+                    )
                 )
-        if len({r[0] for r in rows}) != len(rows) or len({r[1] for r in rows}) != len(rows):
+        if (
+            len({r[0] for r in rows}) != len(rows)
+            or len({r[1] for r in rows}) != len(rows)
+            or len({r[4] for r in rows if r[4]}) != len([r for r in rows if r[4]])
+        ):
             errors.append("DUPLICATE:observations")
         if rows != sorted(rows, key=lambda r: (r[0], r[1])):
             errors.append("MALFORMED:observation_order")
@@ -882,6 +1048,8 @@ def load_evidence_bundle_envelope(
                 r["artifact_id"],
                 r["artifact_hash"],
                 ObservationStatus(r["status"]),
+                r.get("logical_subject_id"),
+                r.get("evidence_kind"),
             )
             for r in payload["observations"]
         ),

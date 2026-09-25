@@ -24,6 +24,8 @@ OBSERVATION_SCHEMA_ID = "nexus.core.observation.v1-experimental"
 EVIDENCE_BUNDLE_INPUT_SCHEMA_ID = "nexus.core.evidence-bundle-input.v1-experimental"
 CHANGE_MANIFEST_SCHEMA_ID = "nexus.core.git-change-manifest.v1-experimental"
 GENERIC_PROTOCOL_DESCRIPTOR_SCHEMA_ID = "nexus.core.generic-verification-protocol.v1-experimental"
+EXPECTED_EVIDENCE_SUBJECT_SCHEMA_ID = "nexus.core.expected-evidence-subject.v1-experimental"
+COVERAGE_PROJECTION_SCHEMA_ID = "nexus.core.coverage-projection.v1-experimental"
 
 _HASH_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _GIT_REVISION_PATTERN = r"^git-(?:commit|tree):[0-9a-f]{40}$"
@@ -68,13 +70,34 @@ def canonical_hash(value: Any) -> str:
 
 
 def acceptance_contract_canonical_value(value: Mapping[str, Any]) -> list[Any]:
-    return [
+    result: list[Any] = [
         value["contract_id"],
         value["requirements_hash"],
         sorted(value["required_verifier_ids"]),
         sorted(value["allowed_paths"]),
         value["deletion_policy"],
     ]
+    # Compatibility rule: legacy contracts without a declared universe retain the
+    # pre-coverage hash. A declared expected-subjects universe binds the
+    # generation and the canonical subject rows as two additional items, matching
+    # the domain AcceptanceContract.hash value shape exactly (flat generation +
+    # sorted subject rows); any other nesting would break wire->domain binding.
+    if value.get("expected_subjects"):
+        result.append(value.get("universe_generation", 0))
+        result.append(
+            [
+                [
+                    subject["logical_subject_id"],
+                    subject["evidence_kind"],
+                    subject["requirement_mode"],
+                    subject["applicability"],
+                ]
+                for subject in sorted(
+                    value["expected_subjects"], key=lambda s: s["logical_subject_id"]
+                )
+            ]
+        )
+    return result
 
 
 def acceptance_contract_hash(value: Mapping[str, Any]) -> str:
@@ -117,15 +140,27 @@ def evidence_bundle_canonical_value(value: Mapping[str, Any]) -> list[Any]:
     observations = sorted(
         value["observations"], key=lambda row: (row["verifier_id"], row["artifact_id"])
     )
+
+    def observation_row(row: Mapping[str, Any]) -> list[Any]:
+        result: list[Any] = [
+            row["verifier_id"],
+            row["artifact_id"],
+            row["artifact_hash"],
+            row["status"],
+        ]
+        # Compatibility rule: legacy rows without logical identity retain the
+        # pre-coverage hash. Logical identity participates only when present.
+        logical_subject_id = row.get("logical_subject_id")
+        if logical_subject_id is not None:
+            result.extend([logical_subject_id, row["evidence_kind"]])
+        return result
+
     return [
         value["bundle_id"],
         value["acceptance_contract_hash"],
         value["change_set_hash"],
         value["verification_plan_hash"],
-        [
-            [row["verifier_id"], row["artifact_id"], row["artifact_hash"], row["status"]]
-            for row in observations
-        ],
+        [observation_row(row) for row in observations],
     ]
 
 
@@ -186,6 +221,93 @@ _TREE_SCHEMA: dict[str, Any] = {"type": "string", "pattern": _GIT_TREE_PATTERN}
 _OBJECT_SCHEMA: dict[str, Any] = {"type": ["string", "null"], "pattern": _GIT_OBJECT_PATTERN}
 _MODE_SCHEMA: dict[str, Any] = {"type": ["string", "null"], "pattern": r"^[0-7]{6}$"}
 
+EXPECTED_EVIDENCE_SUBJECT_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": EXPECTED_EVIDENCE_SUBJECT_SCHEMA_ID,
+    "type": "object",
+    "required": [
+        "logical_subject_id",
+        "evidence_kind",
+        "requirement_mode",
+        "applicability",
+    ],
+    "properties": {
+        "logical_subject_id": _NORMALIZED_TEXT_SCHEMA,
+        "evidence_kind": _NORMALIZED_TEXT_SCHEMA,
+        "requirement_mode": {
+            "type": "string",
+            "enum": ["REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"],
+        },
+        "applicability": {"type": "string", "enum": ["APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"]},
+    },
+    "additionalProperties": False,
+}
+
+COVERAGE_PROJECTION_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": COVERAGE_PROJECTION_SCHEMA_ID,
+    "type": "object",
+    "required": ["universe_generation", "universe_identity", "entries", "unexpected_subjects"],
+    "properties": {
+        "universe_generation": {"type": "integer", "minimum": 0},
+        "universe_identity": _HASH_SCHEMA,
+        "entries": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": [
+                    "logical_subject_id",
+                    "evidence_kind",
+                    "requirement_mode",
+                    "applicability",
+                    "category",
+                ],
+                "properties": {
+                    "logical_subject_id": _NORMALIZED_TEXT_SCHEMA,
+                    "evidence_kind": _NORMALIZED_TEXT_SCHEMA,
+                    "requirement_mode": {
+                        "type": "string",
+                        "enum": ["REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"],
+                    },
+                    "applicability": {
+                        "type": "string",
+                        "enum": ["APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"],
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "COVERED",
+                            "NOT_COVERED",
+                            "CONDITIONALLY_NOT_APPLICABLE",
+                            "UNRESOLVED",
+                        ],
+                    },
+                    "observed_status": {
+                        "type": ["string", "null"],
+                        "enum": ["PASS", "FAIL", None],
+                    },
+                    "anomaly": {"type": ["string", "null"], "minLength": 1},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "unexpected_subjects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["logical_subject_id", "evidence_kind"],
+                "properties": {
+                    "logical_subject_id": _NORMALIZED_TEXT_SCHEMA,
+                    "evidence_kind": _NORMALIZED_TEXT_SCHEMA,
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    "additionalProperties": False,
+}
+
 ACCEPTANCE_CONTRACT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": ACCEPTANCE_CONTRACT_SCHEMA_ID,
@@ -213,6 +335,13 @@ ACCEPTANCE_CONTRACT_SCHEMA: dict[str, Any] = {
             "items": _PATH_SCHEMA,
         },
         "deletion_policy": {"type": "string", "enum": ["FORBID", "ALLOW"]},
+        "expected_subjects": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "items": EXPECTED_EVIDENCE_SUBJECT_SCHEMA,
+        },
+        "universe_generation": {"type": "integer", "minimum": 0},
     },
     "additionalProperties": False,
 }
@@ -283,6 +412,8 @@ OBSERVATION_SCHEMA: dict[str, Any] = {
         "artifact_id": _NORMALIZED_TEXT_SCHEMA,
         "artifact_hash": _HASH_SCHEMA,
         "status": {"type": "string", "enum": ["PASS", "FAIL"]},
+        "logical_subject_id": _NORMALIZED_TEXT_SCHEMA,
+        "evidence_kind": _NORMALIZED_TEXT_SCHEMA,
     },
     "additionalProperties": False,
 }
@@ -441,6 +572,7 @@ GENERIC_VERIFICATION_RESPONSE_SCHEMA: dict[str, Any] = {
                 },
                 "reason_codes": {"type": "array", "items": {"type": "string"}},
                 "integrity": {"type": "string"},
+                "coverage": COVERAGE_PROJECTION_SCHEMA,
             },
             "additionalProperties": False,
         },
@@ -490,6 +622,8 @@ GENERIC_PROTOCOL_SCHEMA_BUNDLE: dict[str, dict[str, Any]] = {
     "verification_plan": VERIFICATION_PLAN_SCHEMA,
     "observation": OBSERVATION_SCHEMA,
     "evidence_bundle_input": EVIDENCE_BUNDLE_INPUT_SCHEMA,
+    "expected_evidence_subject": EXPECTED_EVIDENCE_SUBJECT_SCHEMA,
+    "coverage_projection": COVERAGE_PROJECTION_SCHEMA,
     "request": GENERIC_VERIFICATION_REQUEST_SCHEMA,
     "response": GENERIC_VERIFICATION_RESPONSE_SCHEMA,
     "error": GENERIC_VERIFICATION_ERROR_SCHEMA,
@@ -575,6 +709,57 @@ GENERIC_PROTOCOL_CONFORMANCE_VECTORS: dict[str, Any] = {
             "claimed_bundle_hash": None,
         },
         "expected_hash": "sha256:f245f85800e26e13af723108c56c1eeb0d4b6e801e1cef5b1c35d694a1e93113",
+    },
+    "acceptance_contract_universe": {
+        "value": {
+            "contract_id": "ac-coverage-1",
+            "requirements_hash": "sha256:" + "f" * 64,
+            "required_verifier_ids": ["unit"],
+            "allowed_paths": ["src/a.py"],
+            "deletion_policy": "FORBID",
+            "universe_generation": 1,
+            "expected_subjects": [
+                {
+                    "logical_subject_id": "subject-1",
+                    "evidence_kind": "kind-a",
+                    "requirement_mode": "REQUIRED",
+                    "applicability": "APPLICABLE",
+                },
+                {
+                    "logical_subject_id": "subject-2",
+                    "evidence_kind": "kind-b",
+                    "requirement_mode": "CONDITIONALLY_REQUIRED",
+                    "applicability": "UNRESOLVED",
+                },
+            ],
+        },
+        "expected_hash": "sha256:6bf2f53e4147ea5d1f9e02089c7237ab6b1cfbb94204d16a6f351e4c0f4f061b",
+    },
+    "evidence_bundle_universe": {
+        "value": {
+            "bundle_id": "eb-coverage-1",
+            "acceptance_contract_hash": "sha256:6bf2f53e4147ea5d1f9e02089c7237ab6b1cfbb94204d16a6f351e4c0f4f061b",
+            "change_set_hash": "sha256:6a5d849712b409d4a30a30b50138ddd840847ae4aaf4c1916108e6711fae594c",
+            "verification_plan_hash": "sha256:dbe690bd9f0b2f89120d56749edda6bad3b8027b1a797c85ac141b21400a8448",
+            "observations": [
+                {
+                    "verifier_id": "unit",
+                    "artifact_id": "art-unit",
+                    "artifact_hash": "sha256:" + "d" * 64,
+                    "status": "PASS",
+                },
+                {
+                    "verifier_id": "matrix",
+                    "artifact_id": "art-s1",
+                    "artifact_hash": "sha256:" + "a" * 64,
+                    "status": "PASS",
+                    "logical_subject_id": "subject-1",
+                    "evidence_kind": "kind-a",
+                },
+            ],
+            "claimed_bundle_hash": None,
+        },
+        "expected_hash": "sha256:acea73418cb51bc8993a2754d62dd07a62e3344267ed262e2efd16092f483698",
     },
     "change_manifest": {
         "value": {
@@ -835,7 +1020,11 @@ __all__ = [
     "CHANGE_MANIFEST_SCHEMA",
     "CHANGE_MANIFEST_SCHEMA_ID",
     "CHANGE_SET_SCHEMA",
+    "COVERAGE_PROJECTION_SCHEMA",
+    "COVERAGE_PROJECTION_SCHEMA_ID",
     "EVIDENCE_BUNDLE_INPUT_SCHEMA",
+    "EXPECTED_EVIDENCE_SUBJECT_SCHEMA",
+    "EXPECTED_EVIDENCE_SUBJECT_SCHEMA_ID",
     "GENERIC_PROTOCOL_CONFORMANCE_VECTORS",
     "GENERIC_PROTOCOL_NEGATIVE_CONFORMANCE_VECTORS",
     "GENERIC_PROTOCOL_ORDERING_CONFORMANCE_VECTORS",
