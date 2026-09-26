@@ -387,7 +387,7 @@ class Observation:
 
     @property
     def observed_subject(self) -> None | tuple[str, str]:
-        if self.logical_subject_id is None:
+        if self.logical_subject_id is None or self.evidence_kind is None:
             return None
         return (self.logical_subject_id, self.evidence_kind)
 
@@ -494,7 +494,10 @@ class EvidenceBundle:
                 "artifact_hash": observation.artifact_hash,
                 "status": observation.status.value,
             }
-            if observation.logical_subject_id is not None:
+            if (
+                observation.logical_subject_id is not None
+                and observation.evidence_kind is not None
+            ):
                 row["logical_subject_id"] = observation.logical_subject_id
                 row["evidence_kind"] = observation.evidence_kind
             observations.append(row)
