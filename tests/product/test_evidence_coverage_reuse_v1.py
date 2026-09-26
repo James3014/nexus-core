@@ -1,7 +1,22 @@
 """Evidence-coverage reuse (v1): universe observation binding repair."""
 import pytest
-from product.evidence import (AcceptanceContract, Applicability, ChangeSet, EvidenceBundle, ExpectedEvidenceSubject, IntegrityStatus, Observation, ObservationStatus, RequirementMode, canonical_json, derive_evidence_integrity)
-from product.verification import (CoverageCategory, VerificationStatus, derive_coverage as verify_derive_coverage, derive_coverage, verify)
+
+from product.evidence import (
+    AcceptanceContract,
+    Applicability,
+    ChangeSet,
+    EvidenceBundle,
+    ExpectedEvidenceSubject,
+    IntegrityStatus,
+    Observation,
+    ObservationStatus,
+    RequirementMode,
+    canonical_json,
+    derive_evidence_integrity,
+)
+from product.verification import CoverageCategory, VerificationStatus, derive_coverage, verify
+from product.verification import derive_coverage as verify_derive_coverage
+
 REQ_HASH = "sha256:" + "c" * 64
 DIFF_HASH = "sha256:" + "d" * 64
 ART_HASH = "sha256:" + "e" * 64
