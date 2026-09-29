@@ -169,8 +169,8 @@ def _project_subject(
             observed_artifact_hash=observation.artifact_hash,
             expected_content_hash=expected_hash,
             status=observation.status,
-            sufficiency=EvidenceSufficiency.CONTRADICTORY,
-            reason_codes=(f"CONTRADICTORY:verifier:{verifier_id}",),
+            sufficiency=EvidenceSufficiency.FAILED,
+            reason_codes=(f"FAILED:verifier:{verifier_id}",),
         )
     return SufficiencySubjectReport(
         verifier_id=observation.verifier_id,
@@ -201,6 +201,11 @@ def _make_analyzer():
             raise TypeError("evidence must be EvidenceBundle")
         if expected_by_verifier is not None and not isinstance(expected_by_verifier, dict):
             raise TypeError("expected_by_verifier must be a dict or None")
+        input_binding_hash = _hash((
+            request.request_id, request.subject_scope, request.applicable,
+            contract.hash, change_set.hash, plan.hash, evidence.hash,
+            tuple(sorted((expected_by_verifier or {}).items())),
+        ))
         if not request.applicable:
             result = object.__new__(EvidenceSufficiencyAnalysis)
             object.__setattr__(result, "sufficiency", EvidenceSufficiency.INAPPLICABLE)
@@ -209,6 +214,7 @@ def _make_analyzer():
             object.__setattr__(result, "integrity", IntegrityStatus.VALID)
             object.__setattr__(result, "schema", SUFFICIENCY_SCHEMA)
             object.__setattr__(result, "claim_ceiling", SUFFICIENCY_CLAIM_CEILING)
+            object.__setattr__(result, "input_binding_hash", input_binding_hash)
             EvidenceSufficiencyAnalysis.__post_init__(result)
             registry[id(result)] = result
             return result
@@ -227,6 +233,11 @@ def _make_analyzer():
             IntegrityStatus.CROSS_BINDING_INVALID,
         )
         observations = {obs.verifier_id: obs for obs in evidence.observations}
+        conflicts = {
+            vid for vid in plan.required_verifier_ids
+            if len({(obs.artifact_id, obs.artifact_hash, obs.status)
+                    for obs in evidence.observations if obs.verifier_id == vid}) > 1
+        }
         reports = []
         for vid in sorted(plan.required_verifier_ids):
             reports.append(
@@ -244,8 +255,9 @@ def _make_analyzer():
         if not report_tuple:
             overall = EvidenceSufficiency.MISSING
             reasons.append("MISSING:required-subjects:empty-plan")
-        elif EvidenceSufficiency.CONTRADICTORY in kinds:
+        elif conflicts and core.integrity is IntegrityStatus.DUPLICATE:
             overall = EvidenceSufficiency.CONTRADICTORY
+            reasons.extend(f"CONTRADICTORY:verifier:{vid}" for vid in conflicts)
         elif EvidenceSufficiency.STALE in kinds:
             overall = EvidenceSufficiency.STALE
         elif EvidenceSufficiency.FAILED in kinds:
@@ -263,6 +275,7 @@ def _make_analyzer():
         object.__setattr__(result, "integrity", core.integrity)
         object.__setattr__(result, "schema", SUFFICIENCY_SCHEMA)
         object.__setattr__(result, "claim_ceiling", SUFFICIENCY_CLAIM_CEILING)
+        object.__setattr__(result, "input_binding_hash", input_binding_hash)
         EvidenceSufficiencyAnalysis.__post_init__(result)
         registry[id(result)] = result
         return result
@@ -282,11 +295,13 @@ class EvidenceSufficiencyAnalysis:
     integrity: IntegrityStatus
     schema: str
     claim_ceiling: str
+    input_binding_hash: str
 
     def __init__(self, *args, **kwargs):
         raise TypeError("EvidenceSufficiencyAnalysis is created by analyze_evidence_sufficiency")
 
     def __post_init__(self):
+        _require_hash(self.input_binding_hash, "input_binding_hash")
         if type(self.sufficiency) is not EvidenceSufficiency:
             raise TypeError("sufficiency must be EvidenceSufficiency")
         if type(self.subject_reports) is not tuple or any(
@@ -328,6 +343,7 @@ class EvidenceSufficiencyAnalysis:
                 self.integrity.value,
                 self.schema,
                 self.claim_ceiling,
+                self.input_binding_hash,
             )
         )
 
@@ -335,6 +351,7 @@ class EvidenceSufficiencyAnalysis:
         return {
             "schema": self.schema,
             "claim_ceiling": self.claim_ceiling,
+            "input_binding_hash": self.input_binding_hash,
             "sufficiency": self.sufficiency.value,
             "subject_reports": [
                 {

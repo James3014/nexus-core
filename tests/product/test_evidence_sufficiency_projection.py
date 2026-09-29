@@ -84,11 +84,11 @@ def test_missing_observation_is_missing():
     assert any(r.sufficiency is EvidenceSufficiency.MISSING for r in a.subject_reports)
 
 
-def test_fail_status_is_contradictory():
+def test_single_fail_status_is_failed():
     c, cs, p = _subjects()
     e = _bundle(c, cs, p, [_obs(status=ObservationStatus.FAIL)])
     a = analyze_evidence_sufficiency(_req(), c, cs, p, e)
-    assert a.sufficiency is EvidenceSufficiency.CONTRADICTORY
+    assert a.sufficiency is EvidenceSufficiency.FAILED
 
 
 def test_expected_config_divergence_is_stale():
