@@ -22,9 +22,15 @@ def _load_module():
 
 
 class FakeRequester:
-    def __init__(self, *, token_expected: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        token_expected: str | None = None,
+        private_repo: bool = False,
+    ) -> None:
         self.calls: list[tuple[str, dict[str, str]]] = []
         self.token_expected = token_expected
+        self.private_repo = private_repo
         self.base_sha = "a" * 40
         self.head_sha = "b" * 40
         self.base_tree = "c" * 40
@@ -42,6 +48,9 @@ class FakeRequester:
         parsed = urlparse(url)
         path = parsed.path
         query = parse_qs(parsed.query)
+
+        if path == "/repos/example/demo":
+            return 200, {}, json.dumps({"private": self.private_repo}).encode()
 
         if path == "/repos/example/demo/pulls/7":
             if normalized_headers["Accept"] == "application/vnd.github.v3.diff":
@@ -137,6 +146,75 @@ def test_public_github_port_supports_canonical_double_read():
     assert all(headers["Accept"].startswith("application/vnd.github") for _, headers in requester.calls)
 
 
+def test_public_review_profile_rechecks_public_visibility_on_double_read():
+    module = _load_module()
+    requester = FakeRequester()
+    port = module.PublicGitHubReadPort(requester=requester, public_only=True)
+
+    result = verify_code_change_evidence(
+        {
+            "repository_owner": "example",
+            "repository_name": "demo",
+            "pr_number": 7,
+            "receipt": None,
+        },
+        github_port=port,
+    )
+
+    assert result["evidence_applicability"] == "EVIDENCE_NOT_SUPPLIED"
+    visibility_calls = [
+        url for url, _headers in requester.calls if urlparse(url).path == "/repos/example/demo"
+    ]
+    assert len(visibility_calls) == 2
+
+
+def test_public_review_profile_fails_closed_for_private_repository():
+    module = _load_module()
+    requester = FakeRequester(private_repo=True)
+    port = module.PublicGitHubReadPort(requester=requester, public_only=True)
+
+    result = verify_code_change_evidence(
+        {
+            "repository_owner": "example",
+            "repository_name": "demo",
+            "pr_number": 7,
+            "receipt": None,
+        },
+        github_port=port,
+    )
+
+    assert result["evidence_applicability"] == "UNVERIFIABLE"
+    assert result["reason_codes"] == ["GITHUB_READ_PERMISSION_DENIED"]
+    assert len(requester.calls) == 1
+
+
+def test_public_review_environment_uses_only_dedicated_service_token(monkeypatch):
+    module = _load_module()
+    monkeypatch.setenv("NEXUS_VERIFY_GITHUB_TOKEN", "developer-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "generic-token")
+    monkeypatch.delenv(module.PUBLIC_REVIEW_GITHUB_TOKEN_ENV, raising=False)
+
+    port = module.PublicGitHubReadPort.from_public_review_environment()
+
+    assert port._token is None
+    assert port._public_only is True
+
+    monkeypatch.setenv(module.PUBLIC_REVIEW_GITHUB_TOKEN_ENV, "public-service-token")
+    port = module.PublicGitHubReadPort.from_public_review_environment()
+    assert port._token == "public-service-token"
+    assert port._public_only is True
+
+
+def test_public_review_tool_metadata_declares_noauth_and_bounded_status_text():
+    module = _load_module()
+
+    assert module.PUBLIC_TOOL_META == {
+        "securitySchemes": [{"type": "noauth"}],
+        "openai/toolInvocation/invoking": "Checking verification evidence...",
+        "openai/toolInvocation/invoked": "Verification evidence checked",
+    }
+
+
 def test_github_token_is_host_owned_and_read_only():
     module = _load_module()
     requester = FakeRequester(token_expected="secret-token")
@@ -172,6 +250,13 @@ def test_g1_server_rejects_non_loopback_bind(host):
 def test_g1_server_accepts_loopback_bind(host):
     module = _load_module()
     assert module._require_loopback(host) == host
+
+
+def test_public_review_profile_does_not_expand_network_binding():
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "create_public_review_mcp_server" in source
+    assert "_require_loopback(host)" in source
+    assert '"public-review"' in source
 
 
 def test_pep723_dependency_is_isolated_from_project_runtime():
