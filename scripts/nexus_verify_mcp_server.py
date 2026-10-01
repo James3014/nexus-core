@@ -37,6 +37,8 @@ from product.acquisition.github import (  # noqa: E402
     _freshness_cas_for,
 )
 from product.clients.nexus_verify import (  # noqa: E402
+    INPUT_SCHEMA,
+    OUTPUT_SCHEMA,
     TOOL_DESCRIPTION,
     TOOL_NAME,
     verify_code_change_evidence,
@@ -50,6 +52,7 @@ _GITHUB_JSON_ACCEPT = "application/vnd.github+json"
 _GITHUB_DIFF_ACCEPT = "application/vnd.github.v3.diff"
 _MAX_PAGES = 100
 PUBLIC_REVIEW_GITHUB_TOKEN_ENV = "NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN"
+MAX_PUBLIC_RECEIPT_BYTES = 512 * 1024
 PUBLIC_TOOL_META: dict[str, Any] = {
     "securitySchemes": [{"type": "noauth"}],
     "openai/toolInvocation/invoking": "Checking verification evidence...",
@@ -57,6 +60,44 @@ PUBLIC_TOOL_META: dict[str, Any] = {
 }
 
 RawRequester = Callable[[str, Mapping[str, str]], tuple[int, Mapping[str, str], bytes]]
+
+
+def _validate_public_tool_arguments(
+    arguments: Mapping[str, Any],
+    *,
+    public_review: bool,
+) -> None:
+    if not isinstance(arguments, Mapping):
+        raise ValueError("tool arguments must be an object")
+    values = dict(arguments)
+    required = {"repository_owner", "repository_name", "pr_number"}
+    allowed = {*required, "receipt"}
+    if not required.issubset(values):
+        raise ValueError("repository_owner, repository_name and pr_number are required")
+    if set(values) - allowed:
+        raise ValueError("unexpected tool arguments")
+    try:
+        GitHubPullRequestLocator(
+            values["repository_owner"],
+            values["repository_name"],
+            values["pr_number"],
+        )
+    except (AcquisitionError, TypeError, ValueError) as exc:
+        raise ValueError("invalid GitHub pull-request locator") from exc
+
+    receipt = values.get("receipt")
+    if receipt is not None and not isinstance(receipt, dict):
+        raise ValueError("receipt must be an object or null")
+    if public_review and receipt is not None:
+        encoded_receipt = json.dumps(
+            receipt,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded_receipt) > MAX_PUBLIC_RECEIPT_BYTES:
+            raise ValueError("receipt exceeds public-review size limit")
 
 
 def _canonical_hash(value: Any) -> str:
@@ -309,14 +350,39 @@ class PublicGitHubReadPort:
 
 def create_mcp_server(
     github_port_factory: Callable[[], object] | None = None,
+    *,
+    public_review: bool = False,
 ):
     """Create the one-tool Nexus Verify MCP server without starting a listener."""
 
     from mcp.server import MCPServer
     from mcp.types import ToolAnnotations
 
+    class ContractBoundMCPServer(MCPServer):
+        async def list_tools(self):
+            tools = await super().list_tools()
+            return [
+                tool.model_copy(
+                    update={
+                        "input_schema": dict(INPUT_SCHEMA),
+                        "output_schema": dict(OUTPUT_SCHEMA),
+                    }
+                )
+                if tool.name == TOOL_NAME
+                else tool
+                for tool in tools
+            ]
+
+        async def call_tool(self, name, arguments, context=None):
+            if name == TOOL_NAME:
+                _validate_public_tool_arguments(
+                    arguments,
+                    public_review=public_review,
+                )
+            return await super().call_tool(name, arguments, context)
+
     port_factory = github_port_factory or PublicGitHubReadPort.from_environment
-    server = MCPServer(
+    server = ContractBoundMCPServer(
         "Nexus Verify",
         instructions=(
             "Use Nexus Verify only to evaluate whether supplied Nexus verification "
@@ -361,7 +427,8 @@ def create_public_review_mcp_server():
     """Create the G4A public-review profile without enabling public networking."""
 
     return create_mcp_server(
-        github_port_factory=PublicGitHubReadPort.from_public_review_environment
+        github_port_factory=PublicGitHubReadPort.from_public_review_environment,
+        public_review=True,
     )
 
 

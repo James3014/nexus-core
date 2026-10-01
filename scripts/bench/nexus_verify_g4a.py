@@ -73,6 +73,7 @@ _EXTERNAL_NOT_READY = {
     "publisher_identity_verification": {"NOT_RUN"},
     "apps_write_permission": {"NOT_OBSERVED"},
     "apps_read_permission": {"NOT_OBSERVED"},
+    "dedicated_service_github_credential": {"UNBOUND_EXTERNAL"},
     "stable_https_mcp_endpoint": {"UNBOUND_EXTERNAL"},
     "website_https_url": {"UNBOUND_EXTERNAL"},
     "support_https_url": {"UNBOUND_EXTERNAL"},
@@ -200,6 +201,16 @@ def _check_server_source(package: Mapping[str, Any]) -> tuple[bool, list[str]]:
         failures.append("PUBLIC_REPOSITORY_VISIBILITY_GUARD_MISSING")
     if "_require_loopback(host)" not in source:
         failures.append("LOCAL_PREDEPLOYMENT_BIND_GUARD_MISSING")
+    if "class ContractBoundMCPServer(MCPServer)" not in source:
+        failures.append("SCANNED_SCHEMA_BINDING_MISSING")
+    if '"input_schema": dict(INPUT_SCHEMA)' not in source:
+        failures.append("SCANNED_INPUT_SCHEMA_BINDING_MISSING")
+    if '"output_schema": dict(OUTPUT_SCHEMA)' not in source:
+        failures.append("SCANNED_OUTPUT_SCHEMA_BINDING_MISSING")
+    if "_validate_public_tool_arguments(" not in source:
+        failures.append("RUNTIME_ARGUMENT_VALIDATION_MISSING")
+    if "MAX_PUBLIC_RECEIPT_BYTES = 512 * 1024" not in source:
+        failures.append("PUBLIC_RECEIPT_SIZE_BOUND_MISSING")
     for forbidden in ('method="POST"', 'method="PUT"', 'method="PATCH"', 'method="DELETE"'):
         if forbidden in source:
             failures.append(f"GITHUB_WRITE_METHOD_PRESENT:{forbidden}")
