@@ -1,0 +1,487 @@
+{
+  "selection_results": [
+    {
+      "id": "P01",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "acme",
+        "repository_name": "widget",
+        "pr_number": 123,
+        "receipt": null
+      },
+      "rationale": "Verify whether the Nexus receipt still applies to the current PR state."
+    },
+    {
+      "id": "P02",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "James3014",
+        "repository_name": "nexus-core",
+        "pr_number": 70,
+        "receipt": null
+      },
+      "rationale": "Verify whether the completion claim evidence is current for this PR."
+    },
+    {
+      "id": "P03",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "alpha",
+        "repository_name": "payments",
+        "pr_number": 41,
+        "receipt": null
+      },
+      "rationale": "Check verification evidence to confirm if code changed after verification."
+    },
+    {
+      "id": "P04",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "orbit",
+        "repository_name": "app",
+        "pr_number": 8,
+        "receipt": null
+      },
+      "rationale": "Verify whether the receipt still applies to the current PR head."
+    },
+    {
+      "id": "P05",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "zen",
+        "repository_name": "api",
+        "pr_number": 77,
+        "receipt": null
+      },
+      "rationale": "Verify evidence supporting the agent's test completion claim."
+    },
+    {
+      "id": "P06",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "mono",
+        "repository_name": "core",
+        "pr_number": 19,
+        "receipt": null
+      },
+      "rationale": "Check supplied verification evidence against current PR to determine why it is unverifiable."
+    },
+    {
+      "id": "P07",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "snow",
+        "repository_name": "booking",
+        "pr_number": 52,
+        "receipt": null
+      },
+      "rationale": "Verify that verification evidence matches the current PR code."
+    },
+    {
+      "id": "P08",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "example",
+        "repository_name": "service",
+        "pr_number": 204,
+        "receipt": null
+      },
+      "rationale": "Verify evidence applicability and check if code moved after evidence capture."
+    },
+    {
+      "id": "P09",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "team",
+        "repository_name": "repo",
+        "pr_number": 31,
+        "receipt": null
+      },
+      "rationale": "Verify whether the evidence is bound to the current PR version."
+    },
+    {
+      "id": "P10",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "fleet",
+        "repository_name": "router",
+        "pr_number": 66,
+        "receipt": null
+      },
+      "rationale": "Check if verification evidence was tampered with or is stale."
+    },
+    {
+      "id": "P11",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "coral",
+        "repository_name": "web",
+        "pr_number": 14,
+        "receipt": null
+      },
+      "rationale": "Verify current evidence applicability rather than conducting code review."
+    },
+    {
+      "id": "P12",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "north",
+        "repository_name": "data",
+        "pr_number": 91,
+        "receipt": null
+      },
+      "rationale": "Verify if evidence is stale relative to the current PR state."
+    },
+    {
+      "id": "P13",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "blue",
+        "repository_name": "worker",
+        "pr_number": 11,
+        "receipt": null
+      },
+      "rationale": "Verify if supplied evidence covers the changed-file scope of the PR."
+    },
+    {
+      "id": "P14",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "city",
+        "repository_name": "infra",
+        "pr_number": 33,
+        "receipt": null
+      },
+      "rationale": "Verify presence and applicability of all required verification evidence."
+    },
+    {
+      "id": "P15",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "lab",
+        "repository_name": "agent",
+        "pr_number": 5,
+        "receipt": null
+      },
+      "rationale": "Validate proof and check whether evidence is current for this change."
+    },
+    {
+      "id": "P16",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "James3014",
+        "repository_name": "nexus-core",
+        "pr_number": 70,
+        "receipt": null
+      },
+      "rationale": "Verify whether code-change evidence is currently valid."
+    },
+    {
+      "id": "P17",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "river",
+        "repository_name": "gateway",
+        "pr_number": 27,
+        "receipt": null
+      },
+      "rationale": "Compare exact PR state with its verification record."
+    },
+    {
+      "id": "P18",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "stone",
+        "repository_name": "sdk",
+        "pr_number": 12,
+        "receipt": null
+      },
+      "rationale": "Verify internal validity and applicability of the Nexus verification receipt."
+    },
+    {
+      "id": "P19",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "star",
+        "repository_name": "mobile",
+        "pr_number": 88,
+        "receipt": null
+      },
+      "rationale": "Verify whether testing evidence still applies to the current PR code."
+    },
+    {
+      "id": "P20",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "mars",
+        "repository_name": "cli",
+        "pr_number": 3,
+        "receipt": null
+      },
+      "rationale": "Verify evidence binding independently for the completion claim."
+    },
+    {
+      "id": "P21",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "tree",
+        "repository_name": "search",
+        "pr_number": 45,
+        "receipt": null
+      },
+      "rationale": "Verify completion claim evidence against the current PR."
+    },
+    {
+      "id": "P22",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "quiet",
+        "repository_name": "lib",
+        "pr_number": 29,
+        "receipt": null
+      },
+      "rationale": "Verify existing evidence against PR state without running third-party code."
+    },
+    {
+      "id": "P23",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "forge",
+        "repository_name": "build",
+        "pr_number": 101,
+        "receipt": null
+      },
+      "rationale": "Verify internal validity and currency of evidence for the PR."
+    },
+    {
+      "id": "P24",
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "polar",
+        "repository_name": "auth",
+        "pr_number": 62,
+        "receipt": null
+      },
+      "rationale": "Verify whether evidence applies to this exact PR state."
+    },
+    {
+      "id": "P25",
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null,
+      "rationale": "Verification intent is clear, but owner, repository, and PR number are missing."
+    },
+    {
+      "id": "P26",
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null,
+      "rationale": "Receipt applicability verification intent is clear, but PR locator is missing."
+    },
+    {
+      "id": "P27",
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null,
+      "rationale": "Verification staleness check intent is clear, but PR locator is missing."
+    },
+    {
+      "id": "P28",
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null,
+      "rationale": "Evidence applicability verification intent is clear, but PR locator is missing."
+    },
+    {
+      "id": "N01",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for code quality review and improvements, not evidence verification."
+    },
+    {
+      "id": "N02",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for security vulnerability review, not evidence verification."
+    },
+    {
+      "id": "N03",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for test code generation, not evidence verification."
+    },
+    {
+      "id": "N04",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for debugging and bug fixing, not evidence verification."
+    },
+    {
+      "id": "N05",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for executing a PR merge, not evidence verification."
+    },
+    {
+      "id": "N06",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for merge approval decision, not evidence verification."
+    },
+    {
+      "id": "N07",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for deployment execution, not evidence verification."
+    },
+    {
+      "id": "N08",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for releasing a package, not evidence verification."
+    },
+    {
+      "id": "N09",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for explaining CI failure logs, not evidence verification."
+    },
+    {
+      "id": "N10",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for comparing implementation approaches, not evidence verification."
+    },
+    {
+      "id": "N11",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for style and readability review, not evidence verification."
+    },
+    {
+      "id": "N12",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for code generation, not evidence verification."
+    },
+    {
+      "id": "N13",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for performance profiling, not evidence verification."
+    },
+    {
+      "id": "N14",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for generic readiness evaluation, not evidence verification."
+    },
+    {
+      "id": "N15",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is a conceptual inquiry about terminology rather than evidence verification."
+    },
+    {
+      "id": "N16",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for listing changed files, not evidence verification."
+    },
+    {
+      "id": "N17",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for rerunning CI, not evidence verification."
+    },
+    {
+      "id": "N18",
+      "action": "DO_NOT_CALL",
+      "arguments": null,
+      "rationale": "Request is for PR approval, not evidence verification."
+    }
+  ],
+  "explanation_results": [
+    {
+      "id": "E01",
+      "evidence_status": "VERIFIED",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [],
+      "user_text": "Evidence is valid and applies to the PR, but verification never constitutes merge approval."
+    },
+    {
+      "id": "E02",
+      "evidence_status": "STALE_TARGET",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [
+        "RECEIPT_TARGET_DOES_NOT_MATCH_CURRENT_PR"
+      ],
+      "user_text": "The receipt is valid but stale because the current PR target state no longer matches the receipt target."
+    },
+    {
+      "id": "E03",
+      "evidence_status": "TAMPERED",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [
+        "RECEIPT_HASH_MISMATCH",
+        "OUTCOME_MISMATCH"
+      ],
+      "user_text": "This receipt cannot be trusted; it is invalid and shows tampering due to hash and outcome mismatches."
+    },
+    {
+      "id": "E04",
+      "evidence_status": "UNVERIFIABLE",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [
+        "MISSING"
+      ],
+      "user_text": "Verification cannot be performed because required verification evidence is missing."
+    },
+    {
+      "id": "E05",
+      "evidence_status": "SUBJECT_MISMATCH",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [
+        "RECEIPT_PATH_SCOPE_DOES_NOT_MATCH_CURRENT_PR"
+      ],
+      "user_text": "The evidence does not cover this PR because the receipt path scope does not match the PR changed files."
+    },
+    {
+      "id": "E06",
+      "evidence_status": "EVIDENCE_NOT_SUPPLIED",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [
+        "NEXUS_RECEIPT_NOT_SUPPLIED"
+      ],
+      "user_text": "Green GitHub checks do not mean Nexus verified; no Nexus verification receipt was supplied."
+    },
+    {
+      "id": "E07",
+      "evidence_status": "FAILED_VERIFICATION",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [
+        "FAILED"
+      ],
+      "user_text": "The evidence applies to the PR, but the underlying verification checks failed."
+    },
+    {
+      "id": "E08",
+      "evidence_status": "VERIFIED",
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false,
+      "reason_codes_acknowledged": [],
+      "user_text": "Verification confirms evidence validity and applicability, but confers no merge, release, or deployment authority."
+    }
+  ]
+}
