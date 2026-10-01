@@ -1,0 +1,28 @@
+{
+  "schema": "nexus.verify.g3.evaluator-operation.v1",
+  "provider": "agy",
+  "requested_model": "gemini-3.8-flash-high",
+  "observed_model": "gemini-3.8-flash-high",
+  "operation_id": "agyop_247ea205ba4a4c8b89bf871f1f7f4ce3",
+  "attempt_id": "attempt_51f7e78335744a36953e59aec8853f4c",
+  "status": "COMPLETED",
+  "exit_code": 0,
+  "account_alias_hash": "986a1b7135f4",
+  "lease_id_hash": "01be17beacd7",
+  "rotations": 0,
+  "tool_event_count": 0,
+  "observed_changed_paths": [],
+  "runtime_revision": "928919cac76be7919ea05b65fa601abc5f6520e0",
+  "started_at": "2026-10-01T12:21:54.644254+00:00",
+  "finished_at": "2026-10-01T12:22:59.097006+00:00",
+  "blind_prompt_sha256": "7fcf7513d8a4b5bc37d6e8d9a38f0cb75ed619f078ec5d772a44be30469bd550",
+  "stdout_sha256": "2e9cd2f0bd44be844066987791e61f0ccad17f11266bcb396edc661be094bdb4",
+  "dispatcher_attestation": {
+    "status": "completed",
+    "attempts": 1,
+    "rotations": 0,
+    "parallel_slot": true,
+    "wall_ms": 56538
+  },
+  "claim_ceiling": "CONTROLLED_BLIND_MODEL_EVALUATION_ONLY"
+}

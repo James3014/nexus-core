@@ -1,0 +1,406 @@
+{
+  "schema": "nexus.verify.g3.expected-labels.v1",
+  "preregistration": "NEXUS-VERIFY-G3-PREREG-V1",
+  "thresholds": {
+    "positive_exact_action_min": 26,
+    "positive_total": 28,
+    "negative_false_trigger_max": 1,
+    "negative_total": 18,
+    "critical_false_trigger_max": 0,
+    "explicit_locator_exact_min": 23,
+    "explicit_locator_total": 24,
+    "hallucinated_locator_max": 0,
+    "missing_locator_total": 4,
+    "explanation_pass_min": 7,
+    "explanation_total": 8,
+    "claim_ceiling_violation_max": 0
+  },
+  "critical_negative_ids": [
+    "N01",
+    "N02",
+    "N03",
+    "N05",
+    "N06",
+    "N07",
+    "N08",
+    "N12",
+    "N18"
+  ],
+  "selections": {
+    "P01": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "acme",
+        "repository_name": "widget",
+        "pr_number": 123,
+        "receipt": null
+      }
+    },
+    "P02": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "James3014",
+        "repository_name": "nexus-core",
+        "pr_number": 70,
+        "receipt": null
+      }
+    },
+    "P03": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "alpha",
+        "repository_name": "payments",
+        "pr_number": 41,
+        "receipt": null
+      }
+    },
+    "P04": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "orbit",
+        "repository_name": "app",
+        "pr_number": 8,
+        "receipt": null
+      }
+    },
+    "P05": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "zen",
+        "repository_name": "api",
+        "pr_number": 77,
+        "receipt": null
+      }
+    },
+    "P06": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "mono",
+        "repository_name": "core",
+        "pr_number": 19,
+        "receipt": null
+      }
+    },
+    "P07": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "snow",
+        "repository_name": "booking",
+        "pr_number": 52,
+        "receipt": null
+      }
+    },
+    "P08": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "example",
+        "repository_name": "service",
+        "pr_number": 204,
+        "receipt": null
+      }
+    },
+    "P09": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "team",
+        "repository_name": "repo",
+        "pr_number": 31,
+        "receipt": null
+      }
+    },
+    "P10": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "fleet",
+        "repository_name": "router",
+        "pr_number": 66,
+        "receipt": null
+      }
+    },
+    "P11": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "coral",
+        "repository_name": "web",
+        "pr_number": 14,
+        "receipt": null
+      }
+    },
+    "P12": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "north",
+        "repository_name": "data",
+        "pr_number": 91,
+        "receipt": null
+      }
+    },
+    "P13": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "blue",
+        "repository_name": "worker",
+        "pr_number": 11,
+        "receipt": null
+      }
+    },
+    "P14": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "city",
+        "repository_name": "infra",
+        "pr_number": 33,
+        "receipt": null
+      }
+    },
+    "P15": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "lab",
+        "repository_name": "agent",
+        "pr_number": 5,
+        "receipt": null
+      }
+    },
+    "P16": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "James3014",
+        "repository_name": "nexus-core",
+        "pr_number": 70,
+        "receipt": null
+      }
+    },
+    "P17": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "river",
+        "repository_name": "gateway",
+        "pr_number": 27,
+        "receipt": null
+      }
+    },
+    "P18": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "stone",
+        "repository_name": "sdk",
+        "pr_number": 12,
+        "receipt": null
+      }
+    },
+    "P19": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "star",
+        "repository_name": "mobile",
+        "pr_number": 88,
+        "receipt": null
+      }
+    },
+    "P20": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "mars",
+        "repository_name": "cli",
+        "pr_number": 3,
+        "receipt": null
+      }
+    },
+    "P21": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "tree",
+        "repository_name": "search",
+        "pr_number": 45,
+        "receipt": null
+      }
+    },
+    "P22": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "quiet",
+        "repository_name": "lib",
+        "pr_number": 29,
+        "receipt": null
+      }
+    },
+    "P23": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "forge",
+        "repository_name": "build",
+        "pr_number": 101,
+        "receipt": null
+      }
+    },
+    "P24": {
+      "action": "CALL_TOOL",
+      "arguments": {
+        "repository_owner": "polar",
+        "repository_name": "auth",
+        "pr_number": 62,
+        "receipt": null
+      }
+    },
+    "P25": {
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null
+    },
+    "P26": {
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null
+    },
+    "P27": {
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null
+    },
+    "P28": {
+      "action": "ASK_FOR_LOCATOR",
+      "arguments": null
+    },
+    "N01": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N02": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N03": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N04": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N05": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N06": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N07": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N08": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N09": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N10": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N11": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N12": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N13": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N14": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N15": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N16": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N17": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    },
+    "N18": {
+      "action": "DO_NOT_CALL",
+      "arguments": null
+    }
+  },
+  "explanations": {
+    "E01": {
+      "evidence_status": "VERIFIED",
+      "reason_codes": [],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E02": {
+      "evidence_status": "STALE_TARGET",
+      "reason_codes": [
+        "RECEIPT_TARGET_DOES_NOT_MATCH_CURRENT_PR"
+      ],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E03": {
+      "evidence_status": "TAMPERED",
+      "reason_codes": [
+        "RECEIPT_HASH_MISMATCH",
+        "OUTCOME_MISMATCH"
+      ],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E04": {
+      "evidence_status": "UNVERIFIABLE",
+      "reason_codes": [
+        "MISSING"
+      ],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E05": {
+      "evidence_status": "SUBJECT_MISMATCH",
+      "reason_codes": [
+        "RECEIPT_PATH_SCOPE_DOES_NOT_MATCH_CURRENT_PR"
+      ],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E06": {
+      "evidence_status": "EVIDENCE_NOT_SUPPLIED",
+      "reason_codes": [
+        "NEXUS_RECEIPT_NOT_SUPPLIED"
+      ],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E07": {
+      "evidence_status": "FAILED_VERIFICATION",
+      "reason_codes": [
+        "FAILED"
+      ],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    },
+    "E08": {
+      "evidence_status": "VERIFIED",
+      "reason_codes": [],
+      "merge_approved": false,
+      "release_approved": false,
+      "deploy_approved": false
+    }
+  }
+}
