@@ -33,7 +33,7 @@ It does not:
 
 The v0 public tool is anonymous (`noauth`) because it serves public GitHub data plus explicit caller-supplied receipt bytes.
 
-Private-repository support is deliberately deferred. Adding it requires a separate OAuth 2.1 design and review. The public-review adapter may use a service-side GitHub credential only through `NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN`, and it verifies repository visibility before reading PR data. It never falls back to developer or generic `GITHUB_TOKEN` variables.
+Private-repository support is deliberately deferred. Adding it requires a separate OAuth 2.1 design and review. The production public host must use a dedicated service-side GitHub credential through `NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN` for API capacity while keeping the user-facing tool `noauth`. The adapter verifies repository visibility before reading PR data and never falls back to developer or generic `GITHUB_TOKEN` variables.
 
 ## Tool contract
 
@@ -76,6 +76,7 @@ The submission pack also contains:
 
 The following are deliberately not claimed by G4A:
 
+- dedicated least-privilege service-side GitHub credential;
 - stable public HTTPS `/mcp` endpoint;
 - OpenAI individual/business publisher verification;
 - `api.apps.write` and `api.apps.read` permission evidence;

@@ -215,6 +215,44 @@ def test_public_review_tool_metadata_declares_noauth_and_bounded_status_text():
     }
 
 
+def test_public_tool_argument_validation_matches_advertised_schema():
+    module = _load_module()
+    valid = {
+        "repository_owner": "example",
+        "repository_name": "demo",
+        "pr_number": 7,
+        "receipt": None,
+    }
+    module._validate_public_tool_arguments(valid, public_review=True)
+
+    with pytest.raises(ValueError, match="unexpected tool arguments"):
+        module._validate_public_tool_arguments(
+            {**valid, "extra": True},
+            public_review=True,
+        )
+
+    with pytest.raises(ValueError, match="receipt must be an object or null"):
+        module._validate_public_tool_arguments(
+            {**valid, "receipt": []},
+            public_review=True,
+        )
+
+    with pytest.raises(ValueError, match="receipt exceeds public-review size limit"):
+        module._validate_public_tool_arguments(
+            {**valid, "receipt": {"blob": "x" * (513 * 1024)}},
+            public_review=True,
+        )
+
+
+def test_public_review_server_binds_scanned_schemas_to_frozen_contract():
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "class ContractBoundMCPServer(MCPServer)" in source
+    assert '"input_schema": dict(INPUT_SCHEMA)' in source
+    assert '"output_schema": dict(OUTPUT_SCHEMA)' in source
+    assert "_validate_public_tool_arguments(" in source
+
+
 def test_github_token_is_host_owned_and_read_only():
     module = _load_module()
     requester = FakeRequester(token_expected="secret-token")

@@ -160,6 +160,7 @@
     "publisher_identity_verification": "NOT_RUN",
     "apps_write_permission": "NOT_OBSERVED",
     "apps_read_permission": "NOT_OBSERVED",
+    "dedicated_service_github_credential": "UNBOUND_EXTERNAL",
     "stable_https_mcp_endpoint": "UNBOUND_EXTERNAL",
     "website_https_url": "UNBOUND_EXTERNAL",
     "support_https_url": "UNBOUND_EXTERNAL",

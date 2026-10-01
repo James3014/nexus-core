@@ -12,13 +12,17 @@ The production MCP endpoint must use stable HTTPS and Streamable HTTP at a stabl
 
 v0 is anonymous to the end user and public-repository-only.
 
-If a service credential is used to increase GitHub API capacity:
+The production public host must use a dedicated service credential for GitHub API
+capacity rather than relying on GitHub's anonymous quota. The user-facing MCP
+tool remains `noauth`; this is an operator-owned transport credential only.
 
 - use only `NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN`;
 - never fall back to `GITHUB_TOKEN` or `NEXUS_VERIFY_GITHUB_TOKEN`;
 - use a dedicated service identity with no intended private-repository access;
 - verify repository visibility is public before pull-request acquisition;
-- never return or log the credential.
+- never return or log the credential;
+- do not treat GitHub rate-limit or authorization failures as verification
+  success.
 
 Private repository access requires a later OAuth 2.1 design and is not enabled by v0.
 
