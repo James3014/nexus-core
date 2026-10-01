@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "nexus-verify": {
+      "url": "https://verify.snowskill.app/mcp"
+    }
+  }
+}
