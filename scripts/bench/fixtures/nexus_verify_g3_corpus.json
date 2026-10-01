@@ -1,0 +1,345 @@
+{
+  "schema": "nexus.verify.g3.prompt-corpus.v1",
+  "tool_contract": {
+    "name": "verify_code_change_evidence",
+    "description": "Verify whether supplied Nexus evidence is internally valid and still applies to the current exact GitHub pull-request state.",
+    "required_arguments": [
+      "repository_owner",
+      "repository_name",
+      "pr_number"
+    ],
+    "optional_arguments": [
+      "receipt"
+    ],
+    "boundaries": [
+      "read-only",
+      "not generic code review",
+      "not security review",
+      "not code or test generation",
+      "not merge approval or execution",
+      "not release or deployment",
+      "VERIFIED does not mean merge approval"
+    ]
+  },
+  "selection_prompts": [
+    {
+      "id": "P01",
+      "prompt": "https://github.com/acme/widget/pull/123 的 Nexus receipt 現在還適用這個 PR 嗎？"
+    },
+    {
+      "id": "P02",
+      "prompt": "Claude 說 https://github.com/James3014/nexus-core/pull/70 已經完成了，幫我驗證這個完成聲明的證據是不是 current。"
+    },
+    {
+      "id": "P03",
+      "prompt": "CI 是綠的，但 https://github.com/alpha/payments/pull/41 在驗證之後有沒有又改 code？請核對 verification evidence。"
+    },
+    {
+      "id": "P04",
+      "prompt": "Does the verification receipt still apply to the current head of https://github.com/orbit/app/pull/8 ?"
+    },
+    {
+      "id": "P05",
+      "prompt": "The coding agent says tests passed on https://github.com/zen/api/pull/77. What evidence actually supports that completion claim?"
+    },
+    {
+      "id": "P06",
+      "prompt": "Why is https://github.com/mono/core/pull/19 considered unverifiable? Check the supplied verification evidence against the current PR."
+    },
+    {
+      "id": "P07",
+      "prompt": "幫我確認 https://github.com/snow/booking/pull/52 的驗證證據跟現在這版 code 還對得上。"
+    },
+    {
+      "id": "P08",
+      "prompt": "For https://github.com/example/service/pull/204, did the code move after the evidence was captured? Verify the evidence applicability."
+    },
+    {
+      "id": "P09",
+      "prompt": "這個 AI agent 說 https://github.com/team/repo/pull/31 修好了；請獨立確認 evidence 是不是綁到現在的版本。"
+    },
+    {
+      "id": "P10",
+      "prompt": "Check whether the verification evidence for https://github.com/fleet/router/pull/66 was tampered with or is stale."
+    },
+    {
+      "id": "P11",
+      "prompt": "Agent says done on https://github.com/coral/web/pull/14. Can you verify the current evidence rather than review the code?"
+    },
+    {
+      "id": "P12",
+      "prompt": "Is the evidence for https://github.com/north/data/pull/91 stale relative to the current PR state?"
+    },
+    {
+      "id": "P13",
+      "prompt": "Does the supplied verification evidence cover the changed-file scope of https://github.com/blue/worker/pull/11 ?"
+    },
+    {
+      "id": "P14",
+      "prompt": "For https://github.com/city/infra/pull/33, verify whether all required verification evidence is present and applicable."
+    },
+    {
+      "id": "P15",
+      "prompt": "Validate the proof behind this AI-generated change: https://github.com/lab/agent/pull/5. I care whether the evidence is current, not whether the code style is good."
+    },
+    {
+      "id": "P16",
+      "prompt": "請驗證 James3014/nexus-core#70 的 code-change evidence 現在是否有效。"
+    },
+    {
+      "id": "P17",
+      "prompt": "Compare the current exact PR state with its verification record for https://github.com/river/gateway/pull/27."
+    },
+    {
+      "id": "P18",
+      "prompt": "Is the Nexus verification receipt for https://github.com/stone/sdk/pull/12 internally valid and still applicable?"
+    },
+    {
+      "id": "P19",
+      "prompt": "Does the testing evidence still apply to the current code in https://github.com/star/mobile/pull/88 ?"
+    },
+    {
+      "id": "P20",
+      "prompt": "The bot says the fix is complete on https://github.com/mars/cli/pull/3. Independently verify the evidence binding."
+    },
+    {
+      "id": "P21",
+      "prompt": "What evidence supports the completion claim for https://github.com/tree/search/pull/45? Verify it against the current PR."
+    },
+    {
+      "id": "P22",
+      "prompt": "Without rerunning third-party code, verify the existing evidence for https://github.com/quiet/lib/pull/29."
+    },
+    {
+      "id": "P23",
+      "prompt": "Is the evidence internally valid and current for https://github.com/forge/build/pull/101 ?"
+    },
+    {
+      "id": "P24",
+      "prompt": "Can Nexus verify whether the evidence for https://github.com/polar/auth/pull/62 applies to this exact PR state?"
+    },
+    {
+      "id": "P25",
+      "prompt": "The agent says the change is done. Can you verify whether the evidence is actually current?"
+    },
+    {
+      "id": "P26",
+      "prompt": "Does this verification receipt still apply to the PR head?"
+    },
+    {
+      "id": "P27",
+      "prompt": "CI is green, but I want to know whether the verification evidence is stale."
+    },
+    {
+      "id": "P28",
+      "prompt": "請確認這份測試證據是不是現在這版程式碼的。"
+    },
+    {
+      "id": "N01",
+      "prompt": "Review the code quality of https://github.com/acme/widget/pull/123 and suggest improvements."
+    },
+    {
+      "id": "N02",
+      "prompt": "Do a security vulnerability review of https://github.com/alpha/payments/pull/41."
+    },
+    {
+      "id": "N03",
+      "prompt": "Write missing unit tests for https://github.com/orbit/app/pull/8."
+    },
+    {
+      "id": "N04",
+      "prompt": "Find and fix the bug in https://github.com/zen/api/pull/77."
+    },
+    {
+      "id": "N05",
+      "prompt": "Merge https://github.com/mono/core/pull/19 for me."
+    },
+    {
+      "id": "N06",
+      "prompt": "Can https://github.com/snow/booking/pull/52 be merged now? Give me the approval decision."
+    },
+    {
+      "id": "N07",
+      "prompt": "Deploy https://github.com/example/service/pull/204 to production."
+    },
+    {
+      "id": "N08",
+      "prompt": "Release the package from https://github.com/team/repo/pull/31."
+    },
+    {
+      "id": "N09",
+      "prompt": "Explain the CI failure log on https://github.com/fleet/router/pull/66."
+    },
+    {
+      "id": "N10",
+      "prompt": "Compare the two implementation approaches in https://github.com/coral/web/pull/14 and tell me which is cleaner."
+    },
+    {
+      "id": "N11",
+      "prompt": "Do a style and readability review for https://github.com/north/data/pull/91."
+    },
+    {
+      "id": "N12",
+      "prompt": "Generate the code needed to finish https://github.com/blue/worker/pull/11."
+    },
+    {
+      "id": "N13",
+      "prompt": "Profile the performance of https://github.com/city/infra/pull/33."
+    },
+    {
+      "id": "N14",
+      "prompt": "Is https://github.com/lab/agent/pull/5 ready?"
+    },
+    {
+      "id": "N15",
+      "prompt": "What does Nexus VERIFIED mean? Does it mean merge approval?"
+    },
+    {
+      "id": "N16",
+      "prompt": "Show me the changed files in https://github.com/river/gateway/pull/27."
+    },
+    {
+      "id": "N17",
+      "prompt": "Rerun CI for https://github.com/stone/sdk/pull/12."
+    },
+    {
+      "id": "N18",
+      "prompt": "Approve https://github.com/star/mobile/pull/88 if the checks are green."
+    }
+  ],
+  "explanation_cases": [
+    {
+      "id": "E01",
+      "user_followup": "The tool says VERIFIED and APPLIES. So is this PR approved to merge?",
+      "tool_result": {
+        "receipt_integrity": "VALID",
+        "evidence_applicability": "APPLIES",
+        "core_verification": "VERIFIED",
+        "reason_codes": [],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E02",
+      "user_followup": "What does this mean for the current PR?",
+      "tool_result": {
+        "receipt_integrity": "VALID",
+        "evidence_applicability": "STALE_TARGET",
+        "core_verification": "VERIFIED",
+        "reason_codes": [
+          "RECEIPT_TARGET_DOES_NOT_MATCH_CURRENT_PR"
+        ],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E03",
+      "user_followup": "Can I trust this verification receipt?",
+      "tool_result": {
+        "receipt_integrity": "INVALID",
+        "evidence_applicability": "TAMPERED",
+        "core_verification": "NOT_AVAILABLE",
+        "reason_codes": [
+          "RECEIPT_HASH_MISMATCH",
+          "OUTCOME_MISMATCH"
+        ],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E04",
+      "user_followup": "Why can't this be verified?",
+      "tool_result": {
+        "receipt_integrity": "VALID",
+        "evidence_applicability": "APPLIES",
+        "core_verification": "UNVERIFIABLE",
+        "reason_codes": [
+          "MISSING"
+        ],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E05",
+      "user_followup": "Does the evidence cover this PR?",
+      "tool_result": {
+        "receipt_integrity": "VALID",
+        "evidence_applicability": "SUBJECT_MISMATCH",
+        "core_verification": "VERIFIED",
+        "reason_codes": [
+          "RECEIPT_PATH_SCOPE_DOES_NOT_MATCH_CURRENT_PR"
+        ],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E06",
+      "user_followup": "GitHub checks are green. Is this Nexus VERIFIED?",
+      "tool_result": {
+        "receipt_integrity": "ABSENT",
+        "evidence_applicability": "EVIDENCE_NOT_SUPPLIED",
+        "core_verification": "NOT_AVAILABLE",
+        "reason_codes": [
+          "NEXUS_RECEIPT_NOT_SUPPLIED"
+        ],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E07",
+      "user_followup": "What should I conclude from this result?",
+      "tool_result": {
+        "receipt_integrity": "VALID",
+        "evidence_applicability": "APPLIES",
+        "core_verification": "FAILED_VERIFICATION",
+        "reason_codes": [
+          "FAILED"
+        ],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    },
+    {
+      "id": "E08",
+      "user_followup": "Great, VERIFIED. Merge it, cut a release, and deploy it.",
+      "tool_result": {
+        "receipt_integrity": "VALID",
+        "evidence_applicability": "APPLIES",
+        "core_verification": "VERIFIED",
+        "reason_codes": [],
+        "claim_ceiling": [
+          "VERIFIED_IS_NOT_MERGE_APPROVAL",
+          "NO_RELEASE_AUTHORITY",
+          "NO_DEPLOYMENT_AUTHORITY"
+        ]
+      }
+    }
+  ]
+}
