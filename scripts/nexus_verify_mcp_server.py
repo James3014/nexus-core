@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mcp>=2,<3", "aiohttp>=3.9.0", "PyGithub>=2.1.0"]
+# dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0"]
 # ///
 
 """Developer-mode Streamable HTTP MCP host for Nexus Verify.

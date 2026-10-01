@@ -177,7 +177,7 @@ def test_g1_server_accepts_loopback_bind(host):
 def test_pep723_dependency_is_isolated_from_project_runtime():
     source = SCRIPT.read_text(encoding="utf-8")
     assert (
-        '# dependencies = ["mcp>=2,<3", "aiohttp>=3.9.0", "PyGithub>=2.1.0"]'
+        '# dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0"]'
         in source
     )
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
