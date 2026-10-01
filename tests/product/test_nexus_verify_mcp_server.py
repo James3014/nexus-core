@@ -295,6 +295,38 @@ def test_public_review_profile_does_not_expand_network_binding():
     assert "create_public_review_mcp_server" in source
     assert "_require_loopback(host)" in source
     assert '"public-review"' in source
+    assert "transport_security=_transport_security_settings(" in source
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("verify.snowskill.app", "verify.snowskill.app"),
+        ("VERIFY.SNOWSKILL.APP", "verify.snowskill.app"),
+    ],
+)
+def test_public_host_normalization_accepts_exact_dns_hostname(raw, expected):
+    module = _load_module()
+    assert module._normalize_public_host(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        " verify.snowskill.app",
+        "verify.snowskill.app ",
+        "https://verify.snowskill.app",
+        "verify.snowskill.app/mcp",
+        "verify.snowskill.app:443",
+        "*.snowskill.app",
+        "user@verify.snowskill.app",
+    ],
+)
+def test_public_host_normalization_rejects_ambiguous_or_broad_values(raw):
+    module = _load_module()
+    with pytest.raises(ValueError, match="public host"):
+        module._normalize_public_host(raw)
 
 
 def test_pep723_dependency_is_isolated_from_project_runtime():

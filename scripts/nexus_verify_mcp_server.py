@@ -52,6 +52,7 @@ _GITHUB_JSON_ACCEPT = "application/vnd.github+json"
 _GITHUB_DIFF_ACCEPT = "application/vnd.github.v3.diff"
 _MAX_PAGES = 100
 PUBLIC_REVIEW_GITHUB_TOKEN_ENV = "NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN"
+PUBLIC_HOST_ENV = "NEXUS_VERIFY_PUBLIC_HOST"
 MAX_PUBLIC_RECEIPT_BYTES = 512 * 1024
 PUBLIC_TOOL_META: dict[str, Any] = {
     "securitySchemes": [{"type": "noauth"}],
@@ -98,6 +99,39 @@ def _validate_public_tool_arguments(
         ).encode("utf-8")
         if len(encoded_receipt) > MAX_PUBLIC_RECEIPT_BYTES:
             raise ValueError("receipt exceeds public-review size limit")
+
+
+def _normalize_public_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("public host must be a non-empty hostname")
+    if any(token in value for token in ("://", "/", "?", "#", "*", "@")):
+        raise ValueError("public host must be a hostname without scheme, path, port, or wildcard")
+    parsed = urllib.parse.urlsplit(f"//{value}")
+    if parsed.hostname != value.lower() or parsed.port is not None:
+        raise ValueError("public host must be a hostname without scheme, path, port, or wildcard")
+    return value.lower()
+
+
+def _transport_security_settings(public_host: str | None):
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    allowed_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    allowed_origins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
+    normalized = _normalize_public_host(public_host)
+    if normalized is not None:
+        allowed_hosts.extend([normalized, f"{normalized}:*"])
+        allowed_origins.extend([f"https://{normalized}", f"https://{normalized}:*"])
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
 
 
 def _canonical_hash(value: Any) -> str:
@@ -448,6 +482,7 @@ def run_server(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     profile: str = "developer",
+    public_host: str | None = None,
 ) -> None:
     """Run a loopback Streamable HTTP server at /mcp for local validation."""
 
@@ -466,6 +501,9 @@ def run_server(
         port=port,
         stateless_http=True,
         json_response=True,
+        transport_security=_transport_security_settings(
+            public_host if profile == "public-review" else None
+        ),
     )
 
 
@@ -478,8 +516,18 @@ def main() -> None:
         choices=("developer", "public-review"),
         default="developer",
     )
+    parser.add_argument(
+        "--public-host",
+        default=os.environ.get(PUBLIC_HOST_ENV),
+        help="Exact external hostname admitted by the public-review DNS-rebinding guard.",
+    )
     args = parser.parse_args()
-    run_server(host=args.host, port=args.port, profile=args.profile)
+    run_server(
+        host=args.host,
+        port=args.port,
+        profile=args.profile,
+        public_host=args.public_host,
+    )
 
 
 if __name__ == "__main__":
