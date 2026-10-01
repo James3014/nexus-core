@@ -3,12 +3,13 @@
 # dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0"]
 # ///
 
-"""Developer-mode Streamable HTTP MCP host for Nexus Verify.
+"""Loopback Streamable HTTP MCP host for Nexus Verify.
 
-This G1 host is intentionally loopback-only. It owns MCP transport and GitHub
-read transport only. Nexus Core remains the sole evidence/verification
-authority. Public deployment, OAuth, persistence, and plugin submission are out
-of scope.
+This host supports the G1 developer profile and a G4A public-review profile for
+local pre-deployment validation. Both profiles remain loopback-only here. Nexus
+Core remains the sole evidence/verification authority. Public deployment,
+publisher identity, domain verification, and plugin submission are external
+effects and remain out of scope for this script.
 """
 
 from __future__ import annotations
@@ -48,6 +49,12 @@ _GITHUB_API_VERSION = "2022-11-28"
 _GITHUB_JSON_ACCEPT = "application/vnd.github+json"
 _GITHUB_DIFF_ACCEPT = "application/vnd.github.v3.diff"
 _MAX_PAGES = 100
+PUBLIC_REVIEW_GITHUB_TOKEN_ENV = "NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN"
+PUBLIC_TOOL_META: dict[str, Any] = {
+    "securitySchemes": [{"type": "noauth"}],
+    "openai/toolInvocation/invoking": "Checking verification evidence...",
+    "openai/toolInvocation/invoked": "Verification evidence checked",
+}
 
 RawRequester = Callable[[str, Mapping[str, str]], tuple[int, Mapping[str, str], bytes]]
 
@@ -85,15 +92,24 @@ class PublicGitHubReadPort:
         token: str | None = None,
         api_url: str = DEFAULT_GITHUB_API_URL,
         requester: RawRequester | None = None,
+        public_only: bool = False,
     ) -> None:
         self._token = token
         self._api_url = api_url.rstrip("/")
         self._requester = requester or _default_requester
+        self._public_only = public_only
 
     @classmethod
     def from_environment(cls) -> "PublicGitHubReadPort":
         token = os.environ.get("NEXUS_VERIFY_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
         return cls(token=token)
+
+    @classmethod
+    def from_public_review_environment(cls) -> "PublicGitHubReadPort":
+        """Build the review profile without accepting generic host/user GitHub tokens."""
+
+        token = os.environ.get(PUBLIC_REVIEW_GITHUB_TOKEN_ENV)
+        return cls(token=token, public_only=True)
 
     def _headers(self, accept: str) -> dict[str, str]:
         headers = {
@@ -141,6 +157,13 @@ class PublicGitHubReadPort:
         owner = urllib.parse.quote(locator.repository_owner, safe="")
         repository = urllib.parse.quote(locator.repository_name, safe="")
         return f"/repos/{owner}/{repository}"
+
+    def _require_public_repository(self, repository_path: str) -> None:
+        payload = self._json(repository_path)
+        if not isinstance(payload, dict) or not isinstance(payload.get("private"), bool):
+            raise AcquisitionError("GitHub repository visibility is malformed")
+        if payload["private"]:
+            raise PermissionError("public-review profile supports public GitHub repositories only")
 
     def _git_tree(self, repository_path: str, commit_sha: str) -> str:
         commit = self._json(f"{repository_path}/git/commits/{commit_sha}")
@@ -227,6 +250,8 @@ class PublicGitHubReadPort:
 
     def read_pull_request(self, locator: GitHubPullRequestLocator) -> Mapping[str, object]:
         repository_path = self._repo_path(locator)
+        if self._public_only:
+            self._require_public_repository(repository_path)
         pull = self._json(f"{repository_path}/pulls/{locator.pr_number}")
         if not isinstance(pull, dict):
             raise AcquisitionError("GitHub pull response is malformed")
@@ -306,8 +331,11 @@ def create_mcp_server(
         description=TOOL_DESCRIPTION,
         annotations=ToolAnnotations(
             read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
             open_world_hint=True,
         ),
+        meta=dict(PUBLIC_TOOL_META),
         structured_output=True,
     )
     def verify_tool(
@@ -329,6 +357,14 @@ def create_mcp_server(
     return server
 
 
+def create_public_review_mcp_server():
+    """Create the G4A public-review profile without enabling public networking."""
+
+    return create_mcp_server(
+        github_port_factory=PublicGitHubReadPort.from_public_review_environment
+    )
+
+
 def _require_loopback(host: str) -> str:
     if host.lower() == "localhost":
         return host
@@ -340,12 +376,23 @@ def _require_loopback(host: str) -> str:
     raise ValueError("G1 developer-mode MCP host must bind loopback only")
 
 
-def run_server(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
-    """Run the developer-mode Streamable HTTP server at /mcp."""
+def run_server(
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    profile: str = "developer",
+) -> None:
+    """Run a loopback Streamable HTTP server at /mcp for local validation."""
 
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
         raise ValueError("port must be an integer from 1 through 65535")
-    server = create_mcp_server()
+    if profile not in {"developer", "public-review"}:
+        raise ValueError("profile must be developer or public-review")
+    server = (
+        create_public_review_mcp_server()
+        if profile == "public-review"
+        else create_mcp_server()
+    )
     server.run(
         transport="streamable-http",
         host=_require_loopback(host),
@@ -356,11 +403,16 @@ def run_server(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Nexus Verify G1 MCP developer host")
+    parser = argparse.ArgumentParser(description="Run the Nexus Verify loopback MCP host")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--profile",
+        choices=("developer", "public-review"),
+        default="developer",
+    )
     args = parser.parse_args()
-    run_server(host=args.host, port=args.port)
+    run_server(host=args.host, port=args.port, profile=args.profile)
 
 
 if __name__ == "__main__":
