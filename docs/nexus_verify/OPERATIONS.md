@@ -8,6 +8,11 @@ Production/public hosting is not owned by Nexus Core truth authorities. The host
 
 The production MCP endpoint must use stable HTTPS and Streamable HTTP at a stable `/mcp` URL. Temporary tunnels do not satisfy public-review readiness.
 
+When a stable HTTPS reverse proxy forwards to the loopback MCP process, launch the
+`public-review` profile with the exact public hostname admitted through
+`--public-host` (or `NEXUS_VERIFY_PUBLIC_HOST`). DNS-rebinding protection
+remains enabled; do not use wildcard hosts or disable the Host/Origin guard.
+
 ## Authentication and GitHub access
 
 v0 is anonymous to the end user and public-repository-only.
