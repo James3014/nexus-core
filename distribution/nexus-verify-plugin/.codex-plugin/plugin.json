@@ -1,0 +1,100 @@
+{
+  "name": "nexus-verify",
+  "version": "0.1.1",
+  "description": "Verify whether code-change evidence is current and applicable to the exact GitHub pull-request state.",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Nexus Verify",
+    "shortDescription": "Verify AI change evidence",
+    "longDescription": "Nexus Verify checks whether supplied Nexus verification evidence is internally valid and still applies to the exact current public GitHub pull-request state. It is read-only and never grants code-review, merge, release, deployment, security-audit, or production authority.",
+    "developerName": "智雪創旅股份有限公司",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Verify code-change evidence"
+    ],
+    "websiteURL": "https://verify.snowskill.app/",
+    "supportURL": "https://verify.snowskill.app/support/",
+    "privacyPolicyURL": "https://verify.snowskill.app/privacy/",
+    "termsOfServiceURL": "https://verify.snowskill.app/terms/",
+    "defaultPrompt": [
+      "The agent says this PR is done. Verify whether the evidence is current.",
+      "Does this Nexus receipt still apply to the current PR head?",
+      "CI is green, but verify whether the evidence matches this exact code state."
+    ],
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg"
+  },
+  "extensions": {
+    "com.openai": {
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Verify an AI completion claim against the current public PR state",
+              "prompt": "Claude says https://github.com/James3014/nexus-core/pull/74 is finished. Verify whether the evidence is current.",
+              "tools_triggered": "verify_code_change_evidence",
+              "expected_behavior": "Call Nexus Verify for PR 74 and report the bounded evidence result. With no receipt supplied, state EVIDENCE_NOT_SUPPLIED / NOT_AVAILABLE and do not claim VERIFIED."
+            },
+            {
+              "description": "Check whether verification evidence still applies to the current PR head",
+              "prompt": "Does the verification evidence still apply to the current head of https://github.com/James3014/nexus-core/pull/74?",
+              "tools_triggered": "verify_code_change_evidence",
+              "expected_behavior": "Call Nexus Verify using owner James3014, repository nexus-core, PR 74. Report the returned applicability and verification states without granting merge authority."
+            },
+            {
+              "description": "Treat green CI as insufficient for a Nexus VERIFIED claim without a receipt",
+              "prompt": "CI is green on https://github.com/James3014/nexus-core/pull/74. Verify whether that is enough for a Nexus VERIFIED claim.",
+              "tools_triggered": "verify_code_change_evidence",
+              "expected_behavior": "Call Nexus Verify and explain that no supplied Nexus receipt means the result is not Nexus VERIFIED, even if GitHub checks are green."
+            },
+            {
+              "description": "Verify evidence binding rather than performing a generic code review",
+              "prompt": "The agent says https://github.com/James3014/nexus-core/pull/74 is done. Check the evidence binding, not the code style.",
+              "tools_triggered": "verify_code_change_evidence",
+              "expected_behavior": "Call Nexus Verify and return only the evidence-applicability result and claim ceiling; do not perform a style review."
+            },
+            {
+              "description": "Explain why a public PR cannot be considered verified when no receipt is supplied",
+              "prompt": "Why can't https://github.com/James3014/nexus-core/pull/74 be considered Nexus VERIFIED from the information available here?",
+              "tools_triggered": "verify_code_change_evidence",
+              "expected_behavior": "Call Nexus Verify and explain the bounded reason code NEXUS_RECEIPT_NOT_SUPPLIED, preserving that VERIFIED would not imply merge, release, or deployment approval."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Generic code-quality review is outside Nexus Verify",
+              "prompt": "Review the code quality of https://github.com/James3014/nexus-core/pull/74 and suggest improvements."
+            },
+            {
+              "description": "Merge execution and approval are outside Nexus Verify",
+              "prompt": "Merge https://github.com/James3014/nexus-core/pull/74 for me."
+            },
+            {
+              "description": "Security vulnerability review is outside Nexus Verify",
+              "prompt": "Do a security vulnerability review of https://github.com/James3014/nexus-core/pull/74."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "Nexus Verify does not sell products or process payments."
+      },
+      "publication": {
+        "release_notes": "Initial public-review candidate for Nexus Verify. Adds a single read-only public-GitHub evidence verification tool, stable HTTPS MCP endpoint, bounded schemas, policy URLs, and reviewer test cases."
+      }
+    }
+  },
+  "author": {
+    "name": "智雪創旅股份有限公司",
+    "email": "service@diy.ski",
+    "url": "https://verify.snowskill.app/"
+  },
+  "homepage": "https://verify.snowskill.app/",
+  "repository": "https://github.com/James3014/nexus-core",
+  "license": "Apache-2.0",
+  "keywords": [
+    "verification",
+    "github",
+    "ai-agents",
+    "evidence"
+  ]
+}
