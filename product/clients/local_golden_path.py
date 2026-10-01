@@ -692,18 +692,20 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
     }
 
 
-def validate_verification_receipt(
-    receipt_path: str | Path, *, repo: str | Path | None = None
+def validate_verification_receipt_payload(
+    payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
-    """Independently recompute a local verification receipt from preserved inputs."""
+    """Independently recompute a local verification receipt payload.
 
+    This is the transport-neutral validation seam used by file-based local
+    readback and read-only remote adapters. It performs no network access and
+    does not execute repository verifier commands.
+    """
+
+    if not isinstance(payload, Mapping):
+        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+    payload = dict(payload)
     reasons: list[str] = []
-    try:
-        payload = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
-    if not isinstance(payload, dict):
-        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     product = payload.get("product")
     if (
         payload.get("kind") != RECEIPT_KIND
@@ -825,6 +827,20 @@ def validate_verification_receipt(
     return {"valid": not reasons, "reason_codes": sorted(set(reasons))}
 
 
+def validate_verification_receipt(
+    receipt_path: str | Path, *, repo: str | Path | None = None
+) -> dict[str, Any]:
+    """Independently recompute a local verification receipt from preserved inputs."""
+
+    try:
+        payload = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+    if not isinstance(payload, dict):
+        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+    return validate_verification_receipt_payload(payload, repo=repo)
+
+
 __all__ = [
     "CONFIG_DIRECTORY",
     "LocalCheckError",
@@ -832,4 +848,5 @@ __all__ = [
     "doctor_repository",
     "init_repository",
     "validate_verification_receipt",
+    "validate_verification_receipt_payload",
 ]
