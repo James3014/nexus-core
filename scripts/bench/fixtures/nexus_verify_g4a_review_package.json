@@ -1,0 +1,183 @@
+{
+  "schema": "nexus.verify.g4a.public-review-package.v1",
+  "status": "INTERNAL_REVIEW_PACKAGE",
+  "claim_ceiling": "INTERNAL_PUBLIC_REVIEW_READINESS_ONLY",
+  "product": {
+    "name": "Nexus Verify",
+    "subtitle": "Verify whether code-change evidence still applies to the exact current pull request.",
+    "description": "Read-only evidence-applicability verification for public GitHub pull requests. Nexus Verify checks optional Nexus receipt integrity and current PR binding; it does not review code, execute repository code, write GitHub state, or authorize merge, release, or deployment.",
+    "no_ui": true,
+    "screenshots": []
+  },
+  "mcp": {
+    "tool_name": "verify_code_change_evidence",
+    "tool_count": 1,
+    "auth_mode": "noauth",
+    "repository_scope": "PUBLIC_GITHUB_ONLY",
+    "user_oauth": false,
+    "arbitrary_repository_execution": false,
+    "github_writes": false,
+    "merge_release_deploy_authority": false,
+    "stable_schema_ids": [
+      "nexus.verify-code-change-evidence.input.v1",
+      "nexus.verify-code-change-evidence.output.v1"
+    ],
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    },
+    "meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "openai/toolInvocation/invoking": "Checking verification evidence...",
+      "openai/toolInvocation/invoked": "Verification evidence checked"
+    }
+  },
+  "listing": {
+    "website": {
+      "source": "docs/nexus_verify/WEBSITE_COPY.md",
+      "https_url": null,
+      "status": "UNBOUND_EXTERNAL"
+    },
+    "support": {
+      "source": "docs/nexus_verify/SUPPORT.md",
+      "https_url": null,
+      "status": "UNBOUND_EXTERNAL"
+    },
+    "privacy": {
+      "source": "docs/nexus_verify/PRIVACY_POLICY_DRAFT.md",
+      "https_url": null,
+      "status": "UNBOUND_EXTERNAL"
+    },
+    "terms": {
+      "source": "docs/nexus_verify/TERMS_OF_SERVICE_DRAFT.md",
+      "https_url": null,
+      "status": "UNBOUND_EXTERNAL"
+    },
+    "demo_recording_url": null,
+    "demo_recording_status": "UNBOUND_EXTERNAL",
+    "logo_status": "UNBOUND_EXTERNAL",
+    "default_prompts": [
+      "Verify whether the evidence for this PR is still current.",
+      "Does this Nexus receipt apply to the current pull request?",
+      "The agent says this change is done. Verify the evidence."
+    ],
+    "release_notes": "Initial read-only public-review candidate for evidence applicability on public GitHub pull requests. One noauth tool; no UI; no private repository support; no write actions."
+  },
+  "review_cases": {
+    "positive": [
+      {
+        "id": "R+1",
+        "prompt": "Verify whether the evidence for https://github.com/acme/widget/pull/123 is still current.",
+        "expected_action": "CALL_TOOL",
+        "expected_locator": {
+          "repository_owner": "acme",
+          "repository_name": "widget",
+          "pr_number": 123
+        },
+        "expected_boundary": "Evidence result only; no merge/release/deploy approval."
+      },
+      {
+        "id": "R+2",
+        "prompt": "CI is green, but did the code change after verification on https://github.com/alpha/payments/pull/41?",
+        "expected_action": "CALL_TOOL",
+        "expected_locator": {
+          "repository_owner": "alpha",
+          "repository_name": "payments",
+          "pr_number": 41
+        },
+        "expected_boundary": "Green checks alone do not become Nexus VERIFIED."
+      },
+      {
+        "id": "R+3",
+        "prompt": "Check whether the Nexus receipt for https://github.com/fleet/router/pull/66 was tampered with or is stale.",
+        "expected_action": "CALL_TOOL",
+        "expected_locator": {
+          "repository_owner": "fleet",
+          "repository_name": "router",
+          "pr_number": 66
+        },
+        "expected_boundary": "Tampered or stale evidence fails closed."
+      },
+      {
+        "id": "R+4",
+        "prompt": "Does the supplied verification evidence cover the changed-file scope of https://github.com/blue/worker/pull/11?",
+        "expected_action": "CALL_TOOL",
+        "expected_locator": {
+          "repository_owner": "blue",
+          "repository_name": "worker",
+          "pr_number": 11
+        },
+        "expected_boundary": "Scope mismatch must not be reported as applicable."
+      },
+      {
+        "id": "R+5",
+        "prompt": "Without rerunning repository code, verify the existing evidence for https://github.com/quiet/lib/pull/29.",
+        "expected_action": "CALL_TOOL",
+        "expected_locator": {
+          "repository_owner": "quiet",
+          "repository_name": "lib",
+          "pr_number": 29
+        },
+        "expected_boundary": "No repository execution."
+      }
+    ],
+    "negative": [
+      {
+        "id": "R-1",
+        "prompt": "Review the code quality of https://github.com/acme/widget/pull/123.",
+        "expected_action": "DO_NOT_CALL",
+        "reason": "Generic code review is outside Nexus Verify."
+      },
+      {
+        "id": "R-2",
+        "prompt": "Can https://github.com/snow/booking/pull/52 be merged now? Give me the approval decision.",
+        "expected_action": "DO_NOT_CALL",
+        "reason": "Merge approval is outside Nexus Verify authority."
+      },
+      {
+        "id": "R-3",
+        "prompt": "Deploy https://github.com/example/service/pull/204 to production.",
+        "expected_action": "DO_NOT_CALL",
+        "reason": "Deployment is outside Nexus Verify authority."
+      }
+    ]
+  },
+  "policy_artifacts": {
+    "public_review": "docs/nexus_verify/PUBLIC_REVIEW_READINESS.md",
+    "privacy": "docs/nexus_verify/PRIVACY_POLICY_DRAFT.md",
+    "terms": "docs/nexus_verify/TERMS_OF_SERVICE_DRAFT.md",
+    "support": "docs/nexus_verify/SUPPORT.md",
+    "operations": "docs/nexus_verify/OPERATIONS.md",
+    "website": "docs/nexus_verify/WEBSITE_COPY.md"
+  },
+  "external_activation": {
+    "publisher_identity_verification": "NOT_RUN",
+    "apps_write_permission": "NOT_OBSERVED",
+    "apps_read_permission": "NOT_OBSERVED",
+    "stable_https_mcp_endpoint": "UNBOUND_EXTERNAL",
+    "website_https_url": "UNBOUND_EXTERNAL",
+    "support_https_url": "UNBOUND_EXTERNAL",
+    "privacy_https_url": "UNBOUND_EXTERNAL",
+    "terms_https_url": "UNBOUND_EXTERNAL",
+    "domain_verification": "NOT_RUN",
+    "production_tool_scan": "NOT_RUN",
+    "demo_recording_url": "UNBOUND_EXTERNAL",
+    "portal_submission": "NOT_RUN",
+    "public_review": "NOT_RUN",
+    "publication": "NOT_RUN"
+  },
+  "source_basis": [
+    "https://developers.openai.com/plugins/plugin-guidelines",
+    "https://developers.openai.com/plugins/deploy/app-review",
+    "https://developers.openai.com/plugins/deploy/submission",
+    "https://developers.openai.com/plugins/build/mcp-server",
+    "https://developers.openai.com/plugins/build/auth",
+    "https://developers.openai.com/plugins/guides/security-privacy"
+  ]
+}
