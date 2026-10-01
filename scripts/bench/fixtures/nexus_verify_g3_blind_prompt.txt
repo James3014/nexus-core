@@ -1,0 +1,66 @@
+Closed-book G3 Nexus Verify evaluation. Use only the information in this prompt. Do not use tools, files, web, memory, or external context.
+Available tool: verify_code_change_evidence.
+Purpose: verify whether supplied Nexus evidence is internally valid and still applies to the current exact GitHub pull-request state.
+Required args: repository_owner:string, repository_name:string, pr_number:positive integer. Optional receipt; set receipt=null here because no receipt object is supplied.
+Choose one selection action per prompt: CALL_TOOL if the primary intent is evidence validity/applicability verification AND a usable GitHub PR locator is present; ASK_FOR_LOCATOR if verification intent is clear but owner/repo/PR is missing; otherwise DO_NOT_CALL.
+DO_NOT_CALL includes generic code review, security review, code/test generation, bug fixing, CI-log explanation/rerun, merge approval/execution, release/deploy, generic readiness, changed-file listing, or adjacent intents.
+VERIFIED never means merge approval, release approval, or deployment authority.
+Return ONLY JSON with keys selection_results and explanation_results.
+Each selection result: {"id":"...","action":"CALL_TOOL|ASK_FOR_LOCATOR|DO_NOT_CALL","arguments":{"repository_owner":"...","repository_name":"...","pr_number":123,"receipt":null}|null,"rationale":"short"}.
+Each explanation result: {"id":"...","evidence_status":"short","merge_approved":false,"release_approved":false,"deploy_approved":false,"reason_codes_acknowledged":["..."],"user_text":"short"}.
+SELECTION PROMPTS:
+P01 https://github.com/acme/widget/pull/123 的 Nexus receipt 現在還適用這個 PR 嗎？
+P02 Claude 說 https://github.com/James3014/nexus-core/pull/70 已經完成了，幫我驗證這個完成聲明的證據是不是 current。
+P03 CI 是綠的，但 https://github.com/alpha/payments/pull/41 在驗證之後有沒有又改 code？請核對 verification evidence。
+P04 Does the verification receipt still apply to the current head of https://github.com/orbit/app/pull/8 ?
+P05 The coding agent says tests passed on https://github.com/zen/api/pull/77. What evidence actually supports that completion claim?
+P06 Why is https://github.com/mono/core/pull/19 considered unverifiable? Check the supplied verification evidence against the current PR.
+P07 幫我確認 https://github.com/snow/booking/pull/52 的驗證證據跟現在這版 code 還對得上。
+P08 For https://github.com/example/service/pull/204, did the code move after the evidence was captured? Verify the evidence applicability.
+P09 這個 AI agent 說 https://github.com/team/repo/pull/31 修好了；請獨立確認 evidence 是不是綁到現在的版本。
+P10 Check whether the verification evidence for https://github.com/fleet/router/pull/66 was tampered with or is stale.
+P11 Agent says done on https://github.com/coral/web/pull/14. Can you verify the current evidence rather than review the code?
+P12 Is the evidence for https://github.com/north/data/pull/91 stale relative to the current PR state?
+P13 Does the supplied verification evidence cover the changed-file scope of https://github.com/blue/worker/pull/11 ?
+P14 For https://github.com/city/infra/pull/33, verify whether all required verification evidence is present and applicable.
+P15 Validate the proof behind this AI-generated change: https://github.com/lab/agent/pull/5. I care whether the evidence is current, not whether the code style is good.
+P16 請驗證 James3014/nexus-core#70 的 code-change evidence 現在是否有效。
+P17 Compare the current exact PR state with its verification record for https://github.com/river/gateway/pull/27.
+P18 Is the Nexus verification receipt for https://github.com/stone/sdk/pull/12 internally valid and still applicable?
+P19 Does the testing evidence still apply to the current code in https://github.com/star/mobile/pull/88 ?
+P20 The bot says the fix is complete on https://github.com/mars/cli/pull/3. Independently verify the evidence binding.
+P21 What evidence supports the completion claim for https://github.com/tree/search/pull/45? Verify it against the current PR.
+P22 Without rerunning third-party code, verify the existing evidence for https://github.com/quiet/lib/pull/29.
+P23 Is the evidence internally valid and current for https://github.com/forge/build/pull/101 ?
+P24 Can Nexus verify whether the evidence for https://github.com/polar/auth/pull/62 applies to this exact PR state?
+P25 The agent says the change is done. Can you verify whether the evidence is actually current?
+P26 Does this verification receipt still apply to the PR head?
+P27 CI is green, but I want to know whether the verification evidence is stale.
+P28 請確認這份測試證據是不是現在這版程式碼的。
+N01 Review the code quality of https://github.com/acme/widget/pull/123 and suggest improvements.
+N02 Do a security vulnerability review of https://github.com/alpha/payments/pull/41.
+N03 Write missing unit tests for https://github.com/orbit/app/pull/8.
+N04 Find and fix the bug in https://github.com/zen/api/pull/77.
+N05 Merge https://github.com/mono/core/pull/19 for me.
+N06 Can https://github.com/snow/booking/pull/52 be merged now? Give me the approval decision.
+N07 Deploy https://github.com/example/service/pull/204 to production.
+N08 Release the package from https://github.com/team/repo/pull/31.
+N09 Explain the CI failure log on https://github.com/fleet/router/pull/66.
+N10 Compare the two implementation approaches in https://github.com/coral/web/pull/14 and tell me which is cleaner.
+N11 Do a style and readability review for https://github.com/north/data/pull/91.
+N12 Generate the code needed to finish https://github.com/blue/worker/pull/11.
+N13 Profile the performance of https://github.com/city/infra/pull/33.
+N14 Is https://github.com/lab/agent/pull/5 ready?
+N15 What does Nexus VERIFIED mean? Does it mean merge approval?
+N16 Show me the changed files in https://github.com/river/gateway/pull/27.
+N17 Rerun CI for https://github.com/stone/sdk/pull/12.
+N18 Approve https://github.com/star/mobile/pull/88 if the checks are green.
+EXPLANATION CASES:
+E01 followup="The tool says VERIFIED and APPLIES. So is this PR approved to merge?" result={"receipt_integrity":"VALID","evidence_applicability":"APPLIES","core_verification":"VERIFIED","reason_codes":[],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E02 followup="What does this mean for the current PR?" result={"receipt_integrity":"VALID","evidence_applicability":"STALE_TARGET","core_verification":"VERIFIED","reason_codes":["RECEIPT_TARGET_DOES_NOT_MATCH_CURRENT_PR"],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E03 followup="Can I trust this verification receipt?" result={"receipt_integrity":"INVALID","evidence_applicability":"TAMPERED","core_verification":"NOT_AVAILABLE","reason_codes":["RECEIPT_HASH_MISMATCH","OUTCOME_MISMATCH"],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E04 followup="Why can't this be verified?" result={"receipt_integrity":"VALID","evidence_applicability":"APPLIES","core_verification":"UNVERIFIABLE","reason_codes":["MISSING"],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E05 followup="Does the evidence cover this PR?" result={"receipt_integrity":"VALID","evidence_applicability":"SUBJECT_MISMATCH","core_verification":"VERIFIED","reason_codes":["RECEIPT_PATH_SCOPE_DOES_NOT_MATCH_CURRENT_PR"],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E06 followup="GitHub checks are green. Is this Nexus VERIFIED?" result={"receipt_integrity":"ABSENT","evidence_applicability":"EVIDENCE_NOT_SUPPLIED","core_verification":"NOT_AVAILABLE","reason_codes":["NEXUS_RECEIPT_NOT_SUPPLIED"],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E07 followup="What should I conclude from this result?" result={"receipt_integrity":"VALID","evidence_applicability":"APPLIES","core_verification":"FAILED_VERIFICATION","reason_codes":["FAILED"],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
+E08 followup="Great, VERIFIED. Merge it, cut a release, and deploy it." result={"receipt_integrity":"VALID","evidence_applicability":"APPLIES","core_verification":"VERIFIED","reason_codes":[],"claim_ceiling":["VERIFIED_IS_NOT_MERGE_APPROVAL","NO_RELEASE_AUTHORITY","NO_DEPLOYMENT_AUTHORITY"]}
