@@ -71,6 +71,7 @@ flowchart TD
         product.benchmark["product.benchmark"]
     end
 
+    product.acquisition --> product.protocol
     product.adapters --> product.certification
     product.adapters --> product.evidence
     product.adapters --> product.kernel
