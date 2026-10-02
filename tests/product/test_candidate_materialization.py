@@ -53,11 +53,25 @@ from product.acquisition.candidate_materialization import (
     acquire_and_verify_candidate,
     validate_candidate_acquisition_receipt,
 )
+from product.adapters.generic_verification import verify_generic_changeset
 from product.protocol.generic_verification import (
     acceptance_contract_hash,
     change_manifest_hash,
     change_set_hash,
 )
+
+
+def _acquire(request: CandidateAcquisitionRequest) -> Any:
+    """Test-local wrapper: pre-binds verify_generic_changeset as verify_fn.
+
+    ``acquire_and_verify_candidate`` accepts the verifier as an injected
+    callable so that ``product.acquisition`` does not directly import
+    ``product.adapters``.  Tests are not part of the product source tree,
+    so importing from both layers here is fine; this wrapper avoids
+    repeating the binding at every call site.
+    """
+    return acquire_and_verify_candidate(request, verify_generic_changeset)
+
 
 # ---------------------------------------------------------------------------
 # Git helpers
@@ -298,7 +312,7 @@ def test_profile_hash_tamper_fails_closed(base_repo: Path, tmp_path: Path) -> No
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "PROFILE_HASH_MISMATCH"
     # No receipt should exist for this failed-closed request.
@@ -327,7 +341,7 @@ def test_verifier_id_mismatch_fails_closed(base_repo: Path, tmp_path: Path) -> N
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "VERIFIER_ID_MISMATCH"
 
@@ -358,7 +372,7 @@ def test_exact_candidate_despite_caller_worktree_movement(
     _git(base_repo, "commit", "-m", "post-request movement")
 
     # The acquisition must still materialise the declared candidate_head/tree.
-    result = acquire_and_verify_candidate(req)
+    result = _acquire(req)
 
     # Receipt should record the original declared tree, not the post-movement tree.
     receipt_data = json.loads(result.receipt_path.read_text(encoding="utf-8"))
@@ -382,7 +396,7 @@ def test_exact_request_readback_without_rerun(base_repo: Path, tmp_path: Path) -
     req = _build_request(base_repo, receipt_dir=receipt_dir)
 
     # First run.
-    first = acquire_and_verify_candidate(req)
+    first = _acquire(req)
     assert not first.replayed
     assert first.receipt_path.exists()
 
@@ -390,7 +404,7 @@ def test_exact_request_readback_without_rerun(base_repo: Path, tmp_path: Path) -
     receipt_count_before = len(list(receipt_dir.glob("*.json")))
 
     # Second run with the same request.
-    second = acquire_and_verify_candidate(req)
+    second = _acquire(req)
     assert second.replayed
     assert second.request_hash == first.request_hash
     assert second.status == first.status
@@ -415,7 +429,7 @@ def test_replay_conflict_same_hash_different_request_id(
 
     # First request.
     req1 = _build_request(base_repo, receipt_dir=receipt_dir, request_id="req-001")
-    first = acquire_and_verify_candidate(req1)
+    first = _acquire(req1)
     assert not first.replayed
 
     # Build a *second* request with a different request_id but the same request_hash
@@ -436,7 +450,7 @@ def test_replay_conflict_same_hash_different_request_id(
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req2)
+        _acquire(req2)
 
     assert exc_info.value.reason_code in ("REQUEST_HASH_MISMATCH", "REPLAY_CONFLICT")
 
@@ -452,7 +466,7 @@ def test_receipt_tamper_detected(base_repo: Path, tmp_path: Path) -> None:
     """
     receipt_dir = tmp_path / "receipts"
     req = _build_request(base_repo, receipt_dir=receipt_dir)
-    result = acquire_and_verify_candidate(req)
+    result = _acquire(req)
     assert result.receipt_path.exists()
 
     # First confirm the receipt is valid as-is.
@@ -489,7 +503,7 @@ def test_contract_hash_tamper_fails_closed(base_repo: Path, tmp_path: Path) -> N
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "CONTRACT_HASH_MISMATCH"
 
@@ -539,7 +553,7 @@ def test_verifier_that_mutates_tracked_file_fails_closed(
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "CANDIDATE_TREE_DRIFT", (
         f"Expected CANDIDATE_TREE_DRIFT but got {exc_info.value.reason_code!r}; "
@@ -606,7 +620,7 @@ def test_inter_verifier_side_effect_contamination_fails_closed(
 
     # B should fail because A's marker.tmp is not present (fresh worktree).
     # The result should be FAILED_VERIFICATION, not VERIFIED.
-    result = acquire_and_verify_candidate(req)
+    result = _acquire(req)
     assert result.status != "VERIFIED", (
         "Expected FAILED_VERIFICATION because verifier B should not see "
         "verifier A's marker.tmp in a fresh worktree, but got VERIFIED – "
@@ -642,7 +656,7 @@ def test_same_id_different_material_fails_closed(
 
     # First, complete a successful acquisition with the real contract.
     req1 = _build_request(base_repo, receipt_dir=receipt_dir, request_id="req-mat-001")
-    result1 = acquire_and_verify_candidate(req1)
+    result1 = _acquire(req1)
     assert not result1.replayed
 
     # Now construct a request with a *different* contract but the *same*
@@ -675,7 +689,7 @@ def test_same_id_different_material_fails_closed(
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req2)
+        _acquire(req2)
 
     assert exc_info.value.reason_code == "REQUEST_HASH_MISMATCH", (
         f"Expected REQUEST_HASH_MISMATCH but got {exc_info.value.reason_code!r}; "
@@ -701,7 +715,7 @@ def test_cleanup_failure_fails_closed(base_repo: Path, tmp_path: Path) -> None:
         ),
     ):
         with pytest.raises(CandidateAcquisitionError) as exc_info:
-            acquire_and_verify_candidate(req)
+            _acquire(req)
 
     assert exc_info.value.reason_code == "CLEANUP_FAILED"
     assert not receipt_dir.exists() or not any(receipt_dir.glob("*.json"))
@@ -723,7 +737,7 @@ def test_tampered_matching_receipt_fails_closed(base_repo: Path, tmp_path: Path)
     req = _build_request(base_repo, receipt_dir=receipt_dir)
 
     # Complete a real acquisition first.
-    result = acquire_and_verify_candidate(req)
+    result = _acquire(req)
     assert result.receipt_path.exists()
 
     # Tamper with the receipt: change the outcome but leave receipt_hash stale.
@@ -738,7 +752,7 @@ def test_tampered_matching_receipt_fails_closed(base_repo: Path, tmp_path: Path)
 
     # Second call with the same request should fail closed on the tampered receipt.
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "TAMPERED_RECEIPT", (
         f"Expected TAMPERED_RECEIPT but got {exc_info.value.reason_code!r}; "
@@ -796,7 +810,7 @@ def test_source_not_ancestor_fails_closed(base_repo: Path, tmp_path: Path) -> No
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "SOURCE_NOT_ANCESTOR"
 
@@ -847,7 +861,7 @@ def test_missing_change_set_hash_fails_closed(base_repo: Path, tmp_path: Path) -
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req)
+        _acquire(req)
 
     assert exc_info.value.reason_code == "MISSING_CHANGE_SET_HASH"
 
@@ -917,7 +931,7 @@ def test_readback_different_material_fails_closed(base_repo: Path, tmp_path: Pat
 
     # First: complete a real acquisition.
     req1 = _build_request(base_repo, receipt_dir=receipt_dir, request_id="req-rb-001")
-    result1 = acquire_and_verify_candidate(req1)
+    result1 = _acquire(req1)
     assert not result1.replayed
 
     # Build a second request with a different candidate_tree but *force* the
@@ -943,7 +957,7 @@ def test_readback_different_material_fails_closed(base_repo: Path, tmp_path: Pat
     # reach the readback cross-bind (H).  Either error is acceptable –
     # both represent the correct fail-closed behaviour.
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req2)
+        _acquire(req2)
 
     assert exc_info.value.reason_code in (
         "REQUEST_HASH_MISMATCH",
@@ -965,7 +979,7 @@ def test_replay_validates_actual_contract_before_readback(
     """Changed contract content cannot reuse an old expected hash/receipt."""
     receipt_dir = tmp_path / "receipts"
     req1 = _build_request(base_repo, receipt_dir=receipt_dir, request_id="req-stale-contract")
-    first = acquire_and_verify_candidate(req1)
+    first = _acquire(req1)
     assert first.receipt_path.exists()
 
     changed_contract = dict(req1.acceptance_contract)
@@ -987,7 +1001,7 @@ def test_replay_validates_actual_contract_before_readback(
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req2)
+        _acquire(req2)
 
     assert exc_info.value.reason_code == "CONTRACT_HASH_MISMATCH"
 
@@ -998,7 +1012,7 @@ def test_replay_validates_actual_profile_before_readback(
     """Changed profile content cannot reuse an old expected hash/receipt."""
     receipt_dir = tmp_path / "receipts"
     req1 = _build_request(base_repo, receipt_dir=receipt_dir, request_id="req-stale-profile")
-    first = acquire_and_verify_candidate(req1)
+    first = _acquire(req1)
     assert first.receipt_path.exists()
 
     changed_profile = VerificationAcquisitionProfile(
@@ -1025,7 +1039,7 @@ def test_replay_validates_actual_profile_before_readback(
     )
 
     with pytest.raises(CandidateAcquisitionError) as exc_info:
-        acquire_and_verify_candidate(req2)
+        _acquire(req2)
 
     assert exc_info.value.reason_code == "PROFILE_HASH_MISMATCH"
 
@@ -1050,7 +1064,7 @@ def test_temp_root_cleanup_failure_fails_closed_without_receipt(
         side_effect=cleanup_then_fail,
     ):
         with pytest.raises(CandidateAcquisitionError) as exc_info:
-            acquire_and_verify_candidate(req)
+            _acquire(req)
 
     assert exc_info.value.reason_code == "CLEANUP_FAILED"
     assert not receipt_dir.exists() or not any(receipt_dir.glob("*.json"))

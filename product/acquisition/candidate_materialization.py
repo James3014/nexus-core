@@ -2,8 +2,15 @@
 
 This module materialises an *exact* candidate commit/tree in a private detached
 Git worktree, executes a set of pre-bound verifier commands, builds the
-canonical VerificationPlan/EvidenceBundle structures, calls
-:func:`verify_generic_changeset`, and writes a hash-bound Core-owned receipt.
+canonical VerificationPlan/EvidenceBundle structures, invokes the caller-supplied
+``verify_fn`` (e.g. :func:`product.adapters.generic_verification.verify_generic_changeset`),
+and writes a hash-bound Core-owned receipt.
+
+The verifier function is injected by the caller rather than imported at module
+level, keeping ``product.acquisition`` within its legal dependency boundary
+(only ``product.protocol``).  A legally permitted orchestration layer must
+supply the canonical Core verifier implementation; this carrying layer does
+not choose or own verification authority.
 
 Design constraints (slice-1):
 * Fails closed when any supplied hash mismatches the re-computed value.
@@ -36,9 +43,8 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
-from product.adapters.generic_verification import verify_generic_changeset
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -794,8 +800,18 @@ def _validate_receipt_material_crossbind(
 
 def acquire_and_verify_candidate(
     request: CandidateAcquisitionRequest,
+    verify_fn: Callable[[dict[str, Any]], tuple[int, dict[str, Any]]],
 ) -> CandidateAcquisitionResult:
     """Materialise, verify, and receipt an exact candidate.
+
+    ``verify_fn`` is the callable responsible for the generic changeset
+    verification step (step 7).  It must accept a generic verification request
+    payload dict and return ``(http_status: int, response: dict)``, matching
+    the interface of :func:`product.adapters.generic_verification.verify_generic_changeset`.
+    The caller is responsible for supplying the canonical Core verifier
+    implementation from a layer whose architecture contract permits that
+    dependency.  This module does not import ``product.adapters`` directly and
+    does not gain authority to select an alternate verifier.
 
     Fail-closed contract:
     A. Re-derive and validate request_hash from all material inputs BEFORE
@@ -1008,7 +1024,7 @@ def acquire_and_verify_candidate(
         artifacts=artifacts,
         request_id=request.acquisition_request_id,
     )
-    http_status, core_response = verify_generic_changeset(generic_request)
+    http_status, core_response = verify_fn(generic_request)
 
     # -----------------------------------------------------------------------
     # 8. Write hash-bound Core-owned receipt.
