@@ -23,6 +23,10 @@ from product.clients.local_golden_path import (
     init_repository,
 )
 from product.runtime.auth import AuthSecurityError, read_bearer_token
+from product.runtime.candidate_acquisition import (
+    make_candidate_acquisition_input_error,
+    run_candidate_acquisition,
+)
 from product.runtime.schemas import (
     validate_certification_request,
     validate_receipt_verify_request,
@@ -269,6 +273,48 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_acquire(args: argparse.Namespace) -> int:
+    """Machine-readable candidate acquisition command.
+
+    Reads exactly one JSON request document from a file path or stdin,
+    delegates to the runtime facade, emits exactly one JSON result on stdout,
+    and returns a non-zero exit code on any error.
+    """
+
+    def emit_input_error(reason_code: str, detail: str) -> int:
+        result = make_candidate_acquisition_input_error(reason_code, detail)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        sys.stderr.write(f"acquire: {reason_code}: {detail}\n")
+        return 2
+
+    request_source = getattr(args, "request", None)
+    try:
+        if request_source is None or request_source == "-":
+            raw = sys.stdin.read()
+        else:
+            req_path = Path(request_source)
+            if not req_path.is_file():
+                return emit_input_error(
+                    "REQUEST_FILE_NOT_FOUND",
+                    f"request file not found: {request_source}",
+                )
+            raw = req_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return emit_input_error("REQUEST_READ_ERROR", f"cannot read request: {exc}")
+
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return emit_input_error(
+            "JSON_PARSE_ERROR",
+            f"malformed JSON request at line {exc.lineno} column {exc.colno}",
+        )
+
+    result, exit_code = run_candidate_acquisition(doc, stderr_diag=True)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return exit_code
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     path = init_repository(
         args.repo,
@@ -379,6 +425,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = subparsers.add_parser("check", help="Run local deterministic verification")
     p_check.add_argument("--repo", default=".", help="Git repository (default: current)")
 
+    # Machine-readable candidate acquisition (issue-1312).
+    p_acquire = subparsers.add_parser(
+        "acquire",
+        help="Machine-readable candidate acquisition (reads a JSON request, emits a JSON result)",
+    )
+    p_acquire.add_argument(
+        "--request",
+        default=None,
+        metavar="FILE",
+        help="Path to acquisition request JSON file, or '-' to read from stdin (default: stdin)",
+    )
+
     return parser
 
 
@@ -401,6 +459,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_doctor(args)
         elif args.command == "check":
             return cmd_check(args)
+        elif args.command == "acquire":
+            return cmd_acquire(args)
         else:
             sys.stderr.write(f"unknown command: {args.command}\n")
             return 2
