@@ -291,18 +291,21 @@ def _materialize_target_tree(repo: Path, head: str) -> str:
         index_path = Path(directory) / "index"
         env = {"GIT_INDEX_FILE": str(index_path)}
         _git_stdout(repo, "read-tree", head, env=env)
-        add = _run_git(
-            repo,
-            "add",
-            "-A",
-            "--",
-            ".",
-            f":(exclude){CONFIG_DIRECTORY}",
-            f":(exclude){CONFIG_DIRECTORY}/**",
-            env=env,
-        )
+        add = _run_git(repo, "add", "-A", "--", ".", env=env)
         if add.returncode != 0:
             raise LocalCheckError("GIT_TARGET_MATERIALIZATION_FAILED", add.stderr.strip())
+
+        _run_git(
+            repo,
+            "rm",
+            "-r",
+            "--cached",
+            "--ignore-unmatch",
+            "--quiet",
+            "--",
+            CONFIG_DIRECTORY,
+            env=env,
+        )
         return _git_stdout(repo, "write-tree", env=env)
 
 
@@ -375,6 +378,35 @@ def _manifest_from_trees(repo: Path, source_tree: str, target_tree: str) -> dict
 
 def _snapshot(repo: Path, base_ref: str) -> _GitSnapshot:
     source_commit, head = _resolve_base_and_head(repo, base_ref)
+
+    ignored = _run_git(
+        repo,
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z",
+        text=False,
+    )
+    if ignored.returncode != 0:
+        raise LocalCheckError("GIT_COMMAND_FAILED", "failed to list ignored files")
+
+    ignored_paths = []
+    if ignored.stdout:
+        for p in ignored.stdout.split(b"\0"):
+            if not p:
+                continue
+            try:
+                path_str = p.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise LocalCheckError("IGNORED_RESIDUE", "non-UTF-8 path") from exc
+            if path_str == CONFIG_DIRECTORY or path_str.startswith(f"{CONFIG_DIRECTORY}/"):
+                continue
+            ignored_paths.append(path_str)
+
+    if ignored_paths:
+        raise LocalCheckError("IGNORED_RESIDUE", ", ".join(ignored_paths))
+
     source_tree = _git_stdout(repo, "rev-parse", f"{source_commit}^{{tree}}")
     target_tree = _materialize_target_tree(repo, head)
     manifest = _manifest_from_trees(repo, source_tree, target_tree)
@@ -425,9 +457,7 @@ def _build_request(
 ) -> dict[str, Any]:
     paths = [entry["path"] for entry in snapshot.manifest["entries"]]
     deleted = [
-        entry["path"]
-        for entry in snapshot.manifest["entries"]
-        if entry["change_type"] == "DELETE"
+        entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
     ]
     contract = {
         "contract_id": f"local-contract-{config_hash.removeprefix('sha256:')[:16]}",
@@ -589,9 +619,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             snapshot=snapshot,
         )
     deleted = [
-        entry["path"]
-        for entry in snapshot.manifest["entries"]
-        if entry["change_type"] == "DELETE"
+        entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
     ]
     if deleted and config["deletion_policy"] == "FORBID":
         _raise_with_receipt(

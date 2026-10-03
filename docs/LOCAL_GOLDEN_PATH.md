@@ -87,6 +87,7 @@ to the exact changed paths supplied to the existing canonical contract.
 
 - not a Git repository, missing/invalid config, an unresolved base ref, or a base
   commit outside current `HEAD` ancestry;
+- ignored untracked physical residue outside `.nexus-core/**`. Physical acquisition treats such ignored residue as ambiguous/unverifiable and fails closed with `IGNORED_RESIDUE` before verifier execution. `.nexus-core/**` retains documented Core-local exclusion. Users who keep ignored environment/vendor/cache state inside the repo must remove/relocate it before `check` unless a future explicit product policy says otherwise. This is fail-closed acquisition, not a claim that ignored files are task changes.
 - no change relative to the base;
 - a changed path outside every allowed pattern;
 - a deletion while `deletion_policy = "FORBID"`;
