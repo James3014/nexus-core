@@ -287,6 +287,50 @@ def test_check_fails_closed_on_ordinary_ignored_build_residue(external_repo: Pat
     assert "build/output.o" in raised.value.detail
 
 
+def test_check_fails_closed_when_verifier_creates_ignored_residue(external_repo: Path):
+    (external_repo / ".gitignore").write_text("dist/\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+
+    script = external_repo / "verifier.py"
+    script.write_text(
+        "import os\n"
+        "os.makedirs('dist', exist_ok=True)\n"
+        "with open('dist/.gitignore', 'w') as f:\n"
+        "    f.write('*\\n')\n",
+        encoding="utf-8",
+    )
+
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        verifier_command=(sys.executable, "verifier.py"),
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+
+    receipt_path = raised.value.receipt_path
+    assert receipt_path is not None
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["verifier"] is not None
+    assert receipt["verifier"]["status"] == "PASS"
+    assert receipt["verifier"]["exit_code"] == 0
+    verifier_body = {
+        key: value for key, value in receipt["verifier"].items() if key != "artifact_hash"
+    }
+    assert receipt["verifier"]["artifact_hash"] == canonical_hash(verifier_body)
+    receipt_body = {key: value for key, value in receipt.items() if key != "receipt_hash"}
+    assert receipt["receipt_hash"] == canonical_hash(receipt_body)
+
+    assert (external_repo / "dist" / ".gitignore").exists()
+
+
 def test_check_allows_nexus_core_config_and_receipts(external_repo: Path):
     _init(external_repo, patterns=("*.py",))
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
