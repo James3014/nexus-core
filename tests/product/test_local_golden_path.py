@@ -26,9 +26,7 @@ from product.protocol.generic_verification import (
 
 
 def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
 
 
@@ -263,6 +261,84 @@ def test_check_fails_closed_when_there_are_no_changes(external_repo: Path):
         check_repository(external_repo)
 
 
+def test_check_fails_closed_on_ignored_out_of_scope_dist_residue(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / "dist").mkdir()
+    (external_repo / "dist" / ".gitignore").write_text("*\n", encoding="utf-8")
+    (external_repo / "dist" / "secret.txt").write_text("secret\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+    assert "dist/secret.txt" in raised.value.detail or "dist/.gitignore" in raised.value.detail
+
+
+def test_check_fails_closed_on_ordinary_ignored_build_residue(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+    (external_repo / "build").mkdir()
+    (external_repo / "build" / "output.o").write_text("binary\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+    assert "build/output.o" in raised.value.detail
+
+
+def test_check_allows_nexus_core_config_and_receipts(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / ".gitignore").write_text(".nexus-core/\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+    receipts_dir = external_repo / ".nexus-core" / "receipts"
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    (receipts_dir / "test.json").write_text("{}", encoding="utf-8")
+
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+
+
+def test_check_fails_closed_on_ignored_file_under_allowed_pattern(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / ".gitignore").write_text("app_ignored.py\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+    (external_repo / "app_ignored.py").write_text("VALUE = 0\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+    assert "app_ignored.py" in raised.value.detail
+
+
+def test_ignored_residue_rejection_preserves_worktree_state(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / "staged.py").write_text("VALUE = 5\n", encoding="utf-8")
+    _git(external_repo, "add", "staged.py")
+    (external_repo / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+
+    head_before = _git(external_repo, "rev-parse", "HEAD")
+    status_before = _git(external_repo, "status", "--porcelain")
+
+    (external_repo / "ignored.py").write_text("ignored\n", encoding="utf-8")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+
+    head_after = _git(external_repo, "rev-parse", "HEAD")
+    status_after = _git(external_repo, "status", "--porcelain")
+
+    assert head_after == head_before
+    assert status_after == status_before
+
+
 def test_receipt_rejects_tampered_manifest_and_result(external_repo: Path, tmp_path: Path):
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
     _init(external_repo)
@@ -318,9 +394,7 @@ def test_receipt_rejects_rehashed_source_target_duplicate_tamper(
     assert "RECEIPT_HASH_MISMATCH" not in validation["reason_codes"]
 
 
-def test_receipt_rejects_rehashed_outcome_tamper(
-    valid_receipt: dict[str, Any], tmp_path: Path
-):
+def test_receipt_rejects_rehashed_outcome_tamper(valid_receipt: dict[str, Any], tmp_path: Path):
     valid_receipt["outcome"] = {
         "status": "FAILED_VERIFICATION",
         "reason_codes": ["REWRITTEN"],
@@ -401,7 +475,9 @@ def test_receipt_rejects_rehashed_structural_identity_tamper(
 def test_check_detects_target_changed_by_verifier(external_repo: Path):
     (external_repo / "app.py").write_text("VALUE = 6\n", encoding="utf-8")
     script = external_repo / "mutate.py"
-    script.write_text("from pathlib import Path\nPath('app.py').write_text('VALUE = 7\\n')\n", encoding="utf-8")
+    script.write_text(
+        "from pathlib import Path\nPath('app.py').write_text('VALUE = 7\\n')\n", encoding="utf-8"
+    )
     init_repository(
         external_repo,
         base_ref="main",
