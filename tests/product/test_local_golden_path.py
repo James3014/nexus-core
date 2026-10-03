@@ -488,3 +488,57 @@ def test_check_detects_target_changed_by_verifier(external_repo: Path):
 
     with pytest.raises(LocalCheckError, match="GIT_MANIFEST_MISMATCH"):
         check_repository(external_repo)
+
+
+def test_check_fails_closed_on_verifier_created_ignored_residue(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    script = external_repo / "mutate.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "Path('dist').mkdir(exist_ok=True)\n"
+        "Path('dist/.gitignore').write_text('*\\n')\n",
+        encoding="utf-8",
+    )
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+        verifier_command=(sys.executable, "mutate.py"),
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+    assert "dist/.gitignore" in raised.value.detail
+    assert raised.value.receipt_path is not None
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["verifier"] is not None
+    assert receipt["verifier"]["status"] == "PASS"
+
+
+def test_check_allows_verifier_created_nexus_core_receipts(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / ".gitignore").write_text(".nexus-core/\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+
+    script = external_repo / "mutate.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        "receipts = Path('.nexus-core/receipts')\n"
+        "receipts.mkdir(parents=True, exist_ok=True)\n"
+        "(receipts / 'test.json').write_text('{}')\n",
+        encoding="utf-8",
+    )
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+        verifier_command=(sys.executable, "mutate.py"),
+    )
+
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
