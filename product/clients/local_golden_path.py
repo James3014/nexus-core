@@ -376,9 +376,7 @@ def _manifest_from_trees(repo: Path, source_tree: str, target_tree: str) -> dict
     }
 
 
-def _snapshot(repo: Path, base_ref: str) -> _GitSnapshot:
-    source_commit, head = _resolve_base_and_head(repo, base_ref)
-
+def _check_ignored_residue(repo: Path) -> None:
     ignored = _run_git(
         repo,
         "ls-files",
@@ -406,6 +404,12 @@ def _snapshot(repo: Path, base_ref: str) -> _GitSnapshot:
 
     if ignored_paths:
         raise LocalCheckError("IGNORED_RESIDUE", ", ".join(ignored_paths))
+
+
+def _snapshot(repo: Path, base_ref: str) -> _GitSnapshot:
+    source_commit, head = _resolve_base_and_head(repo, base_ref)
+
+    _check_ignored_residue(repo)
 
     source_tree = _git_stdout(repo, "rev-parse", f"{source_commit}^{{tree}}")
     target_tree = _materialize_target_tree(repo, head)
@@ -666,6 +670,19 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
     verifier = _verifier_artifact(
         config["verifier_command"], executed.returncode, executed.stdout, executed.stderr
     )
+
+    try:
+        _check_ignored_residue(repo)
+    except LocalCheckError as exc:
+        _raise_with_receipt(
+            repo,
+            exc.reason_code,
+            exc.detail,
+            config=config,
+            config_hash=config_hash,
+            snapshot=snapshot,
+            verifier=verifier,
+        )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
     if post_tree != snapshot.target_tree:
