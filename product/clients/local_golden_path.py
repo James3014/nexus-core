@@ -432,7 +432,12 @@ def _sha256_bytes(value: bytes) -> str:
 
 
 def _verifier_artifact(
-    command: Sequence[str], returncode: int, stdout: bytes, stderr: bytes
+    command: Sequence[str],
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    execution_subject: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     output_hash = canonical_hash(
         {
@@ -452,8 +457,154 @@ def _verifier_artifact(
         "output_hash": output_hash,
         "status": "PASS" if returncode == 0 else "FAIL",
     }
+    if execution_subject is not None:
+        artifact["execution_subject"] = dict(execution_subject)
     artifact["artifact_hash"] = canonical_hash(artifact)
     return artifact
+
+
+def _cleanup_verifier_sandbox(path: Path) -> None:
+    shutil.rmtree(path)
+
+
+def _run_verifier_isolated(
+    repo: Path,
+    snapshot: _GitSnapshot,
+    command: Sequence[str],
+    verifier_env: Mapping[str, str],
+    timeout_seconds: int,
+) -> tuple[subprocess.CompletedProcess[bytes], dict[str, Any], str | None]:
+    """Run the verifier against an isolated exact-target Git subject.
+
+    The clone has independent refs/index/worktree state while sharing immutable
+    object storage with the source repository. The original repository remains
+    the canonical ChangeSet subject and is re-read after verifier completion.
+    """
+
+    source_head = _git_stdout(repo, "rev-parse", "HEAD^{commit}")
+    execution_subject = {
+        "mode": "isolated_shared_clone",
+        "source_head": f"git-commit:{source_head}",
+        "target_tree": f"git-tree:{snapshot.target_tree}",
+    }
+    parent = Path(tempfile.mkdtemp(prefix="nexus-core-verifier-"))
+    verifier_repo = parent / "repo"
+    executed: subprocess.CompletedProcess[bytes] | None = None
+    execution_error: subprocess.TimeoutExpired | OSError | None = None
+    mutation_detail: str | None = None
+    cleanup_error: str | None = None
+
+    try:
+        clone = _run_git(
+            repo,
+            "clone",
+            "--no-checkout",
+            "--shared",
+            "--quiet",
+            str(repo),
+            str(verifier_repo),
+        )
+        if clone.returncode != 0:
+            detail = (clone.stderr or clone.stdout).strip()
+            raise LocalCheckError("VERIFIER_SANDBOX_PREPARE_FAILED", detail)
+
+        checkout = _run_git(
+            verifier_repo,
+            "checkout",
+            "--detach",
+            "--quiet",
+            source_head,
+        )
+        if checkout.returncode != 0:
+            detail = (checkout.stderr or checkout.stdout).strip()
+            raise LocalCheckError("VERIFIER_SANDBOX_PREPARE_FAILED", detail)
+
+        materialize = _run_git(
+            verifier_repo,
+            "read-tree",
+            "--reset",
+            "-u",
+            snapshot.target_tree,
+        )
+        if materialize.returncode != 0:
+            detail = (materialize.stderr or materialize.stdout).strip()
+            raise LocalCheckError("VERIFIER_SANDBOX_PREPARE_FAILED", detail)
+        if _git_stdout(verifier_repo, "write-tree") != snapshot.target_tree:
+            raise LocalCheckError(
+                "VERIFIER_SANDBOX_PREPARE_FAILED",
+                "isolated verifier index does not match target tree",
+            )
+
+        try:
+            executed = subprocess.run(
+                command,
+                cwd=verifier_repo,
+                env=dict(verifier_env),
+                capture_output=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            execution_error = exc
+
+        if execution_error is None:
+            problems: list[str] = []
+            post_head = _git_stdout(verifier_repo, "rev-parse", "HEAD^{commit}")
+            if post_head != source_head:
+                problems.append("verifier changed isolated HEAD")
+            post_index = _git_stdout(verifier_repo, "write-tree")
+            if post_index != snapshot.target_tree:
+                problems.append("verifier changed isolated index")
+
+            worktree_diff = _run_git(verifier_repo, "diff", "--quiet", "--")
+            if worktree_diff.returncode == 1:
+                problems.append("verifier changed tracked target bytes")
+            elif worktree_diff.returncode != 0:
+                detail = (worktree_diff.stderr or worktree_diff.stdout).strip()
+                raise LocalCheckError("VERIFIER_SANDBOX_INSPECTION_FAILED", detail)
+
+            untracked = _run_git(
+                verifier_repo,
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                text=False,
+            )
+            if untracked.returncode != 0:
+                detail = untracked.stderr.decode("utf-8", errors="replace").strip()
+                raise LocalCheckError("VERIFIER_SANDBOX_INSPECTION_FAILED", detail)
+            untracked_paths = [
+                value.decode("utf-8", errors="replace")
+                for value in untracked.stdout.split(b"\0")
+                if value
+            ]
+            untracked_paths = [
+                path
+                for path in untracked_paths
+                if path != CONFIG_DIRECTORY
+                and not path.startswith(f"{CONFIG_DIRECTORY}/")
+            ]
+            if untracked_paths:
+                problems.append(
+                    "verifier created non-ignored files: " + ", ".join(untracked_paths[:20])
+                )
+
+            if problems:
+                mutation_detail = "; ".join(problems)
+    finally:
+        try:
+            _cleanup_verifier_sandbox(parent)
+        except OSError as exc:
+            cleanup_error = str(exc)
+
+    if cleanup_error is not None:
+        raise LocalCheckError("VERIFIER_SANDBOX_CLEANUP_FAILED", cleanup_error)
+    if execution_error is not None:
+        raise execution_error
+    if executed is None:
+        raise LocalCheckError("VERIFIER_EXECUTION_FAILED", "verifier did not execute")
+    return executed, execution_subject, mutation_detail
 
 
 def _build_request(
@@ -672,13 +823,22 @@ def check_repository(
         existing = verifier_env.get("PYTEST_ADDOPTS", "")
         verifier_env["PYTEST_ADDOPTS"] = (existing + " -p no:cacheprovider").strip()
     try:
-        executed = subprocess.run(
+        executed, verifier_subject, verifier_mutation = _run_verifier_isolated(
+            repo,
+            snapshot,
             config["verifier_command"],
-            cwd=repo,
-            env=verifier_env,
-            capture_output=True,
-            timeout=config["timeout_seconds"],
-            check=False,
+            verifier_env,
+            config["timeout_seconds"],
+        )
+    except LocalCheckError as exc:
+        _raise_with_receipt(
+            repo,
+            exc.reason_code,
+            exc.detail,
+            config=config,
+            config_hash=config_hash,
+            snapshot=snapshot,
+            requirements_context=requirements_context,
         )
     except subprocess.TimeoutExpired as exc:
         _raise_with_receipt(
@@ -701,8 +861,23 @@ def check_repository(
             requirements_context=requirements_context,
         )
     verifier = _verifier_artifact(
-        config["verifier_command"], executed.returncode, executed.stdout, executed.stderr
+        config["verifier_command"],
+        executed.returncode,
+        executed.stdout,
+        executed.stderr,
+        execution_subject=verifier_subject,
     )
+    if verifier_mutation is not None:
+        _raise_with_receipt(
+            repo,
+            "VERIFIER_SUBJECT_MUTATED",
+            verifier_mutation,
+            config=config,
+            config_hash=config_hash,
+            snapshot=snapshot,
+            verifier=verifier,
+            requirements_context=requirements_context,
+        )
 
     try:
         _check_ignored_residue(repo)
