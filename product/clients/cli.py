@@ -22,6 +22,11 @@ from product.clients.local_golden_path import (
     doctor_repository,
     init_repository,
 )
+from product.clients.runtime_handoff import (
+    check_handoff,
+    handoff_status,
+    init_handoff,
+)
 from product.runtime.auth import AuthSecurityError, read_bearer_token
 from product.runtime.candidate_acquisition import (
     make_candidate_acquisition_input_error,
@@ -349,6 +354,60 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "VERIFIED" else 1
 
 
+
+
+def cmd_handoff_init(args: argparse.Namespace) -> int:
+    services = []
+    for service in args.service or []:
+        if "=" in service:
+            service_id, endpoint = service.split("=", 1)
+            parsed = urllib.parse.urlparse(endpoint)
+            services.append(
+                {
+                    "service_id": service_id.strip(),
+                    "endpoint": endpoint.strip(),
+                    "port": parsed.port,
+                }
+            )
+        else:
+            services.append({"service_id": service.strip(), "endpoint": service.strip()})
+    path = init_handoff(
+        args.repo,
+        handoff_id=args.handoff_id,
+        services=services,
+        verifier_command=tuple(args.verifier),
+        timeout_seconds=args.timeout,
+        force=args.force,
+    )
+    print(f"handoff initialized: {path}")
+    return 0
+
+
+def cmd_handoff_check(args: argparse.Namespace) -> int:
+    result = check_handoff(args.repo)
+    print(f"handoff verification: {result['status']} (not RELEASED)")
+    print(f"claim ceiling: {result['claim_ceiling']}")
+    if result["reason_codes"]:
+        print("reasons: " + ", ".join(result["reason_codes"]))
+    if result.get("receipt_path") is not None:
+        print(f"receipt: {result['receipt_path']}")
+    return 0 if result["status"] == "HANDOFF_READY" else 1
+
+
+def cmd_handoff_status(args: argparse.Namespace) -> int:
+    result = handoff_status(args.repo)
+    print(
+        f"handoff status: {result['status']} "
+        f"({'fresh' if result['fresh'] else 'not fresh'})"
+    )
+    print(f"claim ceiling: {result['claim_ceiling']}")
+    if result["reason_codes"]:
+        print("reasons: " + ", ".join(result["reason_codes"]))
+    if result["receipt_path"] is not None:
+        print(f"receipt: {result['receipt_path']}")
+    return 0 if result["fresh"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = CertifyArgumentParser(
         prog="nexus-certify",
@@ -437,6 +496,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to acquisition request JSON file, or '-' to read from stdin (default: stdin)",
     )
 
+
+    # runtime/manual handoff readiness
+    p_handoff_init = subparsers.add_parser(
+        "handoff-init", help="Initialize handoff readiness configuration"
+    )
+    p_handoff_init.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_handoff_init.add_argument(
+        "--handoff-id", required=True, help="Stable handoff target identifier"
+    )
+    p_handoff_init.add_argument(
+        "--service",
+        action="append",
+        required=True,
+        help="Service spec (service_id=endpoint)",
+    )
+    p_handoff_init.add_argument(
+        "--timeout", type=int, default=300, help="Verifier timeout seconds"
+    )
+    p_handoff_init.add_argument(
+        "--force", action="store_true", help="Replace existing handoff configuration"
+    )
+    p_handoff_init.add_argument(
+        "--verifier",
+        nargs=argparse.REMAINDER,
+        required=True,
+        metavar="ARG",
+        help="Handoff verifier argv without a shell; must be the final option",
+    )
+
+    p_handoff_check = subparsers.add_parser(
+        "handoff-check", help="Verify runtime and manual handoff readiness"
+    )
+    p_handoff_check.add_argument(
+        "--repo", default=".", help="Git repository (default: current)"
+    )
+
+    p_handoff_status = subparsers.add_parser(
+        "handoff-status", help="Read-only freshness check of handoff receipt"
+    )
+    p_handoff_status.add_argument(
+        "--repo", default=".", help="Git repository (default: current)"
+    )
+
     return parser
 
 
@@ -461,6 +563,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_check(args)
         elif args.command == "acquire":
             return cmd_acquire(args)
+        elif args.command == "handoff-init":
+            return cmd_handoff_init(args)
+        elif args.command == "handoff-check":
+            return cmd_handoff_check(args)
+        elif args.command == "handoff-status":
+            return cmd_handoff_status(args)
         else:
             sys.stderr.write(f"unknown command: {args.command}\n")
             return 2
