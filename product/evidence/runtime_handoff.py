@@ -81,6 +81,12 @@ def validate_handoff_evidence_envelope(
     if not isinstance(non_claims, list) or tuple(non_claims) != HANDOFF_NON_CLAIMS:
         reasons.append("NON_CLAIMS_MISMATCH")
 
+    handoff_id = payload.get("handoff_id")
+    if not isinstance(handoff_id, str) or not handoff_id.strip():
+        reasons.append("HANDOFF_ID_MISSING")
+    if not is_sha256_hash(payload.get("handoff_config_hash")):
+        reasons.append("HANDOFF_CONFIG_HASH_INVALID")
+
     # Source binding validation
     source = payload.get("source_binding")
     if not isinstance(source, Mapping):

@@ -181,16 +181,22 @@ Level 3: Production Approval         RELEASE / DEPLOY / PRODUCTION
   - `NO_SEMANTIC_BUG_FREEDOM`
 - Semantics: Proves that the exact verified code (`target_commit` / `target_tree`) is
   currently running in live runtime services whose endpoints are reachable, whose
-  PIDs and start times are bound, and where the product-specific handoff verifier
-  exited 0.
-- Freshness & Invalidation: Fail-closed. Moving HEAD, dirtying files, process
-  restarts/deaths, or subsequent failed verification attempts immediately mark the
-  handoff state stale or blocked. An earlier PASS receipt cannot survive a later
-  failure.
+  configured process identities are available and bound, and where the product-specific
+  handoff verifier exited 0. When prerequisite repository verification is required, the
+  repository receipt must independently validate and its target tree must equal the
+  current handoff product tree; a stale or tampered `VERIFIED` receipt is insufficient.
+- Config binding: the normalized handoff configuration is hash-bound into every handoff
+  receipt. Changing the handoff ID, verifier command, timeout, prerequisite policy, or
+  declared services invalidates an earlier readiness receipt.
+- Process identity: when a service declares a `pid_file`, failure to resolve a live PID
+  is a blocking condition rather than an endpoint-only downgrade.
+- Freshness & Invalidation: Fail-closed. Moving HEAD, dirtying files, changing the handoff
+  config, process restarts/deaths, or subsequent failed verification attempts immediately
+  mark the handoff state stale or blocked. An earlier PASS receipt cannot survive a later
+  failure, including another attempt in the same wall-clock second.
 - Boundary: `HANDOFF_READY ≠ RELEASE / DEPLOY / PRODUCTION`. It only asserts readiness
   for human owner testing.
 
 ### 3. Level 3 — Release, Deployment & Production Claims
 - Human Owner / external deployment pipeline authority only.
 - Core never grants automated promotion to Level 3.
-

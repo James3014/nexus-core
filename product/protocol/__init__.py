@@ -17,4 +17,3 @@ __all__ = [
     "EVIDENCE_REQUIREMENT_SCHEMA",
     "RUNTIME_HANDOFF_SCHEMA",
 ]
-

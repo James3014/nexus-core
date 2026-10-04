@@ -175,11 +175,12 @@ Level 3: 生產發布與部署              RELEASE / DEPLOY / PRODUCTION
   - `NO_OUTCOME_TRUTH`
   - `NO_PRODUCTION_READINESS`
   - `NO_SEMANTIC_BUG_FREEDOM`
-- 語意：證明當前 exact verified code（`target_commit` / `target_tree`）確實運行於 live runtime 服務中，宣告的端點可連通，行程 PID 與啟動時間皆已綁定，且 consumer 自定義的 handoff verifier 成功退出 (code 0)。
-- 鮮度與失效語意 (Fail-closed)：Git HEAD 漂移、工作區髒掉、行程重啟/更換 PID，或後續任一次 handoff 驗證失敗，前一次的 PASS receipt 立即失效，絕不允許舊 PASS 冒充 current。
+- 語意：證明當前 exact verified code（`target_commit` / `target_tree`）確實運行於 live runtime 服務中，宣告的端點可連通、已配置的行程身份可取得且完成綁定，並且 consumer 自定義的 handoff verifier 成功退出（code 0）。若要求 prerequisite repository verification，該 repository receipt 必須能被獨立重新驗證，且其 target tree 必須等於目前 handoff 的 product tree；僅有舊的或遭竄改但文字仍寫著 `VERIFIED` 的 receipt 不足以成立。
+- Config 綁定：normalized handoff config 會以 hash 綁入每張 handoff receipt。handoff ID、verifier command、timeout、prerequisite policy 或宣告服務任一變更，都會使先前 readiness receipt 失效。
+- 行程身份：若 service 明確配置 `pid_file`，卻無法解析出仍存活的 PID，必須 fail-closed；不得靜默降級成只驗證 endpoint。
+- 鮮度與失效語意（Fail-closed）：Git HEAD 漂移、工作區髒掉、handoff config 改變、行程重啟/更換 PID，或後續任一次 handoff 驗證失敗，前一次的 PASS receipt 立即失效；即使兩次嘗試發生在同一 wall-clock second，也不允許舊 PASS 冒充 current。
 - 邊界：**`HANDOFF_READY ≠ RELEASE / DEPLOY / PRODUCTION`**。僅代表已就緒供 Owner 手動測試，不代表核准合併或部署生產。
 
 ### 3. Level 3 — 生產發布、部署與核准
 - 僅由 Human Owner 或外部生產部署管線裁決。
 - Core 絕不提供自動升級至 Level 3 的機制。
-

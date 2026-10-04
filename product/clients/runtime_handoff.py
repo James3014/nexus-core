@@ -25,6 +25,7 @@ from product.clients.local_golden_path import (
     _repo_root,
     _run_git,
     _sha256_bytes,
+    validate_verification_receipt,
 )
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.runtime_handoff import (
@@ -32,6 +33,7 @@ from product.protocol.runtime_handoff import (
     HANDOFF_NON_CLAIMS,
     RUNTIME_HANDOFF_RECEIPT_KIND,
     RUNTIME_HANDOFF_SCHEMA_ID,
+    canonical_hash,
     runtime_handoff_receipt_hash,
 )
 from product.runtime.runtime_handoff import validate_runtime_handoff_payload
@@ -103,6 +105,64 @@ def _toml_array(values: Sequence[str]) -> str:
     return "[" + ", ".join(_toml_string(value) for value in values) + "]"
 
 
+def _validate_handoff_config(value: Any) -> dict[str, Any]:
+    if type(value) is not dict or set(value) != _CONFIG_KEYS:
+        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unexpected or missing config keys")
+    if value.get("version") != HANDOFF_CONFIG_VERSION:
+        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unsupported version")
+    if not isinstance(value.get("handoff_id"), str) or not value["handoff_id"].strip():
+        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "handoff_id must be non-empty")
+    command = value.get("verifier_command")
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(item, str) or not item or "\x00" in item for item in command)
+    ):
+        raise LocalCheckError(
+            "INVALID_HANDOFF_CONFIG", "verifier_command must be a non-empty string array"
+        )
+    timeout = value.get("timeout_seconds")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1 or timeout > 3600:
+        raise LocalCheckError(
+            "INVALID_HANDOFF_CONFIG", "timeout_seconds must be between 1 and 3600"
+        )
+    if not isinstance(value.get("require_prerequisite_repo_check"), bool):
+        raise LocalCheckError(
+            "INVALID_HANDOFF_CONFIG", "require_prerequisite_repo_check must be boolean"
+        )
+    services = value.get("services")
+    if not isinstance(services, list) or not services:
+        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "at least one service must be defined")
+    seen_ids: set[str] = set()
+    for svc in services:
+        if type(svc) is not dict or not {"service_id", "endpoint"}.issubset(set(svc)):
+            raise LocalCheckError(
+                "INVALID_HANDOFF_CONFIG", "service missing service_id or endpoint"
+            )
+        if set(svc) - _SERVICE_KEYS:
+            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unexpected service config keys")
+        service_id = svc.get("service_id")
+        endpoint = svc.get("endpoint")
+        if not isinstance(service_id, str) or not service_id.strip() or "\x00" in service_id:
+            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "service_id must be non-empty")
+        if service_id in seen_ids:
+            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "service_id values must be unique")
+        seen_ids.add(service_id)
+        if not isinstance(endpoint, str) or not endpoint.strip() or "\x00" in endpoint:
+            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "endpoint must be non-empty")
+        port = svc.get("port")
+        if port is not None and (
+            not isinstance(port, int) or isinstance(port, bool) or port < 1 or port > 65535
+        ):
+            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "service port must be 1..65535")
+        pid_file = svc.get("pid_file")
+        if pid_file is not None and (
+            not isinstance(pid_file, str) or not pid_file.strip() or "\x00" in pid_file
+        ):
+            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "pid_file must be a non-empty path")
+    return value
+
+
 def init_handoff(
     path: str | Path,
     *,
@@ -119,19 +179,22 @@ def init_handoff(
     if config_path.exists() and not force:
         raise LocalCheckError("HANDOFF_CONFIG_EXISTS", str(config_path))
 
-    if not isinstance(handoff_id, str) or not handoff_id.strip():
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "handoff_id must be non-empty")
-    if not isinstance(verifier_command, (list, tuple)) or not verifier_command:
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "verifier_command must be non-empty")
-    if not isinstance(services, (list, tuple)) or not services:
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "services must be non-empty")
+    normalized = {
+        "version": HANDOFF_CONFIG_VERSION,
+        "handoff_id": handoff_id,
+        "services": [dict(service) if isinstance(service, Mapping) else service for service in services],
+        "verifier_command": list(verifier_command),
+        "timeout_seconds": timeout_seconds,
+        "require_prerequisite_repo_check": require_prerequisite_repo_check,
+    }
+    config = _validate_handoff_config(normalized)
 
     lines = [
         f"version = {HANDOFF_CONFIG_VERSION}",
-        f"handoff_id = {_toml_string(handoff_id)}",
-        f"verifier_command = {_toml_array(verifier_command)}",
-        f"timeout_seconds = {int(timeout_seconds)}",
-        f"require_prerequisite_repo_check = {'true' if require_prerequisite_repo_check else 'false'}",
+        f"handoff_id = {_toml_string(config['handoff_id'])}",
+        f"verifier_command = {_toml_array(config['verifier_command'])}",
+        f"timeout_seconds = {config['timeout_seconds']}",
+        f"require_prerequisite_repo_check = {'true' if config['require_prerequisite_repo_check'] else 'false'}",
         "",
     ]
 
@@ -160,21 +223,7 @@ def _load_handoff_config(repo: Path) -> dict[str, Any]:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise LocalCheckError("INVALID_HANDOFF_CONFIG", str(exc)) from exc
 
-    if type(value) is not dict or not _CONFIG_KEYS.issuperset(set(value)):
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unexpected or missing config keys")
-    if value.get("version") != HANDOFF_CONFIG_VERSION:
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unsupported version")
-    if not isinstance(value.get("handoff_id"), str) or not value.get("handoff_id"):
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "handoff_id must be non-empty")
-    if not isinstance(value.get("verifier_command"), list) or not value.get("verifier_command"):
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "verifier_command must be non-empty")
-    services = value.get("services")
-    if not isinstance(services, list) or not services:
-        raise LocalCheckError("INVALID_HANDOFF_CONFIG", "at least one service must be defined")
-    for svc in services:
-        if not isinstance(svc, dict) or not {"service_id", "endpoint"}.issubset(set(svc)):
-            raise LocalCheckError("INVALID_HANDOFF_CONFIG", "service missing service_id or endpoint")
-    return value
+    return _validate_handoff_config(value)
 
 
 def _find_pid_for_port(port: int) -> int | None:
@@ -300,7 +349,7 @@ def _latest_receipt(directory: Path) -> Path | None:
 def _write_handoff_receipt(repo: Path, payload: dict[str, Any]) -> Path:
     receipt_dir = _handoff_receipt_dir(repo)
     receipt_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     receipt_hash = runtime_handoff_receipt_hash(payload)
     payload["receipt_hash"] = receipt_hash
     short_hash = receipt_hash.removeprefix("sha256:")[:12]
@@ -335,6 +384,8 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
             "receipt_kind": RUNTIME_HANDOFF_RECEIPT_KIND,
             "claim_ceiling": HANDOFF_CLAIM_CEILING,
             "non_claims": list(HANDOFF_NON_CLAIMS),
+            "handoff_id": config["handoff_id"],
+            "handoff_config_hash": canonical_hash(config),
             "verdict": "HANDOFF_BLOCKED",
             "reason_codes": sorted(set(reason_codes)),
             "verified_at": now_iso,
@@ -353,40 +404,7 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         }
         return _write_handoff_receipt(repo, payload)
 
-    # 1. Prerequisite repository verification check
-    repo_receipts_dir = repo / CONFIG_DIRECTORY / "receipts"
-    latest_repo_receipt = _latest_receipt(repo_receipts_dir)
-    if config.get("require_prerequisite_repo_check", True):
-        if latest_repo_receipt is None:
-            rpath = make_blocked_receipt(["PREREQUISITE_REPOSITORY_NOT_VERIFIED"])
-            raise LocalCheckError(
-                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
-                "repository verification receipt missing",
-                receipt_path=rpath,
-            )
-        try:
-            repo_payload = json.loads(latest_repo_receipt.read_text(encoding="utf-8"))
-            repo_status = repo_payload.get("outcome", {}).get(
-                "status"
-            ) or repo_payload.get("core_response", {}).get("verification", {}).get(
-                "status"
-            )
-            if repo_status != "VERIFIED":
-                rpath = make_blocked_receipt(["PREREQUISITE_REPOSITORY_NOT_VERIFIED"])
-                raise LocalCheckError(
-                    "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
-                    "latest repository receipt is not VERIFIED",
-                    receipt_path=rpath,
-                )
-        except (OSError, json.JSONDecodeError) as exc:
-            rpath = make_blocked_receipt(["PREREQUISITE_REPOSITORY_NOT_VERIFIED"])
-            raise LocalCheckError(
-                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
-                f"unreadable repository receipt: {exc}",
-                receipt_path=rpath,
-            ) from exc
-
-    # 2. Source working tree clean check
+    # 1. Bind exact clean source state before trusting prerequisite evidence.
     dirty = _non_management_dirty(repo)
     head_commit = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
     product_tree = _product_tree(repo, head_commit)
@@ -400,10 +418,79 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         rpath = make_blocked_receipt(["WORKTREE_DIRTY"], source_binding=source_bind)
         raise LocalCheckError("WORKTREE_DIRTY", ", ".join(dirty), receipt_path=rpath)
 
+    # 2. Prerequisite repository verification must be valid and apply to this exact product tree.
+    repo_receipts_dir = repo / CONFIG_DIRECTORY / "receipts"
+    latest_repo_receipt = _latest_receipt(repo_receipts_dir)
+    if config.get("require_prerequisite_repo_check", True):
+        if latest_repo_receipt is None:
+            rpath = make_blocked_receipt(
+                ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], source_binding=source_bind
+            )
+            raise LocalCheckError(
+                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
+                "repository verification receipt missing",
+                receipt_path=rpath,
+            )
+        try:
+            repo_payload = json.loads(latest_repo_receipt.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            rpath = make_blocked_receipt(
+                ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], source_binding=source_bind
+            )
+            raise LocalCheckError(
+                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
+                f"unreadable repository receipt: {exc}",
+                receipt_path=rpath,
+            ) from exc
+        validation = validate_verification_receipt(latest_repo_receipt, repo=repo)
+        repo_status = repo_payload.get("outcome", {}).get("status") or repo_payload.get(
+            "core_response", {}
+        ).get("verification", {}).get("status")
+        repo_target_tree = repo_payload.get("target_tree")
+        if (
+            not validation["valid"]
+            or repo_status != "VERIFIED"
+            or repo_target_tree != source_bind["target_tree"]
+        ):
+            detail = ", ".join(
+                sorted(
+                    set(
+                        validation["reason_codes"]
+                        + (["REPOSITORY_RECEIPT_NOT_VERIFIED"] if repo_status != "VERIFIED" else [])
+                        + (["REPOSITORY_RECEIPT_STALE"] if repo_target_tree != source_bind["target_tree"] else [])
+                    )
+                )
+            )
+            rpath = make_blocked_receipt(
+                ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], source_binding=source_bind
+            )
+            raise LocalCheckError(
+                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
+                detail or "repository receipt is not applicable to current source",
+                receipt_path=rpath,
+            )
+
     # 3. Pre-test service probe
     pre_services = [probe_service(repo, svc) for svc in config["services"]]
     runtime_bind = {"services": pre_services}
     unreachable = [s["service_id"] for s in pre_services if not s["reachable"]]
+    missing_identity = [
+        svc["service_id"]
+        for svc, configured in zip(pre_services, config["services"])
+        if configured.get("pid_file") and svc["pid"] is None
+    ]
+    if missing_identity:
+        rpath = make_blocked_receipt(
+            ["RUNTIME_PROCESS_IDENTITY_UNAVAILABLE"],
+            source_binding=source_bind,
+            runtime_binding=runtime_bind,
+        )
+        raise LocalCheckError(
+            "RUNTIME_PROCESS_IDENTITY_UNAVAILABLE",
+            f"services missing required process identity: {', '.join(missing_identity)}",
+            receipt_path=rpath,
+        )
+
     if unreachable:
         rpath = make_blocked_receipt(
             ["RUNTIME_SERVICE_UNREACHABLE"],
@@ -564,6 +651,8 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         "receipt_kind": RUNTIME_HANDOFF_RECEIPT_KIND,
         "claim_ceiling": HANDOFF_CLAIM_CEILING,
         "non_claims": list(HANDOFF_NON_CLAIMS),
+        "handoff_id": config["handoff_id"],
+        "handoff_config_hash": canonical_hash(config),
         "verdict": "HANDOFF_READY",
         "reason_codes": [],
         "verified_at": now_iso,
@@ -634,8 +723,13 @@ def handoff_status(path: str | Path = ".") -> dict[str, Any]:
     # Live runtime freshness checks
     try:
         config = _load_handoff_config(repo)
+        if payload.get("handoff_config_hash") != canonical_hash(config):
+            reasons.append("HANDOFF_CONFIG_CHANGED")
+        if payload.get("handoff_id") != config.get("handoff_id"):
+            reasons.append("HANDOFF_CONFIG_CHANGED")
         config_services = {s["service_id"]: s for s in config.get("services", [])}
     except LocalCheckError:
+        reasons.append("HANDOFF_CONFIG_INVALID")
         config_services = {}
 
     services = payload.get("runtime_binding", {}).get("services", [])
@@ -684,8 +778,11 @@ def validate_handoff_receipt(
             expected_commit = payload.get("source_binding", {}).get("target_commit")
             if expected_commit != f"git-commit:{head}":
                 reasons.append("SOURCE_HEAD_CHANGED")
+            config = _load_handoff_config(repo_root)
+            if payload.get("handoff_config_hash") != canonical_hash(config):
+                reasons.append("HANDOFF_CONFIG_CHANGED")
         except LocalCheckError:
-            reasons.append("SOURCE_HEAD_CHANGED")
+            reasons.append("SOURCE_OR_CONFIG_FRESHNESS_CHECK_FAILED")
 
     return {"valid": not reasons, "reason_codes": sorted(set(reasons))}
 

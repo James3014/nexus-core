@@ -169,6 +169,66 @@ def test_nc01_repo_verified_alone_does_not_imply_handoff_ready(test_repo: Path):
     assert "HANDOFF_RECEIPT_MISSING" in status["reason_codes"]
 
 
+def test_prerequisite_tampered_repository_receipt_blocks_handoff(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    """A forged/stale VERIFIED string is not enough; the prerequisite receipt must validate."""
+    repo_receipt = sorted((test_repo / ".nexus-core" / "receipts").glob("*.json"))[-1]
+    payload = json.loads(repo_receipt.read_text(encoding="utf-8"))
+    assert payload["outcome"]["status"] == "VERIFIED"
+    payload["receipt_hash"] = "sha256:" + "0" * 64
+    repo_receipt.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[
+            {
+                "service_id": "web",
+                "endpoint": dummy_server["endpoint"],
+                "port": dummy_server["port"],
+                "pid_file": dummy_server["pid_file"],
+            }
+        ],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "PREREQUISITE_REPOSITORY_NOT_VERIFIED"
+    assert "RECEIPT_HASH_MISMATCH" in raised.value.detail
+
+
+def test_prerequisite_repository_receipt_must_match_current_product_tree(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    """A valid receipt for an older product tree cannot authorize a newer handoff."""
+    (test_repo / "new.py").write_text("VALUE = 3\n", encoding="utf-8")
+    _git(test_repo, "add", "new.py")
+    _git(test_repo, "commit", "-m", "advance source after repo verification")
+
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[
+            {
+                "service_id": "web",
+                "endpoint": dummy_server["endpoint"],
+                "port": dummy_server["port"],
+                "pid_file": dummy_server["pid_file"],
+            }
+        ],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "PREREQUISITE_REPOSITORY_NOT_VERIFIED"
+    assert "REPOSITORY_RECEIPT_STALE" in raised.value.detail
+
+
 # --- NC-02: Handoff verification against old HEAD does not apply to new HEAD ---
 
 def test_nc02_head_drift_invalidates_handoff_receipt(test_repo: Path, dummy_server: dict[str, Any]):
@@ -285,6 +345,32 @@ def test_nc05_service_process_identity_changed(test_repo: Path, dummy_server: di
     assert "RUNTIME_PROCESS_IDENTITY_CHANGED" in status["reason_codes"]
 
 
+def test_configured_pid_file_requires_process_identity(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    """An explicit pid_file requirement cannot silently degrade to endpoint-only readiness."""
+    missing_pid = test_repo / "missing.pid"
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[
+            {
+                "service_id": "web",
+                "endpoint": dummy_server["endpoint"],
+                "port": dummy_server["port"],
+                "pid_file": str(missing_pid),
+            }
+        ],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "RUNTIME_PROCESS_IDENTITY_UNAVAILABLE"
+    assert handoff_status(test_repo)["status"] == "BLOCKED"
+
+
 # --- NC-06: Product-specific verifier assertion fails -> no handoff-ready claim ---
 
 def test_nc06_handoff_verifier_failure_blocks_claim(test_repo: Path, dummy_server: dict[str, Any]):
@@ -334,9 +420,7 @@ def test_nc07_earlier_pass_cannot_survive_later_failure(test_repo: Path, dummy_s
     assert first_res["status"] == "HANDOFF_READY"
     assert handoff_status(test_repo)["fresh"] is True
 
-    # Wait a brief moment to ensure distinct timestamp for the next receipt
-    time.sleep(1.1)
-
+    # A later failure must supersede the earlier PASS even within the same wall-clock second.
     # 2. Re-initialize with a failing verifier command to simulate later regression
     init_handoff(
         test_repo,
@@ -361,6 +445,63 @@ def test_nc07_earlier_pass_cannot_survive_later_failure(test_repo: Path, dummy_s
     assert status["status"] == "BLOCKED"
     assert status["fresh"] is False
     assert status["receipt_path"] != first_res["receipt_path"]
+
+
+def test_handoff_config_change_stales_previous_ready_receipt(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    """Management config drift cannot reuse an earlier HANDOFF_READY receipt."""
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[
+            {
+                "service_id": "web",
+                "endpoint": dummy_server["endpoint"],
+                "port": dummy_server["port"],
+                "pid_file": dummy_server["pid_file"],
+            }
+        ],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+    check_handoff(test_repo)
+    assert handoff_status(test_repo)["fresh"] is True
+
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[
+            {
+                "service_id": "web",
+                "endpoint": dummy_server["endpoint"],
+                "port": dummy_server["port"],
+                "pid_file": dummy_server["pid_file"],
+            }
+        ],
+        verifier_command=[sys.executable, "-c", "print('different verifier')"],
+        force=True,
+    )
+
+    status = handoff_status(test_repo)
+    assert status["status"] == "BLOCKED"
+    assert "HANDOFF_CONFIG_CHANGED" in status["reason_codes"]
+
+
+def test_handoff_config_validation_is_strict(test_repo: Path, dummy_server: dict[str, Any]):
+    with pytest.raises(LocalCheckError, match="timeout_seconds"):
+        init_handoff(
+            test_repo,
+            handoff_id="web-app",
+            services=[
+                {
+                    "service_id": "web",
+                    "endpoint": dummy_server["endpoint"],
+                    "port": dummy_server["port"],
+                }
+            ],
+            verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+            timeout_seconds=0,
+        )
 
 
 # --- NC-08: Handoff-ready must not imply merge/release/deploy/production-ready ---
