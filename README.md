@@ -32,6 +32,16 @@ VERIFIED (not CERTIFIED)
 
 That wording is intentional. `VERIFIED` does **not** mean approved, merged, released, deployed, production-ready, or `CERTIFIED`.
 
+### The Three Governance Levels
+
+Nexus Core separates code verification from runtime manual handoff readiness:
+
+1. **Level 1: `VERIFIED`** — The repository code changes pass automated verification against a clean tree.
+2. **Level 2: `HANDOFF_READY`** — The exact code (`target_commit` / `target_tree`) is verified running in a live runtime whose endpoints and process identities are bound, and handoff verifier succeeded.
+3. **Level 3: `RELEASE / DEPLOY`** — Human owner and production pipeline authority (never automated by Core).
+
+`VERIFIED` never automatically promotes to `HANDOFF_READY`, and `HANDOFF_READY` never implies production release or deployment.
+
 ## Install
 
 ### Requirements

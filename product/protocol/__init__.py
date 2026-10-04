@@ -5,6 +5,7 @@ CERTIFICATION_RECEIPT_SCHEMA = "nexus.certification_receipt.v1-experimental"
 PROVENANCE_ENVELOPE_SCHEMA = "product.evidence.provenance.v1"
 INGESTION_RECEIPT_SCHEMA = "nexus.ingestion_receipt.v1-experimental"
 EVIDENCE_REQUIREMENT_SCHEMA = "nexus.evidence_requirement.v2-experimental"
+RUNTIME_HANDOFF_SCHEMA = "nexus.core.runtime-handoff.v1"
 
 __all__ = [
     "PUBLIC_PROTOCOL_VERSION",
@@ -14,4 +15,6 @@ __all__ = [
     "PROVENANCE_ENVELOPE_SCHEMA",
     "INGESTION_RECEIPT_SCHEMA",
     "EVIDENCE_REQUIREMENT_SCHEMA",
+    "RUNTIME_HANDOFF_SCHEMA",
 ]
+

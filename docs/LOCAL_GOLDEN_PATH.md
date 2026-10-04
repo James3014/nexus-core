@@ -144,3 +144,53 @@ also installed from PyPI and exercised during its release acceptance, including 
 positive `VERIFIED (not CERTIFIED)` path and a fail-closed forbidden-path negative.
 Keep the same checks as the regression contract for future published releases; a
 later release does not inherit the prior canary without fresh evidence.
+
+## Three-Level Governance Hierarchy (Issue #83)
+
+Nexus Core enforces an explicit three-level governance hierarchy with no implicit
+promotion between tiers:
+
+```text
+Level 1: Code Verification           VERIFIED / READY
+                  |
+                  | (explicit runtime handoff verifier + process identity binding)
+                  v
+Level 2: Handoff Readiness           HANDOFF_READY
+                  |
+                  | (human owner / deployment pipeline decision)
+                  v
+Level 3: Production Approval         RELEASE / DEPLOY / PRODUCTION
+```
+
+### 1. Level 1 — Repository & Issue Verification (`VERIFIED` / `READY`)
+- Commands: `nexus-certify check`, `nexus-certify issue-check`, `nexus-certify gate`
+- Claim ceiling: `REPOSITORY_VERIFIED_NOT_RELEASED` / `ISSUE_VERIFIED_NOT_RELEASED`
+- Semantics: Static and automated test suites pass against a clean target Git tree.
+- Boundary: `VERIFIED ≠ HANDOFF_READY`. Passing automated tests does not prove that
+  live server endpoints exist, match the exact build, or are ready for manual testing.
+
+### 2. Level 2 — Runtime & Manual Handoff Readiness (`HANDOFF_READY`)
+- Commands: `nexus-certify handoff-init`, `nexus-certify handoff-check`, `nexus-certify handoff-status`
+- Claim ceiling: `MANUAL_TEST_HANDOFF_READY_NOT_RELEASED`
+- Non-claims:
+  - `NO_CANDIDATE_ACCEPTANCE`
+  - `NO_MERGE_AUTHORIZATION`
+  - `NO_DEPLOYMENT_TRUTH`
+  - `NO_OUTCOME_TRUTH`
+  - `NO_PRODUCTION_READINESS`
+  - `NO_SEMANTIC_BUG_FREEDOM`
+- Semantics: Proves that the exact verified code (`target_commit` / `target_tree`) is
+  currently running in live runtime services whose endpoints are reachable, whose
+  PIDs and start times are bound, and where the product-specific handoff verifier
+  exited 0.
+- Freshness & Invalidation: Fail-closed. Moving HEAD, dirtying files, process
+  restarts/deaths, or subsequent failed verification attempts immediately mark the
+  handoff state stale or blocked. An earlier PASS receipt cannot survive a later
+  failure.
+- Boundary: `HANDOFF_READY ≠ RELEASE / DEPLOY / PRODUCTION`. It only asserts readiness
+  for human owner testing.
+
+### 3. Level 3 — Release, Deployment & Production Claims
+- Human Owner / external deployment pipeline authority only.
+- Core never grants automated promotion to Level 3.
+

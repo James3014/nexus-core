@@ -32,6 +32,16 @@ VERIFIED (not CERTIFIED)
 
 這個字樣是刻意區分的。**`VERIFIED` 不代表已核准、已合併、已發布、已部署、production-ready，也不代表 `CERTIFIED`。**
 
+### 三層治理階梯
+
+Nexus Core 將程式碼驗證與執行期人工測試交付就緒劃分為明確的階梯：
+
+1. **Level 1: `VERIFIED`** — 代碼變更於乾淨 Git 目標樹上通過自動化驗證。
+2. **Level 2: `HANDOFF_READY`** — exact code（`target_commit` / `target_tree`）運行於 live 服務中，端點可通且行程身份已綁定，handoff 驗證通過。
+3. **Level 3: `RELEASE / DEPLOY`** — Owner 人工審批與生產部署管線裁決（Core 絕無自動升級機制）。
+
+`VERIFIED` 絕不自動等於 `HANDOFF_READY`，而 `HANDOFF_READY` 也絕不等於生產發布或部署。
+
 ## 安裝
 
 ### 系統需求

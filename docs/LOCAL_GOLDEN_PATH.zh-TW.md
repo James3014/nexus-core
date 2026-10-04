@@ -142,3 +142,44 @@ receipt validation 會重新計算 config、manifest、verifier artifact、envel
 這份 contract 已在 Issue #36 closure 對公開的 `nexus-certify==0.1.0` artifact 完整執行。
 
 後續 `nexus-certify==0.1.1` 也重新做過公開 artifact install 與 bounded release acceptance。未來版本仍應重新執行相同類型的 regression checks；不能只因為前一版通過，就自動繼承 published-artifact canary 的結論。
+
+## 三層治理階梯與交付就緒（Issue #83）
+
+Nexus Core 明確規範三層治理階梯，各階梯之間嚴禁任何隱式自動晉升：
+
+```text
+Level 1: 程式碼變更驗證              VERIFIED / READY
+                  |
+                  | (明確的 runtime handoff verifier + 行程身份綁定)
+                  v
+Level 2: 人工測試交付就緒            HANDOFF_READY
+                  |
+                  | (Owner 人工審批 / 外部部署管線決策)
+                  v
+Level 3: 生產發布與部署              RELEASE / DEPLOY / PRODUCTION
+```
+
+### 1. Level 1 — Repository & Issue 驗證 (`VERIFIED` / `READY`)
+- 指令：`nexus-certify check`, `nexus-certify issue-check`, `nexus-certify gate`
+- Claim Ceiling: `REPOSITORY_VERIFIED_NOT_RELEASED` / `ISSUE_VERIFIED_NOT_RELEASED`
+- 語意：靜態與自動化測試在乾淨的目標 Git 樹上全數通過，無範圍越界。
+- 邊界：**`VERIFIED ≠ HANDOFF_READY`**。單元測試綠燈絕不代表 live 執行期服務已啟動、正確綁定或可供人工測試。
+
+### 2. Level 2 — 執行期與人工測試交付就緒 (`HANDOFF_READY`)
+- 指令：`nexus-certify handoff-init`, `nexus-certify handoff-check`, `nexus-certify handoff-status`
+- Claim Ceiling: `MANUAL_TEST_HANDOFF_READY_NOT_RELEASED`
+- Non-claims (封頂聲明):
+  - `NO_CANDIDATE_ACCEPTANCE`
+  - `NO_MERGE_AUTHORIZATION`
+  - `NO_DEPLOYMENT_TRUTH`
+  - `NO_OUTCOME_TRUTH`
+  - `NO_PRODUCTION_READINESS`
+  - `NO_SEMANTIC_BUG_FREEDOM`
+- 語意：證明當前 exact verified code（`target_commit` / `target_tree`）確實運行於 live runtime 服務中，宣告的端點可連通，行程 PID 與啟動時間皆已綁定，且 consumer 自定義的 handoff verifier 成功退出 (code 0)。
+- 鮮度與失效語意 (Fail-closed)：Git HEAD 漂移、工作區髒掉、行程重啟/更換 PID，或後續任一次 handoff 驗證失敗，前一次的 PASS receipt 立即失效，絕不允許舊 PASS 冒充 current。
+- 邊界：**`HANDOFF_READY ≠ RELEASE / DEPLOY / PRODUCTION`**。僅代表已就緒供 Owner 手動測試，不代表核准合併或部署生產。
+
+### 3. Level 3 — 生產發布、部署與核准
+- 僅由 Human Owner 或外部生產部署管線裁決。
+- Core 絕不提供自動升級至 Level 3 的機制。
+
