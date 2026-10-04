@@ -377,7 +377,6 @@ def cmd_handoff_init(args: argparse.Namespace) -> int:
         services=services,
         verifier_command=tuple(args.verifier),
         timeout_seconds=args.timeout,
-        require_prerequisite_repo_check=not args.no_prereq,
         force=args.force,
     )
     print(f"handoff initialized: {path}")
@@ -514,11 +513,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_handoff_init.add_argument(
         "--timeout", type=int, default=300, help="Verifier timeout seconds"
-    )
-    p_handoff_init.add_argument(
-        "--no-prereq",
-        action="store_true",
-        help="Do not require repository verification check",
     )
     p_handoff_init.add_argument(
         "--force", action="store_true", help="Replace existing handoff configuration"

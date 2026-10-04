@@ -7,6 +7,7 @@ MANUAL_TEST_HANDOFF_READY_NOT_RELEASED.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from typing import Any, Generator
 
 import pytest
 
+import product.clients.runtime_handoff as runtime_handoff_module
 from product.clients.cli import main
 from product.clients.local_golden_path import (
     LocalCheckError,
@@ -558,6 +560,248 @@ def test_nc10_repository_verification_narrow_claim_remains_valid(test_repo: Path
     # Handoff status is still MISSING, showing independent claim boundaries
     status = handoff_status(test_repo)
     assert status["status"] == "MISSING"
+
+
+# --- Independent-review regression controls ---
+
+def test_level2_cannot_disable_repository_prerequisite(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    """The public CLI must not expose a bypass around Level 1 verification."""
+    with pytest.raises(SystemExit):
+        main([
+            "handoff-init",
+            "--repo", str(test_repo),
+            "--handoff-id", "web-app",
+            "--service", f"web={dummy_server['endpoint']}",
+            "--no-prereq",
+            "--verifier", sys.executable, "-c", "import sys; sys.exit(0)",
+        ])
+
+
+def test_status_revalidates_current_repository_receipt(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": dummy_server["pid_file"],
+        }],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+    ready = check_handoff(test_repo)
+    ready_receipt = ready["receipt_path"]
+
+    repo_receipt = sorted((test_repo / ".nexus-core" / "receipts").glob("*.json"))[-1]
+    payload = json.loads(repo_receipt.read_text(encoding="utf-8"))
+    payload["receipt_hash"] = "sha256:" + "0" * 64
+    repo_receipt.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    status = handoff_status(test_repo)
+    assert status["status"] == "BLOCKED"
+    assert "PREREQUISITE_REPOSITORY_NOT_VERIFIED" in status["reason_codes"]
+
+    validation = validate_handoff_receipt(ready_receipt, repo=test_repo)
+    assert validation["valid"] is False
+    assert "PREREQUISITE_REPOSITORY_NOT_VERIFIED" in validation["reason_codes"]
+
+
+def test_endpoint_without_process_identity_blocks(
+    test_repo: Path,
+    dummy_server: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(runtime_handoff_module, "_find_pid_for_port", lambda _port: None)
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+        }],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "RUNTIME_PROCESS_IDENTITY_UNAVAILABLE"
+
+
+def test_pid_file_must_identify_endpoint_owner(
+    test_repo: Path, dummy_server: dict[str, Any], tmp_path: Path
+):
+    wrong_pid_file = tmp_path / "wrong.pid"
+    wrong_pid_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": str(wrong_pid_file),
+        }],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "RUNTIME_PROCESS_ENDPOINT_MISMATCH"
+
+
+def test_interrupted_attempt_cannot_leave_old_ready_current(
+    test_repo: Path,
+    dummy_server: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": dummy_server["pid_file"],
+        }],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+    check_handoff(test_repo)
+    assert handoff_status(test_repo)["status"] == "HANDOFF_READY"
+
+    def interrupted(_repo: Path) -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(runtime_handoff_module, "_load_handoff_config", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        check_handoff(test_repo)
+
+    status = handoff_status(test_repo)
+    assert status["status"] == "BLOCKED"
+    assert "HANDOFF_CHECK_IN_PROGRESS" in status["reason_codes"]
+
+
+def test_invalid_config_attempt_supersedes_old_ready_even_after_restore(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": dummy_server["pid_file"],
+        }],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+    ready = check_handoff(test_repo)
+    config_path = test_repo / ".nexus-core" / "handoff.toml"
+    original = config_path.read_text(encoding="utf-8")
+
+    config_path.write_text("not = [valid\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+    assert raised.value.reason_code == "INVALID_HANDOFF_CONFIG"
+
+    config_path.write_text(original, encoding="utf-8")
+    status = handoff_status(test_repo)
+    assert status["status"] == "BLOCKED"
+
+    validation = validate_handoff_receipt(ready["receipt_path"], repo=test_repo)
+    assert validation["valid"] is False
+    assert "SUPERSEDED_HANDOFF_RECEIPT" in validation["reason_codes"]
+
+
+def test_ignored_physical_residue_blocks_handoff(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    git_exclude = test_repo / ".git" / "info" / "exclude"
+    with git_exclude.open("a", encoding="utf-8") as handle:
+        handle.write("\nruntime.cache\n")
+    (test_repo / "runtime.cache").write_text("ignored runtime residue\n", encoding="utf-8")
+
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": dummy_server["pid_file"],
+        }],
+        verifier_command=[sys.executable, "-c", "import sys; sys.exit(0)"],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+
+
+def test_verifier_created_ignored_residue_blocks_handoff(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    git_exclude = test_repo / ".git" / "info" / "exclude"
+    with git_exclude.open("a", encoding="utf-8") as handle:
+        handle.write("\nruntime.cache\n")
+
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": dummy_server["pid_file"],
+        }],
+        verifier_command=[
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('runtime.cache').write_text('created by verifier')",
+        ],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "IGNORED_RESIDUE"
+
+
+def test_verifier_config_mutation_blocks_handoff(
+    test_repo: Path, dummy_server: dict[str, Any]
+):
+    init_handoff(
+        test_repo,
+        handoff_id="web-app",
+        services=[{
+            "service_id": "web",
+            "endpoint": dummy_server["endpoint"],
+            "port": dummy_server["port"],
+            "pid_file": dummy_server["pid_file"],
+        }],
+        verifier_command=[
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "p=Path('.nexus-core/handoff.toml'); "
+                "p.write_text(p.read_text().replace('timeout_seconds = 300', "
+                "'timeout_seconds = 301'))"
+            ),
+        ],
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_handoff(test_repo)
+
+    assert raised.value.reason_code == "HANDOFF_CONFIG_CHANGED"
 
 
 # --- CLI Coverage ---

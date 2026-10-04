@@ -37,10 +37,13 @@ class HandoffVerdict(str, Enum):
 class ServiceIdentity:
     service_id: str
     endpoint: str
-    pid: int | None
-    process_start_time: str | None
+    pid: int
+    listener_pid: int
+    process_start_time: str
     executable_path: str | None
     reachable: bool
+    identity_matches_endpoint: bool
+    process_identity_bound: bool
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,19 @@ def validate_handoff_evidence_envelope(
     if not is_sha256_hash(payload.get("handoff_config_hash")):
         reasons.append("HANDOFF_CONFIG_HASH_INVALID")
 
+    prerequisite = payload.get("prerequisite_repository")
+    if not isinstance(prerequisite, Mapping):
+        reasons.append("PREREQUISITE_REPOSITORY_BINDING_MISSING")
+    else:
+        if not isinstance(prerequisite.get("receipt_file"), str) or not prerequisite.get(
+            "receipt_file"
+        ):
+            reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_INVALID")
+        if not is_sha256_hash(prerequisite.get("receipt_hash")):
+            reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_INVALID")
+        if not is_git_tree_ref(prerequisite.get("target_tree")):
+            reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_INVALID")
+
     # Source binding validation
     source = payload.get("source_binding")
     if not isinstance(source, Mapping):
@@ -119,8 +135,23 @@ def validate_handoff_evidence_envelope(
                 if svc.get("reachable") is not True:
                     reasons.append("RUNTIME_SERVICE_UNREACHABLE")
                 pid = svc.get("pid")
-                if pid is not None and (not isinstance(pid, int) or pid <= 0):
+                listener_pid = svc.get("listener_pid")
+                start_time = svc.get("process_start_time")
+                if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
                     reasons.append("INVALID_PROCESS_IDENTITY")
+                if (
+                    not isinstance(listener_pid, int)
+                    or isinstance(listener_pid, bool)
+                    or listener_pid <= 0
+                    or listener_pid != pid
+                ):
+                    reasons.append("RUNTIME_PROCESS_ENDPOINT_MISMATCH")
+                if not isinstance(start_time, str) or not start_time.strip():
+                    reasons.append("INVALID_PROCESS_IDENTITY")
+                if svc.get("identity_matches_endpoint") is not True:
+                    reasons.append("RUNTIME_PROCESS_ENDPOINT_MISMATCH")
+                if svc.get("process_identity_bound") is not True:
+                    reasons.append("RUNTIME_PROCESS_IDENTITY_UNAVAILABLE")
 
     # Handoff verifier validation
     verifier = payload.get("handoff_verifier")

@@ -21,6 +21,7 @@ from typing import Any, Mapping, Sequence
 from product.clients.local_golden_path import (
     CONFIG_DIRECTORY,
     LocalCheckError,
+    _check_ignored_residue,
     _materialize_target_tree,
     _repo_root,
     _run_git,
@@ -40,7 +41,9 @@ from product.runtime.runtime_handoff import validate_runtime_handoff_payload
 
 HANDOFF_CONFIG_FILENAME = "handoff.toml"
 HANDOFF_RECEIPT_DIRECTORY = "handoff-receipts"
+HANDOFF_LATEST_POINTER_FILENAME = "latest.json"
 HANDOFF_CONFIG_VERSION = 1
+HANDOFF_LATEST_POINTER_VERSION = 1
 
 _CONFIG_KEYS = {
     "version",
@@ -48,7 +51,6 @@ _CONFIG_KEYS = {
     "services",
     "verifier_command",
     "timeout_seconds",
-    "require_prerequisite_repo_check",
 }
 
 _SERVICE_KEYS = {
@@ -126,10 +128,6 @@ def _validate_handoff_config(value: Any) -> dict[str, Any]:
         raise LocalCheckError(
             "INVALID_HANDOFF_CONFIG", "timeout_seconds must be between 1 and 3600"
         )
-    if not isinstance(value.get("require_prerequisite_repo_check"), bool):
-        raise LocalCheckError(
-            "INVALID_HANDOFF_CONFIG", "require_prerequisite_repo_check must be boolean"
-        )
     services = value.get("services")
     if not isinstance(services, list) or not services:
         raise LocalCheckError("INVALID_HANDOFF_CONFIG", "at least one service must be defined")
@@ -170,7 +168,6 @@ def init_handoff(
     services: Sequence[Mapping[str, Any]],
     verifier_command: Sequence[str],
     timeout_seconds: int = 300,
-    require_prerequisite_repo_check: bool = True,
     force: bool = False,
 ) -> Path:
     """Initialize .nexus-core/handoff.toml with service definitions and verifier command."""
@@ -185,7 +182,6 @@ def init_handoff(
         "services": [dict(service) if isinstance(service, Mapping) else service for service in services],
         "verifier_command": list(verifier_command),
         "timeout_seconds": timeout_seconds,
-        "require_prerequisite_repo_check": require_prerequisite_repo_check,
     }
     config = _validate_handoff_config(normalized)
 
@@ -194,7 +190,6 @@ def init_handoff(
         f"handoff_id = {_toml_string(config['handoff_id'])}",
         f"verifier_command = {_toml_array(config['verifier_command'])}",
         f"timeout_seconds = {config['timeout_seconds']}",
-        f"require_prerequisite_repo_check = {'true' if config['require_prerequisite_repo_check'] else 'false'}",
         "",
     ]
 
@@ -227,7 +222,7 @@ def _load_handoff_config(repo: Path) -> dict[str, Any]:
 
 
 def _find_pid_for_port(port: int) -> int | None:
-    """Attempt to locate listening PID for a TCP port using lsof."""
+    """Return the unique local PID that owns a listening TCP port."""
     try:
         result = subprocess.run(
             ["lsof", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
@@ -237,9 +232,9 @@ def _find_pid_for_port(port: int) -> int | None:
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().splitlines()
-            if pids:
-                return int(pids[0].strip())
+            pids = sorted({int(value.strip()) for value in result.stdout.splitlines() if value.strip()})
+            if len(pids) == 1:
+                return pids[0]
     except (subprocess.SubprocessError, ValueError, OSError):
         pass
     return None
@@ -280,7 +275,7 @@ def _get_process_executable(pid: int) -> str | None:
 
 
 def probe_service(repo: Path, svc_config: Mapping[str, Any]) -> dict[str, Any]:
-    """Probe a single service for network reachability and process identity."""
+    """Probe reachability and bind the process that actually owns the declared port."""
     service_id = str(svc_config["service_id"])
     endpoint = str(svc_config["endpoint"])
     port = svc_config.get("port")
@@ -292,32 +287,27 @@ def probe_service(repo: Path, svc_config: Mapping[str, Any]) -> dict[str, Any]:
         port = parsed.port
 
     reachable = False
+    listener_pid: int | None = None
     if port is not None:
         try:
             with socket.create_connection((host, int(port)), timeout=2.0):
                 reachable = True
         except (OSError, ValueError):
             reachable = False
-    else:
-        # Fallback for paths / raw endpoints
-        reachable = False
+        listener_pid = _find_pid_for_port(int(port))
 
-    pid: int | None = None
+    configured_pid: int | None = None
     if pid_file:
         pid_path = Path(pid_file)
         if not pid_path.is_absolute():
             pid_path = repo / pid_path
         if pid_path.is_file():
             try:
-                pid = int(pid_path.read_text(encoding="utf-8").strip())
+                configured_pid = int(pid_path.read_text(encoding="utf-8").strip())
             except (ValueError, OSError):
-                pid = None
-        else:
-            pid = None
+                configured_pid = None
 
-    if pid is None and not pid_file and port is not None:
-        pid = _find_pid_for_port(int(port))
-
+    pid = configured_pid if pid_file else listener_pid
     start_time: str | None = None
     executable: str | None = None
     if pid is not None:
@@ -326,24 +316,127 @@ def probe_service(repo: Path, svc_config: Mapping[str, Any]) -> dict[str, Any]:
             start_time = _get_process_start_time(pid)
             executable = _get_process_executable(pid)
         except OSError:
-            # Process does not exist
             pid = None
+
+    identity_matches_endpoint = (
+        pid is not None
+        and listener_pid is not None
+        and pid == listener_pid
+    )
+    process_identity_bound = identity_matches_endpoint and bool(start_time)
 
     return {
         "service_id": service_id,
         "endpoint": endpoint,
         "pid": pid,
+        "listener_pid": listener_pid,
         "process_start_time": start_time,
         "executable_path": executable,
         "reachable": reachable,
+        "identity_matches_endpoint": identity_matches_endpoint,
+        "process_identity_bound": process_identity_bound,
     }
 
 
-def _latest_receipt(directory: Path) -> Path | None:
+def _latest_timestamped_receipt(directory: Path) -> Path | None:
     if not directory.is_dir():
         return None
-    receipts = sorted(directory.glob("*.json"))
+    receipts = sorted(
+        path
+        for path in directory.glob("*.json")
+        if path.name != HANDOFF_LATEST_POINTER_FILENAME
+    )
     return receipts[-1] if receipts else None
+
+
+def _handoff_latest_pointer_path(repo: Path) -> Path:
+    return _handoff_receipt_dir(repo) / HANDOFF_LATEST_POINTER_FILENAME
+
+
+def _read_latest_pointer(repo: Path) -> dict[str, Any] | None:
+    pointer_path = _handoff_latest_pointer_path(repo)
+    if not pointer_path.is_file():
+        return None
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LocalCheckError("HANDOFF_LATEST_POINTER_INVALID", str(exc)) from exc
+    if not isinstance(pointer, dict):
+        raise LocalCheckError("HANDOFF_LATEST_POINTER_INVALID", "pointer must be an object")
+    pointer_hash = pointer.get("pointer_hash")
+    pointer_body = {key: value for key, value in pointer.items() if key != "pointer_hash"}
+    if (
+        pointer.get("version") != HANDOFF_LATEST_POINTER_VERSION
+        or pointer_hash != canonical_hash(pointer_body)
+    ):
+        raise LocalCheckError(
+            "HANDOFF_LATEST_POINTER_INVALID", "latest pointer integrity check failed"
+        )
+    return pointer
+
+
+def _latest_handoff_receipt(repo: Path) -> Path | None:
+    receipt_dir = _handoff_receipt_dir(repo)
+    pointer = _read_latest_pointer(repo)
+    if pointer is None:
+        return _latest_timestamped_receipt(receipt_dir)
+    if pointer.get("state") == "IN_PROGRESS":
+        raise LocalCheckError("HANDOFF_CHECK_IN_PROGRESS", "handoff verification did not finish")
+    if (
+        pointer.get("state") != "RECEIPT"
+        or set(pointer) != {
+            "version",
+            "state",
+            "receipt_file",
+            "receipt_hash",
+            "pointer_hash",
+        }
+        or not isinstance(pointer.get("receipt_file"), str)
+        or Path(pointer["receipt_file"]).name != pointer["receipt_file"]
+    ):
+        raise LocalCheckError(
+            "HANDOFF_LATEST_POINTER_INVALID", "unexpected latest pointer shape"
+        )
+
+    target = receipt_dir / pointer["receipt_file"]
+    if not target.is_file():
+        raise LocalCheckError(
+            "HANDOFF_LATEST_POINTER_INVALID", "latest receipt target is missing"
+        )
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LocalCheckError("HANDOFF_LATEST_POINTER_INVALID", str(exc)) from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("receipt_hash") != pointer["receipt_hash"]
+        or runtime_handoff_receipt_hash(payload) != pointer["receipt_hash"]
+    ):
+        raise LocalCheckError(
+            "HANDOFF_LATEST_POINTER_INVALID", "latest receipt hash mismatch"
+        )
+    return target
+
+
+def _write_latest_pointer(repo: Path, body: Mapping[str, Any]) -> None:
+    receipt_dir = _handoff_receipt_dir(repo)
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    pointer_body = {"version": HANDOFF_LATEST_POINTER_VERSION, **dict(body)}
+    pointer = {**pointer_body, "pointer_hash": canonical_hash(pointer_body)}
+    pointer_path = _handoff_latest_pointer_path(repo)
+    pointer_tmp = pointer_path.with_suffix(".tmp")
+    pointer_tmp.write_text(json.dumps(pointer, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(pointer_tmp, pointer_path)
+
+
+def _mark_handoff_in_progress(repo: Path) -> None:
+    _write_latest_pointer(
+        repo,
+        {
+            "state": "IN_PROGRESS",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 def _write_handoff_receipt(repo: Path, payload: dict[str, Any]) -> Path:
@@ -356,7 +449,149 @@ def _write_handoff_receipt(repo: Path, payload: dict[str, Any]) -> Path:
     filename = f"{stamp}-{short_hash}.json"
     path = receipt_dir / filename
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    _write_latest_pointer(
+        repo,
+        {
+            "state": "RECEIPT",
+            "receipt_file": filename,
+            "receipt_hash": receipt_hash,
+        },
+    )
     return path
+
+
+def _write_attempt_marker(repo: Path, reason_code: str) -> Path:
+    payload = {
+        "protocol_version": PUBLIC_PROTOCOL_VERSION,
+        "schema": RUNTIME_HANDOFF_SCHEMA_ID,
+        "receipt_kind": RUNTIME_HANDOFF_RECEIPT_KIND,
+        "claim_ceiling": HANDOFF_CLAIM_CEILING,
+        "non_claims": list(HANDOFF_NON_CLAIMS),
+        "handoff_id": "UNRESOLVED",
+        "handoff_config_hash": canonical_hash({"state": "unresolved"}),
+        "verdict": "HANDOFF_BLOCKED",
+        "reason_codes": [reason_code],
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "source_binding": {
+            "target_commit": "git-commit:" + "0" * 40,
+            "target_tree": "git-tree:" + "0" * 40,
+            "worktree_clean": False,
+        },
+        "prerequisite_repository": {},
+        "runtime_binding": {"services": []},
+        "handoff_verifier": {
+            "command": ["<not-run>"],
+            "exit_code": 1,
+            "stdout_sha256": "sha256:" + "0" * 64,
+            "stderr_sha256": "sha256:" + "0" * 64,
+            "duration_ms": 0,
+        },
+    }
+    return _write_handoff_receipt(repo, payload)
+
+
+def _repository_verification_reasons(
+    repo: Path,
+    target_tree: str,
+) -> tuple[list[str], Path | None]:
+    latest = _latest_timestamped_receipt(repo / CONFIG_DIRECTORY / "receipts")
+    if latest is None:
+        return ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], None
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], latest
+    if not isinstance(payload, dict):
+        return ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], latest
+
+    reasons: list[str] = []
+    validation = validate_verification_receipt(latest, repo=repo)
+    if not validation["valid"]:
+        reasons.extend(validation["reason_codes"])
+    status = payload.get("outcome", {}).get("status") or payload.get("core_response", {}).get(
+        "verification", {}
+    ).get("status")
+    if status != "VERIFIED":
+        reasons.append("REPOSITORY_RECEIPT_NOT_VERIFIED")
+    if payload.get("target_tree") != target_tree:
+        reasons.append("REPOSITORY_RECEIPT_STALE")
+    if reasons:
+        reasons.append("PREREQUISITE_REPOSITORY_NOT_VERIFIED")
+    return sorted(set(reasons)), latest
+
+
+def _prerequisite_binding_reasons(
+    repo: Path,
+    payload: Mapping[str, Any],
+    target_tree: str,
+) -> list[str]:
+    binding = payload.get("prerequisite_repository")
+    if not isinstance(binding, Mapping):
+        return ["PREREQUISITE_REPOSITORY_BINDING_MISSING"]
+    receipt_file = binding.get("receipt_file")
+    if (
+        not isinstance(receipt_file, str)
+        or not receipt_file
+        or Path(receipt_file).name != receipt_file
+    ):
+        return ["PREREQUISITE_REPOSITORY_BINDING_INVALID"]
+    receipt_path = repo / CONFIG_DIRECTORY / "receipts" / receipt_file
+    if not receipt_path.is_file():
+        return ["PREREQUISITE_REPOSITORY_RECEIPT_MISSING"]
+    try:
+        bound_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ["PREREQUISITE_REPOSITORY_RECEIPT_INVALID"]
+    if not isinstance(bound_payload, dict):
+        return ["PREREQUISITE_REPOSITORY_RECEIPT_INVALID"]
+
+    reasons: list[str] = []
+    if bound_payload.get("receipt_hash") != binding.get("receipt_hash"):
+        reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_CHANGED")
+    if bound_payload.get("target_tree") != target_tree or binding.get("target_tree") != target_tree:
+        reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_STALE")
+    validation = validate_verification_receipt(receipt_path, repo=repo)
+    if not validation["valid"]:
+        reasons.extend(validation["reason_codes"])
+        reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_INVALID")
+    status = bound_payload.get("outcome", {}).get("status") or bound_payload.get(
+        "core_response", {}
+    ).get("verification", {}).get("status")
+    if status != "VERIFIED":
+        reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_NOT_VERIFIED")
+    return sorted(set(reasons))
+
+
+def _source_freshness_reasons(
+    repo: Path,
+    payload: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    try:
+        _check_ignored_residue(repo)
+    except LocalCheckError as exc:
+        reasons.append(exc.reason_code)
+
+    try:
+        dirty = _non_management_dirty(repo)
+        if dirty:
+            reasons.append("WORKTREE_DIRTY")
+        head = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
+        tree = _product_tree(repo, head)
+        source = payload.get("source_binding", {})
+        if source.get("target_commit") != f"git-commit:{head}":
+            reasons.append("SOURCE_HEAD_CHANGED")
+        if source.get("target_tree") != f"git-tree:{tree}":
+            reasons.append("SOURCE_TREE_DRIFT")
+        current_tree = f"git-tree:{tree}"
+        prerequisite_reasons, _ = _repository_verification_reasons(repo, current_tree)
+        reasons.extend(prerequisite_reasons)
+        reasons.extend(_prerequisite_binding_reasons(repo, payload, current_tree))
+    except LocalCheckError as exc:
+        reasons.append(exc.reason_code)
+        reasons.append("SOURCE_FRESHNESS_CHECK_FAILED")
+    return sorted(set(reasons))
 
 
 def check_handoff(path: str | Path = ".") -> dict[str, Any]:
@@ -368,13 +603,20 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
     any earlier PASS receipt.
     """
     repo = _repo_root(path)
-    config = _load_handoff_config(repo)
+    _mark_handoff_in_progress(repo)
+    try:
+        config = _load_handoff_config(repo)
+    except LocalCheckError as exc:
+        rpath = _write_attempt_marker(repo, exc.reason_code)
+        raise LocalCheckError(exc.reason_code, exc.detail, receipt_path=rpath) from exc
     now_iso = datetime.now(timezone.utc).isoformat()
+    current_prerequisite_bind: dict[str, Any] = {}
 
     def make_blocked_receipt(
         reason_codes: list[str],
         *,
         source_binding: Mapping[str, Any] | None = None,
+        prerequisite_repository: Mapping[str, Any] | None = None,
         runtime_binding: Mapping[str, Any] | None = None,
         handoff_verifier: Mapping[str, Any] | None = None,
     ) -> Path:
@@ -390,6 +632,11 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
             "reason_codes": sorted(set(reason_codes)),
             "verified_at": now_iso,
             "source_binding": dict(source_binding or {}),
+            "prerequisite_repository": dict(
+                current_prerequisite_bind
+                if prerequisite_repository is None
+                else prerequisite_repository
+            ),
             "runtime_binding": dict(runtime_binding or {"services": []}),
             "handoff_verifier": dict(
                 handoff_verifier
@@ -405,79 +652,81 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         return _write_handoff_receipt(repo, payload)
 
     # 1. Bind exact clean source state before trusting prerequisite evidence.
-    dirty = _non_management_dirty(repo)
-    head_commit = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
-    product_tree = _product_tree(repo, head_commit)
+    try:
+        _check_ignored_residue(repo)
+        dirty = _non_management_dirty(repo)
+        head_commit = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
+        product_tree = _product_tree(repo, head_commit)
+    except LocalCheckError as exc:
+        rpath = make_blocked_receipt([exc.reason_code])
+        raise LocalCheckError(exc.reason_code, exc.detail, receipt_path=rpath) from exc
+
     source_bind = {
         "target_commit": f"git-commit:{head_commit}",
         "target_tree": f"git-tree:{product_tree}",
         "worktree_clean": not bool(dirty),
     }
-
     if dirty:
         rpath = make_blocked_receipt(["WORKTREE_DIRTY"], source_binding=source_bind)
         raise LocalCheckError("WORKTREE_DIRTY", ", ".join(dirty), receipt_path=rpath)
 
-    # 2. Prerequisite repository verification must be valid and apply to this exact product tree.
-    repo_receipts_dir = repo / CONFIG_DIRECTORY / "receipts"
-    latest_repo_receipt = _latest_receipt(repo_receipts_dir)
-    if config.get("require_prerequisite_repo_check", True):
-        if latest_repo_receipt is None:
-            rpath = make_blocked_receipt(
-                ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], source_binding=source_bind
-            )
-            raise LocalCheckError(
-                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
-                "repository verification receipt missing",
-                receipt_path=rpath,
-            )
-        try:
-            repo_payload = json.loads(latest_repo_receipt.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            rpath = make_blocked_receipt(
-                ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], source_binding=source_bind
-            )
-            raise LocalCheckError(
-                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
-                f"unreadable repository receipt: {exc}",
-                receipt_path=rpath,
-            ) from exc
-        validation = validate_verification_receipt(latest_repo_receipt, repo=repo)
-        repo_status = repo_payload.get("outcome", {}).get("status") or repo_payload.get(
-            "core_response", {}
-        ).get("verification", {}).get("status")
-        repo_target_tree = repo_payload.get("target_tree")
-        if (
-            not validation["valid"]
-            or repo_status != "VERIFIED"
-            or repo_target_tree != source_bind["target_tree"]
-        ):
-            detail = ", ".join(
-                sorted(
-                    set(
-                        validation["reason_codes"]
-                        + (["REPOSITORY_RECEIPT_NOT_VERIFIED"] if repo_status != "VERIFIED" else [])
-                        + (["REPOSITORY_RECEIPT_STALE"] if repo_target_tree != source_bind["target_tree"] else [])
-                    )
-                )
-            )
-            rpath = make_blocked_receipt(
-                ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], source_binding=source_bind
-            )
-            raise LocalCheckError(
-                "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
-                detail or "repository receipt is not applicable to current source",
-                receipt_path=rpath,
-            )
+    # 2. Level 2 always requires a current valid Level 1 repository verification.
+    prerequisite_reasons, latest_repo_receipt = _repository_verification_reasons(
+        repo, source_bind["target_tree"]
+    )
+    if prerequisite_reasons or latest_repo_receipt is None:
+        rpath = make_blocked_receipt(
+            prerequisite_reasons or ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"],
+            source_binding=source_bind,
+        )
+        raise LocalCheckError(
+            "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
+            ", ".join(prerequisite_reasons) or "repository verification receipt missing",
+            receipt_path=rpath,
+        )
+    repo_payload = json.loads(latest_repo_receipt.read_text(encoding="utf-8"))
+    prerequisite_bind = {
+        "receipt_file": latest_repo_receipt.name,
+        "receipt_hash": repo_payload["receipt_hash"],
+        "target_tree": repo_payload["target_tree"],
+    }
+    current_prerequisite_bind = prerequisite_bind
 
     # 3. Pre-test service probe
     pre_services = [probe_service(repo, svc) for svc in config["services"]]
     runtime_bind = {"services": pre_services}
     unreachable = [s["service_id"] for s in pre_services if not s["reachable"]]
-    missing_identity = [
+    if unreachable:
+        rpath = make_blocked_receipt(
+            ["RUNTIME_SERVICE_UNREACHABLE"],
+            source_binding=source_bind,
+            runtime_binding=runtime_bind,
+        )
+        raise LocalCheckError(
+            "RUNTIME_SERVICE_UNREACHABLE",
+            f"services unreachable: {', '.join(unreachable)}",
+            receipt_path=rpath,
+        )
+
+    endpoint_mismatch = [
         svc["service_id"]
-        for svc, configured in zip(pre_services, config["services"])
-        if configured.get("pid_file") and svc["pid"] is None
+        for svc in pre_services
+        if svc["pid"] is not None and not svc["identity_matches_endpoint"]
+    ]
+    if endpoint_mismatch:
+        rpath = make_blocked_receipt(
+            ["RUNTIME_PROCESS_ENDPOINT_MISMATCH"],
+            source_binding=source_bind,
+            runtime_binding=runtime_bind,
+        )
+        raise LocalCheckError(
+            "RUNTIME_PROCESS_ENDPOINT_MISMATCH",
+            f"services whose PID does not own the endpoint: {', '.join(endpoint_mismatch)}",
+            receipt_path=rpath,
+        )
+
+    missing_identity = [
+        svc["service_id"] for svc in pre_services if not svc["process_identity_bound"]
     ]
     if missing_identity:
         rpath = make_blocked_receipt(
@@ -488,18 +737,6 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         raise LocalCheckError(
             "RUNTIME_PROCESS_IDENTITY_UNAVAILABLE",
             f"services missing required process identity: {', '.join(missing_identity)}",
-            receipt_path=rpath,
-        )
-
-    if unreachable:
-        rpath = make_blocked_receipt(
-            ["RUNTIME_SERVICE_UNREACHABLE"],
-            source_binding=source_bind,
-            runtime_binding=runtime_bind,
-        )
-        raise LocalCheckError(
-            "RUNTIME_SERVICE_UNREACHABLE",
-            f"services unreachable: {', '.join(unreachable)}",
             receipt_path=rpath,
         )
 
@@ -558,10 +795,34 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         "duration_ms": duration_ms,
     }
 
-    # 5. Post-test Git check
-    post_head = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
-    post_tree = _product_tree(repo, post_head)
-    post_dirty = _non_management_dirty(repo)
+    # 5. Post-test source, config, and prerequisite evidence must remain identical/current.
+    try:
+        _check_ignored_residue(repo)
+        post_config = _load_handoff_config(repo)
+        post_head = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
+        post_tree = _product_tree(repo, post_head)
+        post_dirty = _non_management_dirty(repo)
+    except LocalCheckError as exc:
+        rpath = make_blocked_receipt(
+            [exc.reason_code],
+            source_binding=source_bind,
+            runtime_binding=runtime_bind,
+            handoff_verifier=verifier_art,
+        )
+        raise LocalCheckError(exc.reason_code, exc.detail, receipt_path=rpath) from exc
+
+    if canonical_hash(post_config) != canonical_hash(config):
+        rpath = make_blocked_receipt(
+            ["HANDOFF_CONFIG_CHANGED"],
+            source_binding=source_bind,
+            runtime_binding=runtime_bind,
+            handoff_verifier=verifier_art,
+        )
+        raise LocalCheckError(
+            "HANDOFF_CONFIG_CHANGED",
+            "handoff configuration changed during verification",
+            receipt_path=rpath,
+        )
     if post_head != head_commit:
         rpath = make_blocked_receipt(
             ["GIT_MANIFEST_MISMATCH", "SOURCE_HEAD_CHANGED"],
@@ -599,6 +860,28 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
             receipt_path=rpath,
         )
 
+    post_prerequisite_reasons, post_repo_receipt = _repository_verification_reasons(
+        repo, source_bind["target_tree"]
+    )
+    if post_prerequisite_reasons or post_repo_receipt is None:
+        rpath = make_blocked_receipt(
+            post_prerequisite_reasons or ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"],
+            source_binding=source_bind,
+            runtime_binding=runtime_bind,
+            handoff_verifier=verifier_art,
+        )
+        raise LocalCheckError(
+            "PREREQUISITE_REPOSITORY_NOT_VERIFIED",
+            ", ".join(post_prerequisite_reasons),
+            receipt_path=rpath,
+        )
+    post_repo_payload = json.loads(post_repo_receipt.read_text(encoding="utf-8"))
+    current_prerequisite_bind = {
+        "receipt_file": post_repo_receipt.name,
+        "receipt_hash": post_repo_payload["receipt_hash"],
+        "target_tree": post_repo_payload["target_tree"],
+    }
+
     # 6. Post-test service probe & PID identity invariant check
     post_services = [probe_service(repo, svc) for svc in config["services"]]
     runtime_bind = {"services": post_services}
@@ -615,8 +898,34 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
                 f"service {post['service_id']} went down during verification",
                 receipt_path=rpath,
             )
-        if pre["pid"] is not None and (
-            post["pid"] != pre["pid"] or post["process_start_time"] != pre["process_start_time"]
+        if post["pid"] is not None and not post["identity_matches_endpoint"]:
+            rpath = make_blocked_receipt(
+                ["RUNTIME_PROCESS_ENDPOINT_MISMATCH"],
+                source_binding=source_bind,
+                runtime_binding=runtime_bind,
+                handoff_verifier=verifier_art,
+            )
+            raise LocalCheckError(
+                "RUNTIME_PROCESS_ENDPOINT_MISMATCH",
+                f"service {post['service_id']} PID no longer owns the endpoint",
+                receipt_path=rpath,
+            )
+        if not post["process_identity_bound"]:
+            rpath = make_blocked_receipt(
+                ["RUNTIME_PROCESS_IDENTITY_UNAVAILABLE"],
+                source_binding=source_bind,
+                runtime_binding=runtime_bind,
+                handoff_verifier=verifier_art,
+            )
+            raise LocalCheckError(
+                "RUNTIME_PROCESS_IDENTITY_UNAVAILABLE",
+                f"service {post['service_id']} has no verifiable process identity",
+                receipt_path=rpath,
+            )
+        if (
+            post["pid"] != pre["pid"]
+            or post["listener_pid"] != pre["listener_pid"]
+            or post["process_start_time"] != pre["process_start_time"]
         ):
             rpath = make_blocked_receipt(
                 ["RUNTIME_PROCESS_IDENTITY_CHANGED"],
@@ -657,6 +966,7 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         "reason_codes": [],
         "verified_at": now_iso,
         "source_binding": source_bind,
+        "prerequisite_repository": current_prerequisite_bind,
         "runtime_binding": runtime_bind,
         "handoff_verifier": verifier_art,
     }
@@ -670,10 +980,57 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
     }
 
 
+def _runtime_freshness_reasons(
+    repo: Path,
+    payload: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    config_services = {
+        service["service_id"]: service for service in config.get("services", [])
+    }
+    services = payload.get("runtime_binding", {}).get("services", [])
+    if not isinstance(services, list) or not services:
+        return ["NO_RUNTIME_SERVICES_DECLARED"]
+
+    for service in services:
+        if not isinstance(service, Mapping):
+            reasons.append("RUNTIME_SERVICE_BINDING_INVALID")
+            continue
+        service_id = service.get("service_id")
+        service_config = config_services.get(service_id)
+        if service_config is None:
+            reasons.append("HANDOFF_CONFIG_CHANGED")
+            continue
+        probed = probe_service(repo, service_config)
+        if not probed["reachable"]:
+            reasons.append("RUNTIME_SERVICE_UNREACHABLE")
+        if probed["pid"] is not None and not probed["identity_matches_endpoint"]:
+            reasons.append("RUNTIME_PROCESS_ENDPOINT_MISMATCH")
+        if not probed["process_identity_bound"]:
+            reasons.append("RUNTIME_PROCESS_IDENTITY_UNAVAILABLE")
+        if (
+            probed["pid"] != service.get("pid")
+            or probed["listener_pid"] != service.get("listener_pid")
+            or probed["process_start_time"] != service.get("process_start_time")
+        ):
+            reasons.append("RUNTIME_PROCESS_IDENTITY_CHANGED")
+    return sorted(set(reasons))
+
+
 def handoff_status(path: str | Path = ".") -> dict[str, Any]:
-    """Read-only freshness and validity check of the latest handoff receipt."""
+    """Read-only freshness and validity check of the current handoff attempt."""
     repo = _repo_root(path)
-    latest = _latest_receipt(_handoff_receipt_dir(repo))
+    try:
+        latest = _latest_handoff_receipt(repo)
+    except LocalCheckError as exc:
+        return {
+            "status": "BLOCKED",
+            "fresh": False,
+            "claim_ceiling": HANDOFF_CLAIM_CEILING,
+            "reason_codes": [exc.reason_code],
+            "receipt_path": None,
+        }
     if latest is None:
         return {
             "status": "MISSING",
@@ -687,67 +1044,40 @@ def handoff_status(path: str | Path = ".") -> dict[str, Any]:
         payload = json.loads(latest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {
-            "status": "INVALID",
+            "status": "BLOCKED",
+            "fresh": False,
+            "claim_ceiling": HANDOFF_CLAIM_CEILING,
+            "reason_codes": ["MALFORMED_RECEIPT"],
+            "receipt_path": latest,
+        }
+    if not isinstance(payload, dict):
+        return {
+            "status": "BLOCKED",
             "fresh": False,
             "claim_ceiling": HANDOFF_CLAIM_CEILING,
             "reason_codes": ["MALFORMED_RECEIPT"],
             "receipt_path": latest,
         }
 
-    # Core validation
     validation = validate_runtime_handoff_payload(payload)
     reasons = list(validation["reason_codes"])
-
-    # If the latest receipt itself was BLOCKED/FAILED, it remains BLOCKED (fail-closed)
     if payload.get("verdict") != "HANDOFF_READY":
         reasons.append("HANDOFF_NOT_READY")
 
-    # Source freshness checks
-    try:
-        head_commit = _resolve_commit(repo, "HEAD", "HEAD_UNRESOLVED")
-        product_tree = _product_tree(repo, head_commit)
-        expected_commit = payload.get("source_binding", {}).get("target_commit")
-        expected_tree = payload.get("source_binding", {}).get("target_tree")
-
-        if expected_commit != f"git-commit:{head_commit}":
-            reasons.append("SOURCE_HEAD_CHANGED")
-        if expected_tree != f"git-tree:{product_tree}":
-            reasons.append("SOURCE_TREE_DRIFT")
-
-        dirty = _non_management_dirty(repo)
-        if dirty:
-            reasons.append("WORKTREE_DIRTY")
-    except (KeyError, TypeError, LocalCheckError):
-        reasons.append("SOURCE_FRESHNESS_CHECK_FAILED")
-
-    # Live runtime freshness checks
+    reasons.extend(_source_freshness_reasons(repo, payload))
     try:
         config = _load_handoff_config(repo)
         if payload.get("handoff_config_hash") != canonical_hash(config):
             reasons.append("HANDOFF_CONFIG_CHANGED")
         if payload.get("handoff_id") != config.get("handoff_id"):
             reasons.append("HANDOFF_CONFIG_CHANGED")
-        config_services = {s["service_id"]: s for s in config.get("services", [])}
-    except LocalCheckError:
-        reasons.append("HANDOFF_CONFIG_INVALID")
-        config_services = {}
-
-    services = payload.get("runtime_binding", {}).get("services", [])
-    for svc in services:
-        svc_cfg = config_services.get(svc.get("service_id")) or svc
-        probed = probe_service(repo, svc_cfg)
-        if not probed["reachable"]:
-            reasons.append("RUNTIME_SERVICE_UNREACHABLE")
-        if svc.get("pid") is not None and (
-            probed["pid"] != svc.get("pid")
-            or probed["process_start_time"] != svc.get("process_start_time")
-        ):
-            reasons.append("RUNTIME_PROCESS_IDENTITY_CHANGED")
+        reasons.extend(_runtime_freshness_reasons(repo, payload, config))
+    except LocalCheckError as exc:
+        reasons.extend(["HANDOFF_CONFIG_INVALID", exc.reason_code])
 
     fresh = not reasons
-    status = "HANDOFF_READY" if fresh else "BLOCKED"
     return {
-        "status": status,
+        "status": "HANDOFF_READY" if fresh else "BLOCKED",
         "fresh": fresh,
         "claim_ceiling": HANDOFF_CLAIM_CEILING,
         "reason_codes": sorted(set(reasons)),
@@ -760,9 +1090,10 @@ def validate_handoff_receipt(
     *,
     repo: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Validate a handoff receipt file against Core truth criteria."""
+    """Validate a receipt envelope and, with repo, its current handoff applicability."""
+    receipt = Path(receipt_path)
     try:
-        payload = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     if not isinstance(payload, dict):
@@ -770,19 +1101,28 @@ def validate_handoff_receipt(
 
     res = validate_runtime_handoff_payload(payload)
     reasons = list(res["reason_codes"])
+    if payload.get("verdict") != "HANDOFF_READY":
+        reasons.append("HANDOFF_NOT_READY")
 
     if repo is not None:
         repo_root = _repo_root(repo)
         try:
-            head = _resolve_commit(repo_root, "HEAD", "HEAD_UNRESOLVED")
-            expected_commit = payload.get("source_binding", {}).get("target_commit")
-            if expected_commit != f"git-commit:{head}":
-                reasons.append("SOURCE_HEAD_CHANGED")
+            latest = _latest_handoff_receipt(repo_root)
+            if latest is None or latest.resolve() != receipt.resolve():
+                reasons.append("SUPERSEDED_HANDOFF_RECEIPT")
+        except LocalCheckError as exc:
+            reasons.append(exc.reason_code)
+
+        reasons.extend(_source_freshness_reasons(repo_root, payload))
+        try:
             config = _load_handoff_config(repo_root)
             if payload.get("handoff_config_hash") != canonical_hash(config):
                 reasons.append("HANDOFF_CONFIG_CHANGED")
-        except LocalCheckError:
-            reasons.append("SOURCE_OR_CONFIG_FRESHNESS_CHECK_FAILED")
+            if payload.get("handoff_id") != config.get("handoff_id"):
+                reasons.append("HANDOFF_CONFIG_CHANGED")
+            reasons.extend(_runtime_freshness_reasons(repo_root, payload, config))
+        except LocalCheckError as exc:
+            reasons.extend(["HANDOFF_CONFIG_INVALID", exc.reason_code])
 
     return {"valid": not reasons, "reason_codes": sorted(set(reasons))}
 
