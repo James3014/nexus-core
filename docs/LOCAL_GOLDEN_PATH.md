@@ -65,6 +65,21 @@ recomputable record of inputs and Core response. It is not a Completion
 Certification receipt, Candidate acceptance, merge approval, release approval, or
 production claim.
 
+## Issue-bound quick binding
+
+For work that is already tracked by one GitHub Issue, the repository Golden Path can bind the exact Issue contract revision without hand-authoring protocol JSON:
+
+```bash
+nexus-certify issue-init --issue 85
+nexus-certify issue-check --issue 85
+```
+
+`issue-init` derives `owner/name` from the `origin` remote when it is unambiguous; use `--github-repo owner/name` only when explicit binding is required. It stores a small hash-bound binding under `.nexus-core/issues/<number>.json` containing the exact repository identity, Issue number, title, body, state, and contract hash used for verification. Comments, labels, assignees, and workflow prose are deliberately excluded from the contract revision.
+
+`issue-check` re-reads the Issue, requires it to remain open and contract-identical, then delegates physical Git acquisition, scope/deletion policy, verifier execution, generic Core verification, and receipt production to the existing repository Golden Path. The Issue binding is incorporated into the AcceptanceContract `requirements_hash` and into the durable receipt. Contract drift requires an explicit rebind; a closed, inaccessible, mismatched, or tampered binding fails closed.
+
+The claim ceiling is `ISSUE_VERIFIED_NOT_RELEASED`. An Issue can supply requirements evidence, but it cannot grant execution authority, lane selection, Candidate acceptance, merge, release, deployment, or production authority.
+
 ## Minimal deterministic config
 
 ```toml
@@ -163,7 +178,7 @@ Level 3: Production Approval         RELEASE / DEPLOY / PRODUCTION
 ```
 
 ### 1. Level 1 — Repository & Issue Verification (`VERIFIED` / `READY`)
-- Commands: `nexus-certify check`, `nexus-certify issue-check`, `nexus-certify gate`
+- Commands: `nexus-certify check`, `nexus-certify issue-init`, `nexus-certify issue-check`
 - Claim ceiling: `REPOSITORY_VERIFIED_NOT_RELEASED` / `ISSUE_VERIFIED_NOT_RELEASED`
 - Semantics: Static and automated test suites pass against a clean target Git tree.
 - Boundary: `VERIFIED ≠ HANDOFF_READY`. Passing automated tests does not prove that

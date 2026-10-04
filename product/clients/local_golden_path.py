@@ -457,7 +457,12 @@ def _verifier_artifact(
 
 
 def _build_request(
-    config: Mapping[str, Any], config_hash: str, snapshot: _GitSnapshot, verifier: Mapping[str, Any]
+    config: Mapping[str, Any],
+    config_hash: str,
+    snapshot: _GitSnapshot,
+    verifier: Mapping[str, Any],
+    *,
+    requirements_hash: str | None = None,
 ) -> dict[str, Any]:
     paths = [entry["path"] for entry in snapshot.manifest["entries"]]
     deleted = [
@@ -465,7 +470,7 @@ def _build_request(
     ]
     contract = {
         "contract_id": f"local-contract-{config_hash.removeprefix('sha256:')[:16]}",
-        "requirements_hash": config_hash,
+        "requirements_hash": requirements_hash or config_hash,
         "required_verifier_ids": ["local-command"],
         "allowed_paths": paths,
         "deletion_policy": config["deletion_policy"],
@@ -536,6 +541,7 @@ def _base_receipt(
     response: Mapping[str, Any] | None,
     status: str,
     reasons: Sequence[str],
+    requirements_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": RECEIPT_SCHEMA_VERSION,
@@ -549,7 +555,11 @@ def _base_receipt(
         "manifest_hash": change_manifest_hash(snapshot.manifest) if snapshot else None,
         "config_hash": config_hash,
         "verifier": verifier,
-        "inputs": {"config": config, "request": request},
+        "inputs": {
+            "config": config,
+            "requirements_context": dict(requirements_context) if requirements_context else None,
+            "request": request,
+        },
         "core_response": response,
         "outcome": {
             "status": status,
@@ -568,6 +578,7 @@ def _raise_with_receipt(
     config_hash: str | None = None,
     snapshot: _GitSnapshot | None = None,
     verifier: Mapping[str, Any] | None = None,
+    requirements_context: Mapping[str, Any] | None = None,
 ) -> None:
     receipt = _base_receipt(
         config=config,
@@ -578,17 +589,33 @@ def _raise_with_receipt(
         response=None,
         status="FAILED_CLOSED",
         reasons=[reason],
+        requirements_context=requirements_context,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path)
 
 
-def check_repository(path: str | Path = ".") -> dict[str, Any]:
-    """Run the local Golden Path and return the canonical Core verdict."""
+def check_repository(
+    path: str | Path = ".",
+    *,
+    requirements_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the local Golden Path and return the canonical Core verdict.
+
+    ``requirements_context`` is an optional evidence-binding projection for a
+    higher-level consumer such as the Issue Golden Path. It participates only in
+    the AcceptanceContract requirements hash; it does not grant execution,
+    approval, merge, release, or deployment authority.
+    """
 
     repo = _repo_root(path)
     config = _load_config(repo)
     config_hash = canonical_hash(config)
+    requirements_hash = (
+        config_hash
+        if requirements_context is None
+        else canonical_hash({"config_hash": config_hash, "context": dict(requirements_context)})
+    )
     if not _command_available(repo, config["verifier_command"]):
         _raise_with_receipt(
             repo,
@@ -596,6 +623,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config["verifier_command"][0],
             config=config,
             config_hash=config_hash,
+            requirements_context=requirements_context,
         )
     try:
         snapshot = _snapshot(repo, config["base_ref"])
@@ -606,6 +634,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             exc.detail,
             config=config,
             config_hash=config_hash,
+            requirements_context=requirements_context,
         )
 
     forbidden = [
@@ -621,6 +650,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
+            requirements_context=requirements_context,
         )
     deleted = [
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
@@ -633,6 +663,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
+            requirements_context=requirements_context,
         )
 
     verifier_env = os.environ.copy()
@@ -657,6 +688,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
+            requirements_context=requirements_context,
         )
     except OSError as exc:
         _raise_with_receipt(
@@ -666,6 +698,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
+            requirements_context=requirements_context,
         )
     verifier = _verifier_artifact(
         config["verifier_command"], executed.returncode, executed.stdout, executed.stderr
@@ -682,6 +715,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config_hash=config_hash,
             snapshot=snapshot,
             verifier=verifier,
+            requirements_context=requirements_context,
         )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
@@ -694,9 +728,16 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             config_hash=config_hash,
             snapshot=snapshot,
             verifier=verifier,
+            requirements_context=requirements_context,
         )
 
-    request = _build_request(config, config_hash, snapshot, verifier)
+    request = _build_request(
+        config,
+        config_hash,
+        snapshot,
+        verifier,
+        requirements_hash=requirements_hash,
+    )
     http_status, response = verify_generic_changeset(request)
     if http_status != 200:
         reason = response.get("error", {}).get("code", "CORE_REQUEST_REJECTED")
@@ -709,6 +750,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
             response=response,
             status="FAILED_CLOSED",
             reasons=[reason],
+            requirements_context=requirements_context,
         )
         path_out = _write_receipt(repo, receipt)
         raise LocalCheckError(reason, "canonical Core rejected request", receipt_path=path_out)
@@ -720,6 +762,7 @@ def check_repository(path: str | Path = ".") -> dict[str, Any]:
         config_hash=config_hash,
         snapshot=snapshot,
         verifier=verifier,
+        requirements_context=requirements_context,
         request=request,
         response=response,
         status=status,
@@ -769,6 +812,7 @@ def validate_verification_receipt_payload(
         reasons.append("MALFORMED_RECEIPT")
         return {"valid": False, "reason_codes": sorted(set(reasons))}
     config = inputs.get("config")
+    requirements_context = inputs.get("requirements_context")
     request = inputs.get("request")
     config_hash = canonical_hash(config) if isinstance(config, dict) else None
     if config_hash is None or payload.get("config_hash") != config_hash:
@@ -841,7 +885,14 @@ def validate_verification_receipt_payload(
                 or payload.get("target_tree") != request["change_manifest"]["target_tree"]
             ):
                 reasons.append("RECEIPT_BINDING_MISMATCH")
-            if request["acceptance_contract"]["requirements_hash"] != config_hash:
+            expected_requirements_hash = (
+                config_hash
+                if requirements_context is None
+                else canonical_hash(
+                    {"config_hash": config_hash, "context": requirements_context}
+                )
+            )
+            if request["acceptance_contract"]["requirements_hash"] != expected_requirements_hash:
                 reasons.append("CONFIG_BINDING_MISMATCH")
         except (KeyError, TypeError):
             reasons.append("RECEIPT_BINDING_MISMATCH")

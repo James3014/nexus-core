@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from product.clients.issue_golden_path import check_issue, init_issue_binding
 from product.clients.local_golden_path import (
     LocalCheckError,
     check_repository,
@@ -354,6 +355,25 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "VERIFIED" else 1
 
 
+def cmd_issue_init(args: argparse.Namespace) -> int:
+    path = init_issue_binding(
+        args.repo,
+        issue_number=args.issue,
+        github_repo=args.github_repo,
+        force=args.force,
+    )
+    print(f"issue binding initialized: {path}")
+    return 0
+
+
+def cmd_issue_check(args: argparse.Namespace) -> int:
+    result = check_issue(args.repo, issue_number=args.issue)
+    print(f"issue verification: {result['status']} (not RELEASED)")
+    print(f"claim ceiling: {result['claim_ceiling']}")
+    if result["reason_codes"]:
+        print("reasons: " + ", ".join(result["reason_codes"]))
+    print(f"receipt: {result['receipt_path']}")
+    return 0 if result["status"] == "VERIFIED" else 1
 
 
 def cmd_handoff_init(args: argparse.Namespace) -> int:
@@ -484,6 +504,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = subparsers.add_parser("check", help="Run local deterministic verification")
     p_check.add_argument("--repo", default=".", help="Git repository (default: current)")
 
+    p_issue_init = subparsers.add_parser(
+        "issue-init", help="Bind one GitHub Issue to the repository verification contract"
+    )
+    p_issue_init.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_issue_init.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
+    p_issue_init.add_argument(
+        "--github-repo",
+        default=None,
+        help="GitHub repository owner/name (default: derive from origin)",
+    )
+    p_issue_init.add_argument("--force", action="store_true", help="Replace existing binding")
+
+    p_issue_check = subparsers.add_parser(
+        "issue-check", help="Verify the current repository change against a bound GitHub Issue"
+    )
+    p_issue_check.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_issue_check.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
+
     # Machine-readable candidate acquisition (issue-1312).
     p_acquire = subparsers.add_parser(
         "acquire",
@@ -561,6 +599,10 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_doctor(args)
         elif args.command == "check":
             return cmd_check(args)
+        elif args.command == "issue-init":
+            return cmd_issue_init(args)
+        elif args.command == "issue-check":
+            return cmd_issue_check(args)
         elif args.command == "acquire":
             return cmd_acquire(args)
         elif args.command == "handoff-init":
