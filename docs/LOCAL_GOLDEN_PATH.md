@@ -53,10 +53,18 @@ runs the verifier.
 3. derives the source-tree-to-target-tree manifest from real Git objects;
 4. projects allowed path globs to the exact changed paths placed in the canonical
    `AcceptanceContract`;
-5. executes the configured argv directly (never through a shell), captures its
-   exit code and output hashes, and binds the artifact hash into the canonical
-   `EvidenceBundle`;
-6. invokes the existing generic Core adapter and writes a local verification
+5. creates a temporary isolated Git clone, materializes the exact target tree
+   into that clone while preserving the source HEAD identity, and executes the
+   configured argv there directly (never through a shell);
+6. rejects any verifier mutation of the isolated tracked/non-ignored target
+   subject, while allowing ignored verifier-local environment/cache output to
+   remain outside the canonical repository subject;
+7. removes the verifier clone, then re-reads the original repository's ignored
+   residue and target tree so any verifier escape or concurrent source mutation
+   still fails closed;
+8. captures verifier exit/output hashes plus the isolated execution subject and
+   binds the artifact hash into the canonical `EvidenceBundle`;
+9. invokes the existing generic Core adapter and writes a local verification
    receipt under `.nexus-core/receipts/`.
 
 The human verdict always says `VERIFIED (not CERTIFIED)` or

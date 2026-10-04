@@ -486,17 +486,51 @@ def test_check_detects_target_changed_by_verifier(external_repo: Path):
         verifier_command=(sys.executable, "mutate.py"),
     )
 
-    with pytest.raises(LocalCheckError, match="GIT_MANIFEST_MISMATCH"):
+    with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
 
+    assert raised.value.reason_code == "VERIFIER_SUBJECT_MUTATED"
 
-def test_check_fails_closed_on_verifier_created_ignored_residue(external_repo: Path):
+
+def test_check_allows_verifier_created_ignored_residue_in_isolated_subject(
+    external_repo: Path,
+):
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
     script = external_repo / "mutate.py"
     script.write_text(
         "from pathlib import Path\n"
         "Path('dist').mkdir(exist_ok=True)\n"
         "Path('dist/.gitignore').write_text('*\\n')\n",
+        encoding="utf-8",
+    )
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+        verifier_command=(sys.executable, "mutate.py"),
+    )
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "VERIFIED"
+    assert not (external_repo / "dist").exists()
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["verifier"]["execution_subject"]["mode"] == "isolated_shared_clone"
+    assert receipt["verifier"]["execution_subject"]["target_tree"] == receipt["target_tree"]
+
+
+def test_check_fails_closed_when_verifier_escapes_and_creates_ignored_residue(
+    external_repo: Path,
+):
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    escaped = external_repo / "dist" / ".gitignore"
+    script = external_repo / "mutate.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        f"target = Path({str(escaped)!r})\n"
+        "target.parent.mkdir(exist_ok=True)\n"
+        "target.write_text('*\\n')\n",
         encoding="utf-8",
     )
     init_repository(
@@ -516,6 +550,26 @@ def test_check_fails_closed_on_verifier_created_ignored_residue(external_repo: P
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["verifier"] is not None
     assert receipt["verifier"]["status"] == "PASS"
+
+
+def test_check_fails_closed_on_verifier_sandbox_cleanup_failure(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    _init(external_repo)
+
+    def fail_cleanup(*args: Any, **kwargs: Any) -> None:
+        raise OSError("cleanup blocked")
+
+    monkeypatch.setattr(
+        "product.clients.local_golden_path._cleanup_verifier_sandbox",
+        fail_cleanup,
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "VERIFIER_SANDBOX_CLEANUP_FAILED"
 
 
 def test_check_allows_verifier_created_nexus_core_receipts(external_repo: Path):
