@@ -1,0 +1,78 @@
+name: Nexus Core issue completion
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  nexus-core-issue-completion:
+    name: Nexus Core issue completion
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      PR_BODY: ${{ github.event.pull_request.body || '' }}
+    steps:
+      - name: Checkout exact pull-request head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch exact base ref
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}"
+
+      - name: Resolve exact Issue binding
+        id: issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import re
+
+          body = os.environ.get("PR_BODY", "")
+          matches = re.findall(r"<!--\s*NEXUS_CORE_ISSUE:\s*([1-9][0-9]*)\s*-->", body)
+          if len(matches) != 1:
+              raise SystemExit(
+                  "NEXUS_CORE_ISSUE_BINDING_REQUIRED: PR body must contain exactly one "
+                  "'<!-- NEXUS_CORE_ISSUE: <number> -->' marker."
+              )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"number={matches[0]}\n")
+          PY
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install pinned nexus-certify
+        run: |
+          set -euo pipefail
+          python -m pip install "git+https://github.com/James3014/nexus-core.git@fb1e3dd8370c24cb300ceac78d0be11f471d6308"
+
+      - name: Bootstrap repository dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups --all-extras
+
+      - name: Bind exact Issue contract
+        run: |
+          set -euo pipefail
+          nexus-certify issue-init --repo . --issue "${{ steps.issue.outputs.number }}"
+
+      - name: Verify exact Issue-bound candidate
+        run: |
+          set -euo pipefail
+          nexus-certify issue-check --repo . --issue "${{ steps.issue.outputs.number }}"
