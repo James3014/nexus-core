@@ -32,10 +32,35 @@ def test_installed_wheel_smoke_in_isolated_venv(tmp_path: Path):
     # Install the wheel
     subprocess.run([str(venv_pip), "install", str(target_wheel)], check=True)
 
-    # 1. Verify CLI executable works
+    # 1. Verify exact distribution identity and CLI surface.
     assert venv_certify.is_file()
-    res_cli = subprocess.run([str(venv_certify), "--help"], capture_output=True, text=True, check=True)
+    res_version = subprocess.run(
+        [
+            str(venv_python),
+            "-c",
+            "import importlib.metadata as m; print(m.version('nexus-certify'))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert res_version.stdout.strip() == "0.1.2"
+
+    res_cli = subprocess.run(
+        [str(venv_certify), "--help"], capture_output=True, text=True, check=True
+    )
     assert "nexus-certify" in res_cli.stdout
+    assert "issue-init" in res_cli.stdout
+    assert "issue-check" in res_cli.stdout
+
+    for command in ("issue-init", "issue-check"):
+        res_subcommand = subprocess.run(
+            [str(venv_certify), command, "--help"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert command in res_subcommand.stdout
 
     # 2. Run runner verification script outside the repo checkout
     outside_dir = tmp_path / "outside"
