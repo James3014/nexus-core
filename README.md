@@ -65,11 +65,19 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-For a reproducible install of this release after publication:
+The currently published PyPI release is `0.1.1`. It supports the repository
+Golden Path (`init / doctor / check`) but predates the Issue-bound commands.
+
+The current source candidate is `0.1.2`. After that exact release is
+published and its artifact identity is read back, install it explicitly for the
+Issue-bound Golden Path:
 
 ```bash
-python -m pip install nexus-certify==0.1.1
+python -m pip install nexus-certify==0.1.2
 ```
+
+Do not infer Issue-bound support from an unversioned ambient
+`nexus-certify` executable. Confirm the installed distribution version first.
 
 If you use the pytest example below, make sure pytest is installed in the same environment:
 
@@ -103,6 +111,29 @@ doctor: OK
 verification: VERIFIED (not CERTIFIED)
 receipt: .nexus-core/receipts/...
 ```
+
+### Issue-bound quick binding
+
+The `0.1.2` source candidate adds a thin Issue-bound layer over the same
+repository verifier:
+
+```bash
+nexus-certify issue-init --issue <NUMBER>
+nexus-certify issue-check --issue <NUMBER>
+```
+
+`issue-init` freezes the exact open GitHub Issue contract used for the
+verification requirement. `issue-check` re-reads that Issue, fails closed on
+contract drift, and binds the same physical Git ChangeSet and configured real
+verifier to the Issue evidence.
+
+The maximum claim remains `ISSUE_VERIFIED_NOT_RELEASED`. The Issue does not
+grant execution lane, routing, Candidate acceptance, merge, release, deployment,
+or production authority.
+
+Until `0.1.2` is actually published and its artifact hash is read back, use
+the exact accepted source/wheel Candidate rather than assuming the public
+`0.1.1` package contains these commands.
 
 ### What gets written to your repository
 
@@ -174,7 +205,8 @@ The public `nexus-certify==0.1.1` artifact was installed from PyPI in a fresh en
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Release version in this source:** `0.1.1`
+- **Source candidate version:** `0.1.2` (Issue-bound CLI included; public release/readback still separate)
+- **Current published PyPI baseline:** `0.1.1` (repository Golden Path only)
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
