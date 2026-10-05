@@ -295,17 +295,20 @@ def _materialize_target_tree(repo: Path, head: str) -> str:
         if add.returncode != 0:
             raise LocalCheckError("GIT_TARGET_MATERIALIZATION_FAILED", add.stderr.strip())
 
-        _run_git(
+        restore_control_state = _run_git(
             repo,
-            "rm",
-            "-r",
-            "--cached",
-            "--ignore-unmatch",
+            "reset",
             "--quiet",
+            head,
             "--",
             CONFIG_DIRECTORY,
             env=env,
         )
+        if restore_control_state.returncode != 0:
+            raise LocalCheckError(
+                "GIT_TARGET_MATERIALIZATION_FAILED",
+                restore_control_state.stderr.strip(),
+            )
         return _git_stdout(repo, "write-tree", env=env)
 
 

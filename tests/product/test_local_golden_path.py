@@ -301,6 +301,18 @@ def test_check_allows_nexus_core_config_and_receipts(external_repo: Path):
     assert result["status"] == "VERIFIED"
 
 
+def test_check_preserves_tracked_nexus_core_config_in_target_tree(external_repo: Path):
+    config = _init(external_repo, patterns=("*.py",))
+    _git(external_repo, "add", str(config.relative_to(external_repo)))
+    _git(external_repo, "commit", "-m", "track nexus core config")
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "VERIFIED"
+    assert config.read_text(encoding="utf-8").startswith("version = 1\n")
+
+
 def test_check_fails_closed_on_ignored_file_under_allowed_pattern(external_repo: Path):
     _init(external_repo, patterns=("*.py",))
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
