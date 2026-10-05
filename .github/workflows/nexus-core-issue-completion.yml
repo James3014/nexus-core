@@ -17,9 +17,9 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
       PR_BODY: ${{ github.event.pull_request.body || '' }}
-      UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/nexus-core-project-venv
-      UV_TOOL_DIR: ${{ runner.temp }}/nexus-core-tools
-      UV_TOOL_BIN_DIR: ${{ runner.temp }}/nexus-core-bin
+      UV_PROJECT_ENVIRONMENT: /tmp/nexus-core-project-venv
+      UV_TOOL_DIR: /tmp/nexus-core-tools
+      UV_TOOL_BIN_DIR: /tmp/nexus-core-bin
     steps:
       - name: Checkout exact pull-request head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
