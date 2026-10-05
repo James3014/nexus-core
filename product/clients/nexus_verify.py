@@ -9,6 +9,7 @@ authority.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from product.clients.local_golden_path import validate_verification_receipt_payload
@@ -238,70 +239,124 @@ def _core_status(receipt: Mapping[str, Any]) -> str:
     return "NOT_AVAILABLE"
 
 
-def verify_code_change_evidence(
-    arguments: Mapping[str, Any],
-    *,
-    github_port: Any,
-) -> dict[str, Any]:
-    """Verify supplied Nexus evidence against the current exact GitHub PR state.
+_SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 
-    The GitHub port is injected by the host, which owns authentication and
-    transport. This function is deterministic relative to the supplied port
-    reads and receipt bytes; it performs no repository execution or mutation.
+
+def _normalize_subject_paths(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field} must be a path list")
+    result = tuple(str(item) for item in value)
+    if len(result) != len(set(result)):
+        raise ValueError(f"{field} contains duplicates")
+    for path in result:
+        if (
+            not path
+            or path != path.strip()
+            or path.startswith("/")
+            or "\\" in path
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+        ):
+            raise ValueError(f"{field} contains an invalid relative path")
+    return tuple(sorted(result))
+
+
+def _normalize_supplied_subject(subject: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(subject, Mapping):
+        raise ValueError("subject must be an object")
+    values = dict(subject)
+    required = {
+        "repository_owner",
+        "repository_name",
+        "pr_number",
+        "current_base_sha",
+        "current_head_sha",
+        "current_base_tree",
+        "current_head_tree",
+        "changed_paths",
+        "deleted_paths",
+    }
+    allowed = {*required, "freshness_cas"}
+    if not required.issubset(values) or set(values) - allowed:
+        raise ValueError("subject has an incomplete or substituted schema")
+    owner, repository, pr_number = validate_github_locator(
+        values["repository_owner"], values["repository_name"], values["pr_number"]
+    )
+    normalized: dict[str, Any] = {
+        "repository_owner": owner,
+        "repository_name": repository,
+        "pr_number": pr_number,
+    }
+    for field in (
+        "current_base_sha",
+        "current_head_sha",
+        "current_base_tree",
+        "current_head_tree",
+    ):
+        value = values[field]
+        if not isinstance(value, str) or _SHA40.fullmatch(value) is None:
+            raise ValueError(f"{field} must be lowercase 40-hex SHA")
+        normalized[field] = value
+    if normalized["current_base_sha"] == normalized["current_head_sha"]:
+        raise ValueError("current base and head SHA must differ")
+    changed_paths = _normalize_subject_paths(values["changed_paths"], "changed_paths")
+    deleted_paths = _normalize_subject_paths(values["deleted_paths"], "deleted_paths")
+    if not set(deleted_paths).issubset(set(changed_paths)):
+        raise ValueError("deleted_paths must be a subset of changed_paths")
+    normalized["changed_paths"] = list(changed_paths)
+    normalized["deleted_paths"] = list(deleted_paths)
+    freshness_cas = values.get("freshness_cas")
+    if freshness_cas is not None and not isinstance(freshness_cas, str):
+        raise ValueError("freshness_cas must be a string when supplied")
+    normalized["freshness_cas"] = freshness_cas
+    return normalized
+
+
+def evaluate_code_change_evidence_subject(
+    subject: Mapping[str, Any],
+    receipt: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Apply canonical Core receipt/applicability semantics to one supplied PR subject.
+
+    This reducer performs no GitHub acquisition.  A carrying surface may supply an
+    already-observed exact subject; when no canonical acquisition freshness CAS is
+    supplied, the public ``subject`` field stays null so the result cannot be
+    mistaken for an independently acquired GitHub snapshot.
     """
 
-    owner, repository, pr_number, receipt = _validate_arguments(arguments)
-
-    if receipt is None:
-        receipt_integrity = "ABSENT"
-        receipt_reasons: tuple[str, ...] = ()
-        core_verification = "NOT_AVAILABLE"
-    else:
-        try:
-            validation = validate_verification_receipt_payload(receipt)
-        except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
-            validation = {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
-        receipt_reasons = tuple(validation["reason_codes"])
-        receipt_integrity = "VALID" if validation["valid"] else "INVALID"
-        core_verification = _core_status(receipt) if validation["valid"] else "NOT_AVAILABLE"
-
-    acquisition = read_current_pull_request_subject(
-        owner,
-        repository,
-        pr_number,
-        github_port=github_port,
+    acquired_subject = _normalize_supplied_subject(subject)
+    public_subject = (
+        _public_subject(acquired_subject)
+        if isinstance(acquired_subject.get("freshness_cas"), str)
+        else None
     )
-    if acquisition.get("status") != "OK" or not isinstance(acquisition.get("subject"), Mapping):
-        reason = acquisition.get("reason_code")
-        return _result(
-            subject=None,
-            receipt_integrity=receipt_integrity,
-            evidence_applicability="UNVERIFIABLE",
-            core_verification=core_verification,
-            reason_codes=(
-                *receipt_reasons,
-                reason if isinstance(reason, str) else "GITHUB_ACQUISITION_INVALID",
-            ),
-        )
-
-    acquired_subject = dict(acquisition["subject"])
-    subject = _public_subject(acquired_subject)
 
     if receipt is None:
         return _result(
-            subject=subject,
+            subject=public_subject,
             receipt_integrity="ABSENT",
             evidence_applicability="EVIDENCE_NOT_SUPPLIED",
             core_verification="NOT_AVAILABLE",
             reason_codes=("NEXUS_RECEIPT_NOT_SUPPLIED",),
         )
+    if not isinstance(receipt, Mapping):
+        raise ValueError("receipt must be an object or null")
+    receipt = dict(receipt)
+    try:
+        validation = validate_verification_receipt_payload(receipt)
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        validation = {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+    receipt_reasons = tuple(validation["reason_codes"])
+    receipt_integrity = "VALID" if validation["valid"] else "INVALID"
+    core_verification = _core_status(receipt) if validation["valid"] else "NOT_AVAILABLE"
 
     if receipt_integrity != "VALID":
         applicability = (
-            "TAMPERED" if any(reason in _TAMPER_REASONS for reason in receipt_reasons) else "UNVERIFIABLE"
+            "TAMPERED"
+            if any(reason in _TAMPER_REASONS for reason in receipt_reasons)
+            else "UNVERIFIABLE"
         )
         return _result(
-            subject=subject,
+            subject=public_subject,
             receipt_integrity="INVALID",
             evidence_applicability=applicability,
             core_verification="NOT_AVAILABLE",
@@ -311,7 +366,7 @@ def verify_code_change_evidence(
     binding = _receipt_binding(receipt)
     if binding is None:
         return _result(
-            subject=subject,
+            subject=public_subject,
             receipt_integrity="INVALID",
             evidence_applicability="UNVERIFIABLE",
             core_verification="NOT_AVAILABLE",
@@ -329,7 +384,7 @@ def verify_code_change_evidence(
         or binding["manifest_source_tree"] != expected_source_tree
     ):
         return _result(
-            subject=subject,
+            subject=public_subject,
             receipt_integrity="VALID",
             evidence_applicability="STALE_SOURCE",
             core_verification=core_verification,
@@ -343,7 +398,7 @@ def verify_code_change_evidence(
         or binding["manifest_target_tree"] != expected_target_tree
     ):
         return _result(
-            subject=subject,
+            subject=public_subject,
             receipt_integrity="VALID",
             evidence_applicability="STALE_TARGET",
             core_verification=core_verification,
@@ -355,7 +410,7 @@ def verify_code_change_evidence(
         or binding["deleted_paths"] != tuple(acquired_subject["deleted_paths"])
     ):
         return _result(
-            subject=subject,
+            subject=public_subject,
             receipt_integrity="VALID",
             evidence_applicability="SUBJECT_MISMATCH",
             core_verification=core_verification,
@@ -363,12 +418,53 @@ def verify_code_change_evidence(
         )
 
     return _result(
-        subject=subject,
+        subject=public_subject,
         receipt_integrity="VALID",
         evidence_applicability="APPLIES",
         core_verification=core_verification,
         reason_codes=(),
     )
+
+
+def verify_code_change_evidence(
+    arguments: Mapping[str, Any],
+    *,
+    github_port: Any,
+) -> dict[str, Any]:
+    """Verify supplied Nexus evidence against the current exact GitHub PR state."""
+
+    owner, repository, pr_number, receipt = _validate_arguments(arguments)
+    acquisition = read_current_pull_request_subject(
+        owner,
+        repository,
+        pr_number,
+        github_port=github_port,
+    )
+    if acquisition.get("status") != "OK" or not isinstance(acquisition.get("subject"), Mapping):
+        reason = acquisition.get("reason_code")
+        if receipt is None:
+            receipt_integrity = "ABSENT"
+            core_verification = "NOT_AVAILABLE"
+            receipt_reasons: tuple[str, ...] = ()
+        else:
+            try:
+                validation = validate_verification_receipt_payload(receipt)
+            except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
+                validation = {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+            receipt_reasons = tuple(validation["reason_codes"])
+            receipt_integrity = "VALID" if validation["valid"] else "INVALID"
+            core_verification = _core_status(receipt) if validation["valid"] else "NOT_AVAILABLE"
+        return _result(
+            subject=None,
+            receipt_integrity=receipt_integrity,
+            evidence_applicability="UNVERIFIABLE",
+            core_verification=core_verification,
+            reason_codes=(
+                *receipt_reasons,
+                reason if isinstance(reason, str) else "GITHUB_ACQUISITION_INVALID",
+            ),
+        )
+    return evaluate_code_change_evidence_subject(acquisition["subject"], receipt)
 
 
 __all__ = [
@@ -378,5 +474,6 @@ __all__ = [
     "TOOL_DEFINITION",
     "TOOL_DESCRIPTION",
     "TOOL_NAME",
+    "evaluate_code_change_evidence_subject",
     "verify_code_change_evidence",
 ]

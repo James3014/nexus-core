@@ -24,6 +24,7 @@ from product.clients.local_golden_path import (
     init_repository,
     validate_verification_receipt,
 )
+from product.clients.nexus_verify import evaluate_code_change_evidence_subject
 from product.clients.runtime_handoff import (
     check_handoff,
     handoff_status,
@@ -363,6 +364,31 @@ def cmd_receipt_check(args: argparse.Namespace) -> int:
     return 0 if result.get("valid") is True else 1
 
 
+def cmd_evidence_check(args: argparse.Namespace) -> int:
+    """Evaluate one supplied exact PR subject through the canonical Core reducer."""
+    try:
+        receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CertifyCLIError(f"malformed receipt file: {exc}", exit_code=2) from exc
+    subject = {
+        "repository_owner": args.repository_owner,
+        "repository_name": args.repository_name,
+        "pr_number": args.pr_number,
+        "current_base_sha": args.base_sha,
+        "current_head_sha": args.head_sha,
+        "current_base_tree": args.base_tree,
+        "current_head_tree": args.head_tree,
+        "changed_paths": args.changed_path,
+        "deleted_paths": args.deleted_path,
+    }
+    try:
+        result = evaluate_code_change_evidence_subject(subject, receipt)
+    except ValueError as exc:
+        raise CertifyCLIError(str(exc), exit_code=2) from exc
+    print(json.dumps(result, sort_keys=True))
+    return 0
+
+
 def cmd_issue_init(args: argparse.Namespace) -> int:
     path = init_issue_binding(
         args.repo,
@@ -520,6 +546,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo", default=None, help="Optional Git repository for physical manifest readback"
     )
 
+    p_evidence_check = subparsers.add_parser(
+        "evidence-check", help="Apply canonical Core evidence applicability to a supplied PR subject"
+    )
+    p_evidence_check.add_argument("--receipt", required=True, help="Path to local receipt JSON")
+    p_evidence_check.add_argument("--repository-owner", required=True)
+    p_evidence_check.add_argument("--repository-name", required=True)
+    p_evidence_check.add_argument("--pr-number", required=True, type=int)
+    p_evidence_check.add_argument("--base-sha", required=True)
+    p_evidence_check.add_argument("--head-sha", required=True)
+    p_evidence_check.add_argument("--base-tree", required=True)
+    p_evidence_check.add_argument("--head-tree", required=True)
+    p_evidence_check.add_argument("--changed-path", action="append", default=[])
+    p_evidence_check.add_argument("--deleted-path", action="append", default=[])
+
     p_issue_init = subparsers.add_parser(
         "issue-init", help="Bind one GitHub Issue to the repository verification contract"
     )
@@ -617,6 +657,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_check(args)
         elif args.command == "receipt-check":
             return cmd_receipt_check(args)
+        elif args.command == "evidence-check":
+            return cmd_evidence_check(args)
         elif args.command == "issue-init":
             return cmd_issue_init(args)
         elif args.command == "issue-check":
