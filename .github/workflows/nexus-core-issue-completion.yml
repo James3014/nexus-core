@@ -80,3 +80,30 @@ jobs:
         run: |
           set -euo pipefail
           nexus-certify issue-check --repo . --issue "${{ steps.issue.outputs.number }}"
+
+      - name: Diagnose Core verifier failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+
+          receipts = sorted(glob.glob(".nexus-core/receipts/*.json"))
+          if not receipts:
+              print("NEXUS_CORE_DIAGNOSTIC: no receipt available")
+              raise SystemExit(0)
+          path = receipts[-1]
+          payload = json.load(open(path, encoding="utf-8"))
+          verifier = payload.get("verifier") or {}
+          print("NEXUS_CORE_DIAGNOSTIC_RECEIPT:", path)
+          print("status:", payload.get("status"))
+          print("reason_codes:", payload.get("reason_codes"))
+          print("verifier_command:", verifier.get("command"))
+          print("verifier_exit_code:", verifier.get("exit_code"))
+          print("--- verifier stdout ---")
+          print(verifier.get("stdout", ""))
+          print("--- verifier stderr ---")
+          print(verifier.get("stderr", ""))
+          PY
