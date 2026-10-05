@@ -10,6 +10,7 @@ import pytest
 
 from product.adapters.generic_verification import verify_generic_changeset
 from product.clients.cli import build_parser
+from product.clients.cli import main as cli_main
 from product.clients.local_golden_path import (
     LocalCheckError,
     check_repository,
@@ -106,6 +107,56 @@ def test_init_cli_preserves_verifier_argv_flags():
         ["init", "--base-ref", "main", "--verifier", "python", "-m", "pytest", "-q"]
     )
     assert args.verifier == ["python", "-m", "pytest", "-q"]
+
+
+def test_receipt_check_cli_projects_canonical_validator_json(
+    external_repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+
+    exit_code = cli_main(
+        [
+            "receipt-check",
+            "--receipt",
+            str(result["receipt_path"]),
+            "--repo",
+            str(external_repo),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload == {"reason_codes": [], "valid": True}
+
+
+def test_receipt_check_cli_fails_closed_on_tampered_receipt(
+    external_repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+    receipt_path = result["receipt_path"]
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["outcome"]["status"] = "FAILED_VERIFICATION"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    exit_code = cli_main(
+        [
+            "receipt-check",
+            "--receipt",
+            str(receipt_path),
+            "--repo",
+            str(external_repo),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["valid"] is False
+    assert "RECEIPT_HASH_MISMATCH" in payload["reason_codes"]
+    assert "OUTCOME_MISMATCH" in payload["reason_codes"]
 
 
 def test_doctor_is_read_only_and_reports_success_and_failure(external_repo: Path):
