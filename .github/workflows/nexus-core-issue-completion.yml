@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$UV_TOOL_BIN_DIR"
-          uv tool install --force "git+https://github.com/James3014/nexus-core.git@fb1e3dd8370c24cb300ceac78d0be11f471d6308"
+          uv tool install --force "git+https://github.com/James3014/nexus-core.git@5d7350d0a4b2ef4a899198efb1ce5b9f947405ed"
           echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
 
       - name: Bootstrap repository dependencies outside candidate tree
