@@ -11,18 +11,34 @@ permissions:
 
 jobs:
   verify:
-    # G2 does not support untrusted/fork PR execution. Keep this guard before checkout.
+    # Repository Golden Path currently supports trusted same-repository events
+    # on self-hosted runners only.
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository &&
        github.event.pull_request.head.repo.fork == false)
     runs-on: [self-hosted]
+    env:
+      NEXUS_CERTIFY_VERSION: "0.1.2"
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Resolve exact Nexus Certify distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_venv="$RUNNER_TEMP/nexus-certify-${NEXUS_CERTIFY_VERSION}"
+          python3 -m venv "$core_venv"
+          "$core_venv/bin/python" -m pip install --disable-pip-version-check             "nexus-certify==${NEXUS_CERTIFY_VERSION}"
+          test "$("$core_venv/bin/python" -c             'import importlib.metadata as m; print(m.version("nexus-certify"))')"             = "$NEXUS_CERTIFY_VERSION"
+          "$core_venv/bin/nexus-certify" issue-init --help >/dev/null
+          "$core_venv/bin/nexus-certify" issue-check --help >/dev/null
+          printf '%s\n' "CORE_PYTHON=$core_venv/bin/python" >> "$GITHUB_ENV"
       - name: Verify repository through Nexus Core Golden Path
-        # The self-hosted runner environment must already provide nexus-certify and
-        # the verifier dependencies declared by .nexus-core/config.toml.
-        run: python -m product.clients.github_action --repository-check --repo .
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$CORE_PYTHON"
+          "$CORE_PYTHON" -m product.clients.github_action --repository-check --repo .
