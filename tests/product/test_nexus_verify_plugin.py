@@ -11,10 +11,12 @@ from typing import Any
 import pytest
 
 from product.acquisition.github import GitHubPullRequestLocator, _freshness_cas_for
+from product.clients.cli import main as cli_main
 from product.clients.local_golden_path import check_repository, init_repository
 from product.clients.nexus_verify import (
     CLAIM_CEILING,
     TOOL_DEFINITION,
+    evaluate_code_change_evidence_subject,
     verify_code_change_evidence,
 )
 
@@ -170,6 +172,71 @@ def test_fresh_valid_receipt_applies_to_current_pr(verified_repo_and_receipt):
         "git-tree:"
     )
     assert port.calls == 2
+
+
+def test_supplied_subject_reducer_matches_mcp_applicability(verified_repo_and_receipt):
+    repo, receipt = verified_repo_and_receipt
+    port = FakeGitHubPort(repo, receipt)
+    subject = {
+        "repository_owner": port.owner,
+        "repository_name": port.repository,
+        "pr_number": port.pr_number,
+        "current_base_sha": port.base_sha,
+        "current_head_sha": port.head_sha,
+        "current_base_tree": port.base_tree_sha,
+        "current_head_tree": port.head_tree_sha,
+        "changed_paths": list(port.changed_paths),
+        "deleted_paths": list(port.deleted_paths),
+    }
+
+    supplied = evaluate_code_change_evidence_subject(subject, receipt)
+    acquired = verify_code_change_evidence(_args(receipt), github_port=port)
+
+    assert supplied["subject"] is None
+    assert supplied["receipt_integrity"] == acquired["receipt_integrity"] == "VALID"
+    assert supplied["evidence_applicability"] == acquired["evidence_applicability"] == "APPLIES"
+    assert supplied["core_verification"] == acquired["core_verification"] == "VERIFIED"
+    assert supplied["reason_codes"] == acquired["reason_codes"] == []
+    assert supplied["claim_ceiling"] == acquired["claim_ceiling"] == list(CLAIM_CEILING)
+
+
+def test_evidence_check_cli_uses_shared_reducer(
+    verified_repo_and_receipt, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    repo, receipt = verified_repo_and_receipt
+    port = FakeGitHubPort(repo, receipt)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    args = [
+        "evidence-check",
+        "--receipt", str(receipt_path),
+        "--repository-owner", port.owner,
+        "--repository-name", port.repository,
+        "--pr-number", str(port.pr_number),
+        "--base-sha", port.base_sha,
+        "--head-sha", port.head_sha,
+        "--base-tree", port.base_tree_sha,
+        "--head-tree", port.head_tree_sha,
+    ]
+    for path in port.changed_paths:
+        args += ["--changed-path", path]
+    for path in port.deleted_paths:
+        args += ["--deleted-path", path]
+
+    assert cli_main(args) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["subject"] is None
+    assert payload["receipt_integrity"] == "VALID"
+    assert payload["evidence_applicability"] == "APPLIES"
+    assert payload["core_verification"] == "VERIFIED"
+    assert payload["claim_ceiling"] == list(CLAIM_CEILING)
+
+    stale_args = list(args)
+    stale_args[stale_args.index("--head-tree") + 1] = "f" * 40
+    assert cli_main(stale_args) == 0
+    stale = json.loads(capsys.readouterr().out)
+    assert stale["evidence_applicability"] == "STALE_TARGET"
+    assert stale["reason_codes"] == ["RECEIPT_TARGET_DOES_NOT_MATCH_CURRENT_PR"]
 
 
 def test_missing_receipt_never_upgrades_github_state_to_verified(verified_repo_and_receipt):
