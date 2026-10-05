@@ -71,6 +71,20 @@ jobs:
           set -euo pipefail
           uv sync --locked --no-install-project
 
+      - name: Install exact candidate distribution outside subject tree
+        run: |
+          set -euo pipefail
+          build_root="/tmp/nexus-core-candidate-build"
+          dist_root="/tmp/nexus-core-candidate-dist"
+          rm -rf "$build_root" "$dist_root"
+          mkdir -p "$build_root" "$dist_root"
+          git archive --format=tar HEAD | tar -xf - -C "$build_root"
+          (
+            cd "$build_root"
+            uv build --wheel --out-dir "$dist_root"
+          )
+          uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" --no-deps "$dist_root"/nexus_certify-*.whl
+
       - name: Bind exact Issue contract
         run: |
           set -euo pipefail
