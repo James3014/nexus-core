@@ -56,4 +56,22 @@ jobs:
         run: |
           python -m venv .smoke_venv
           .smoke_venv/bin/pip install dist/nexus_certify-*.whl
+          test "$(.smoke_venv/bin/python -c "import importlib.metadata as m; print(m.version('nexus-certify'))")" = "0.1.2"
           .smoke_venv/bin/nexus-certify --help
+          .smoke_venv/bin/nexus-certify issue-init --help
+          .smoke_venv/bin/nexus-certify issue-check --help
+      - name: Record distribution artifact identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum dist/nexus_certify-*.whl dist/nexus_certify-*.tar.gz | tee dist/SHA256SUMS
+      - name: Upload exact distribution candidates
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nexus-certify-distribution-${{ github.sha }}
+          path: |
+            dist/nexus_certify-*.whl
+            dist/nexus_certify-*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
