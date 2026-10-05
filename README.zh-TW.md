@@ -65,11 +65,19 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-若要固定安裝目前這個公開版本：
+目前 PyPI 已公開的版本是 `0.1.1`。它支援 repository Golden Path
+（`init / doctor / check`），但還不包含 Issue-bound 指令。
+
+目前 source candidate 是 `0.1.2`。等這個 exact release 正式發布，
+並完成 artifact identity readback 後，Issue-bound Golden Path 應固定安裝：
 
 ```bash
-python -m pip install nexus-certify==0.1.1
+python -m pip install nexus-certify==0.1.2
 ```
+
+不要只因為 host 的 `PATH` 裡有一個沒有版本綁定的
+`nexus-certify` 就推論它支援 Issue-bound path；先確認實際安裝的
+distribution version。
 
 如果你要使用下方的 pytest 範例，請確認同一個環境中也有安裝 pytest：
 
@@ -103,6 +111,27 @@ doctor: OK
 verification: VERIFIED (not CERTIFIED)
 receipt: .nexus-core/receipts/...
 ```
+
+### Issue-bound 快速綁定
+
+`0.1.2` source candidate 在相同 repository verifier 上增加一層很薄的
+Issue-bound 綁定：
+
+```bash
+nexus-certify issue-init --issue <NUMBER>
+nexus-certify issue-check --issue <NUMBER>
+```
+
+`issue-init` 會凍結本次驗證所依據的 exact open GitHub Issue contract；
+`issue-check` 會重新讀取該 Issue，若 contract 漂移就 fail closed，
+並把同一份 physical Git ChangeSet 與實際 verifier evidence 綁到 Issue。
+
+最高 claim 仍是 `ISSUE_VERIFIED_NOT_RELEASED`。Issue 不會因此取得
+execution lane、routing、Candidate acceptance、merge、release、deployment
+或 production authority。
+
+在 `0.1.2` 尚未正式發布且 artifact hash 尚未 read back 前，應使用
+exact accepted source / wheel Candidate，不要假設公開的 `0.1.1` 已含這些指令。
 
 ### 它會在你的 repository 裡寫入什麼
 
@@ -173,7 +202,8 @@ Nexus Core 的設計目標，是讓「信任」不依賴修改程式的人自己
 ## 目前成熟度
 
 - **公開套件：** `nexus-certify`
-- **目前 source release version：** `0.1.1`
+- **目前 source candidate version：** `0.1.2`（已含 Issue-bound CLI；公開 release/readback 仍是獨立步驟）
+- **目前已公開 PyPI baseline：** `0.1.1`（僅 repository Golden Path）
 - **Local Golden Path：** 已通過 published-artifact external-repository canary
 - **License：** Apache-2.0
 - **Python：** 3.11+
