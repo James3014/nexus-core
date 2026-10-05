@@ -17,9 +17,12 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
       PR_BODY: ${{ github.event.pull_request.body || '' }}
+      UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/nexus-core-project-venv
+      UV_TOOL_DIR: ${{ runner.temp }}/nexus-core-tools
+      UV_TOOL_BIN_DIR: ${{ runner.temp }}/nexus-core-bin
     steps:
       - name: Checkout exact pull-request head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -49,23 +52,23 @@ jobs:
               handle.write(f"number={matches[0]}\n")
           PY
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.1
 
-      - name: Install pinned nexus-certify
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install pinned nexus-certify outside candidate tree
         run: |
           set -euo pipefail
-          python -m pip install "git+https://github.com/James3014/nexus-core.git@fb1e3dd8370c24cb300ceac78d0be11f471d6308"
+          mkdir -p "$UV_TOOL_BIN_DIR"
+          uv tool install --force "git+https://github.com/James3014/nexus-core.git@fb1e3dd8370c24cb300ceac78d0be11f471d6308"
+          echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
 
-      - name: Bootstrap repository dependencies
+      - name: Bootstrap repository dependencies outside candidate tree
         run: |
           set -euo pipefail
-          uv sync --frozen --all-groups --all-extras
+          uv sync --locked
 
       - name: Bind exact Issue contract
         run: |
