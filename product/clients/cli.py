@@ -22,6 +22,7 @@ from product.clients.local_golden_path import (
     check_repository,
     doctor_repository,
     init_repository,
+    validate_verification_receipt,
 )
 from product.clients.runtime_handoff import (
     check_handoff,
@@ -355,6 +356,13 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "VERIFIED" else 1
 
 
+def cmd_receipt_check(args: argparse.Namespace) -> int:
+    """Project canonical local receipt validation as machine-readable JSON."""
+    result = validate_verification_receipt(args.receipt, repo=args.repo)
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result.get("valid") is True else 1
+
+
 def cmd_issue_init(args: argparse.Namespace) -> int:
     path = init_issue_binding(
         args.repo,
@@ -504,6 +512,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = subparsers.add_parser("check", help="Run local deterministic verification")
     p_check.add_argument("--repo", default=".", help="Git repository (default: current)")
 
+    p_receipt_check = subparsers.add_parser(
+        "receipt-check", help="Validate a local verification receipt without rerunning its verifier"
+    )
+    p_receipt_check.add_argument("--receipt", required=True, help="Path to local receipt JSON")
+    p_receipt_check.add_argument(
+        "--repo", default=None, help="Optional Git repository for physical manifest readback"
+    )
+
     p_issue_init = subparsers.add_parser(
         "issue-init", help="Bind one GitHub Issue to the repository verification contract"
     )
@@ -599,6 +615,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_doctor(args)
         elif args.command == "check":
             return cmd_check(args)
+        elif args.command == "receipt-check":
+            return cmd_receipt_check(args)
         elif args.command == "issue-init":
             return cmd_issue_init(args)
         elif args.command == "issue-check":
