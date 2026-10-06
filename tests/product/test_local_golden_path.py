@@ -659,3 +659,112 @@ def test_check_allows_verifier_created_nexus_core_receipts(external_repo: Path):
 
     result = check_repository(external_repo)
     assert result["status"] == "VERIFIED"
+
+
+def test_tracked_config_unchanged_does_not_fail_forbidden_deletion(external_repo: Path):
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+    )
+    _git(external_repo, "add", ".nexus-core/config.toml")
+    _git(external_repo, "commit", "-m", "track config")
+
+    base_tree = _git(external_repo, "rev-parse", "HEAD^{tree}")
+    config_blob_base = _git(external_repo, "ls-tree", "HEAD", ".nexus-core/config.toml")
+
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+    assert "FORBIDDEN_DELETION" not in result["reason_codes"]
+
+    receipt = json.loads(Path(result["receipt_path"]).read_text(encoding="utf-8"))
+    source_tree = receipt["source_tree"].removeprefix("git-tree:")
+    target_tree = receipt["target_tree"].removeprefix("git-tree:")
+
+    assert source_tree == base_tree
+    config_blob_target = _git(external_repo, "ls-tree", target_tree, ".nexus-core/config.toml")
+    assert config_blob_target == config_blob_base
+
+    validation = validate_verification_receipt(result["receipt_path"], repo=external_repo)
+    assert validation["valid"] is True
+
+
+def test_tracked_config_clean_repo_fails_with_no_changes_not_forbidden_deletion(
+    external_repo: Path,
+):
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+    )
+    _git(external_repo, "add", ".nexus-core/config.toml")
+    _git(external_repo, "commit", "-m", "track config")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "NO_CHANGES"
+    assert "FORBIDDEN_DELETION" != raised.value.reason_code
+
+    receipt = json.loads(Path(raised.value.receipt_path).read_text(encoding="utf-8"))
+    assert receipt["outcome"]["status"] == "FAILED_CLOSED"
+    assert receipt["outcome"]["reason_codes"] == ["NO_CHANGES"]
+
+
+def test_tracked_config_changed_candidate_tree_includes_unchanged_config(external_repo: Path):
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+    )
+    _git(external_repo, "add", ".nexus-core/config.toml")
+    _git(external_repo, "commit", "-m", "track config")
+
+    base_tree = _git(external_repo, "rev-parse", "HEAD^{tree}")
+    config_blob_base = _git(external_repo, "rev-parse", "HEAD:.nexus-core/config.toml")
+
+    # Candidate stages a change to app.py
+    (external_repo / "app.py").write_text("VALUE = 42\n", encoding="utf-8")
+    _git(external_repo, "add", "app.py")
+
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+
+    receipt = json.loads(Path(result["receipt_path"]).read_text(encoding="utf-8"))
+    target_tree = receipt["target_tree"].removeprefix("git-tree:")
+    config_blob_target = _git(external_repo, "rev-parse", f"{target_tree}:.nexus-core/config.toml")
+
+    assert config_blob_target == config_blob_base
+    assert target_tree != base_tree
+
+
+def test_tracked_config_legitimate_deletion_fails_closed_with_forbidden_deletion(
+    external_repo: Path,
+):
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py", ".nexus-core/**"),
+        deletion_policy="FORBID",
+    )
+    _git(external_repo, "add", ".nexus-core/config.toml")
+    _git(external_repo, "commit", "-m", "track config")
+
+    # Candidate branch removes config.toml from git tree while keeping config on disk
+    # so _load_config can still evaluate the policy
+    _git(external_repo, "checkout", "-b", "candidate")
+    _git(external_repo, "rm", "--cached", ".nexus-core/config.toml")
+    (external_repo / "app.py").write_text("VALUE = 10\n", encoding="utf-8")
+    _git(external_repo, "add", "app.py")
+    _git(external_repo, "commit", "-m", "candidate branch deletes config from git")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "FORBIDDEN_DELETION"
+    assert ".nexus-core/config.toml" in raised.value.detail
