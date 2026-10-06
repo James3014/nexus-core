@@ -291,24 +291,33 @@ def _materialize_target_tree(repo: Path, head: str) -> str:
         index_path = Path(directory) / "index"
         env = {"GIT_INDEX_FILE": str(index_path)}
         _git_stdout(repo, "read-tree", head, env=env)
+
+        head_control_paths = _git_stdout(repo, "ls-files", "-z", "--", CONFIG_DIRECTORY, env=env)
+        tracked_control_paths = set(p for p in head_control_paths.split("\0") if p)
+
         add = _run_git(repo, "add", "-A", "--", ".", env=env)
         if add.returncode != 0:
             raise LocalCheckError("GIT_TARGET_MATERIALIZATION_FAILED", add.stderr.strip())
 
-        restore_control_state = _run_git(
-            repo,
-            "reset",
-            "--quiet",
-            head,
-            "--",
-            CONFIG_DIRECTORY,
-            env=env,
-        )
-        if restore_control_state.returncode != 0:
-            raise LocalCheckError(
-                "GIT_TARGET_MATERIALIZATION_FAILED",
-                restore_control_state.stderr.strip(),
+        current_control_paths = _git_stdout(repo, "ls-files", "-z", "--", CONFIG_DIRECTORY, env=env)
+        current_paths = set(p for p in current_control_paths.split("\0") if p)
+        untracked_to_remove = sorted(current_paths - tracked_control_paths)
+        if untracked_to_remove:
+            remove_untracked = _run_git(
+                repo,
+                "rm",
+                "--cached",
+                "--quiet",
+                "--",
+                *untracked_to_remove,
+                env=env,
             )
+            if remove_untracked.returncode != 0:
+                raise LocalCheckError(
+                    "GIT_TARGET_MATERIALIZATION_FAILED",
+                    remove_untracked.stderr.strip(),
+                )
+
         return _git_stdout(repo, "write-tree", env=env)
 
 
@@ -585,8 +594,7 @@ def _run_verifier_isolated(
             untracked_paths = [
                 path
                 for path in untracked_paths
-                if path != CONFIG_DIRECTORY
-                and not path.startswith(f"{CONFIG_DIRECTORY}/")
+                if path != CONFIG_DIRECTORY and not path.startswith(f"{CONFIG_DIRECTORY}/")
             ]
             if untracked_paths:
                 problems.append(
@@ -1066,9 +1074,7 @@ def validate_verification_receipt_payload(
             expected_requirements_hash = (
                 config_hash
                 if requirements_context is None
-                else canonical_hash(
-                    {"config_hash": config_hash, "context": requirements_context}
-                )
+                else canonical_hash({"config_hash": config_hash, "context": requirements_context})
             )
             if request["acceptance_contract"]["requirements_hash"] != expected_requirements_hash:
                 reasons.append("CONFIG_BINDING_MISMATCH")
