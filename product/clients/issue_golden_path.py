@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -227,7 +226,6 @@ def _verification_contract_identity(repo: Path) -> dict[str, Any]:
     return {
         "schema": ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA,
         "config_path": f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}",
-        "config_file_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "config_hash": canonical_hash(config),
     }
 
@@ -270,7 +268,7 @@ def _evidence_sufficiency_binding(
     declared_config_identity: str,
 ) -> dict[str, Any]:
     identity = _verification_contract_identity(repo)
-    if identity["config_file_sha256"] != declared_config_identity:
+    if identity["config_hash"] != declared_config_identity:
         raise LocalCheckError(
             ISSUE_EVIDENCE_STALE_REASON,
             "Issue evidence-universe marker does not match current verification contract",
@@ -296,7 +294,6 @@ def _validate_evidence_sufficiency(
     required = {
         "schema",
         "config_path",
-        "config_file_sha256",
         "config_hash",
         "source",
         "issue_contract_hash",
@@ -314,9 +311,7 @@ def _validate_evidence_sufficiency(
             "ISSUE_BINDING_TAMPERED",
             "evidence sufficiency issue contract hash mismatch",
         )
-    if not _is_sha256(value.get("config_file_sha256")) or not _is_sha256(
-        value.get("config_hash")
-    ):
+    if not _is_sha256(value.get("config_hash")):
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid verification contract hash")
     return value
 
@@ -435,17 +430,13 @@ def check_issue(
     )
     sufficiency_status = "UNBOUND"
     if sufficiency is not None:
-        if declared_config_identity != sufficiency["config_file_sha256"]:
+        if declared_config_identity != sufficiency["config_hash"]:
             raise LocalCheckError(
                 "ISSUE_BINDING_TAMPERED",
                 "bound evidence universe does not match the current Issue declaration",
             )
         current_verification_contract = _verification_contract_identity(repo)
-        if (
-            sufficiency["config_file_sha256"]
-            != current_verification_contract["config_file_sha256"]
-            or sufficiency["config_hash"] != current_verification_contract["config_hash"]
-        ):
+        if sufficiency["config_hash"] != current_verification_contract["config_hash"]:
             raise LocalCheckError(
                 ISSUE_EVIDENCE_STALE_REASON,
                 "verification contract changed since Issue evidence sufficiency was bound",
@@ -460,9 +451,6 @@ def check_issue(
         "binding_hash": binding["binding_hash"],
         "evidence_sufficiency": {
             "status": sufficiency_status,
-            "config_file_sha256": (
-                sufficiency["config_file_sha256"] if sufficiency is not None else None
-            ),
             "config_hash": sufficiency["config_hash"] if sufficiency is not None else None,
         },
     }
