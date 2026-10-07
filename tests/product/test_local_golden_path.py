@@ -768,3 +768,297 @@ def test_tracked_config_legitimate_deletion_fails_closed_with_forbidden_deletion
 
     assert raised.value.reason_code == "FORBIDDEN_DELETION"
     assert ".nexus-core/config.toml" in raised.value.detail
+
+
+def _write_multi_evidence_config(repo: Path, body: str) -> Path:
+    config = repo / ".nexus-core" / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "\n".join(
+            [
+                "version = 2",
+                'base_ref = "main"',
+                'allowed_patterns = ["*.py"]',
+                'deletion_policy = "FORBID"',
+                "universe_generation = 1",
+                body.strip(),
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config
+
+
+def test_v2_multiple_required_evidence_subjects_are_covered(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+materials = []
+
+[[verifiers]]
+id = "behavior"
+command = [{json.dumps(sys.executable)}, "-c", "import app; assert app.VALUE == 2"]
+timeout_seconds = 30
+logical_subject_id = "required/behavior"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "regression"
+command = [{json.dumps(sys.executable)}, "-c", "import app; assert app.VALUE > 0"]
+timeout_seconds = 30
+logical_subject_id = "required/regression"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+""",
+    )
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["schema_version"] == 2
+    assert [row["producer_id"] for row in receipt["evidence_artifacts"]] == [
+        "behavior",
+        "regression",
+    ]
+    coverage = receipt["core_response"]["verification"]["coverage"]
+    assert {row["logical_subject_id"]: row["category"] for row in coverage["entries"]} == {
+        "required/behavior": "COVERED",
+        "required/regression": "COVERED",
+    }
+    assert validate_verification_receipt(result["receipt_path"], repo=external_repo) == {
+        "valid": True,
+        "reason_codes": [],
+    }
+
+
+def test_v2_failed_required_verifier_cannot_false_green(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+materials = []
+
+[[verifiers]]
+id = "behavior"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(1)"]
+timeout_seconds = 30
+logical_subject_id = "required/behavior"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+""",
+    )
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "FAILED_VERIFICATION"
+    assert "behavior" in result["reason_codes"]
+
+
+def test_v2_required_material_identity_mismatch_blocks_linked_verifier(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    expected = "git-commit:" + "b" * 40
+    observed = "git-commit:" + "c" * 40
+    marker = external_repo / "verifier-ran.txt"
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+[[materials]]
+id = "learning-revision"
+observe_command = [{json.dumps(sys.executable)}, "-c", "print({observed!r})"]
+timeout_seconds = 30
+logical_subject_id = "dependency/nexus-learning"
+evidence_kind = "resolved-dependency"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+expected_identity = {json.dumps(expected)}
+
+[[verifiers]]
+id = "full-suite"
+command = [{json.dumps(sys.executable)}, "-c", "from pathlib import Path; Path({str(marker)!r}).write_text('ran')"]
+timeout_seconds = 30
+logical_subject_id = "runtime/full-suite"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+required_material_ids = ["learning-revision"]
+""",
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "UNVERIFIABLE"
+    assert not marker.exists()
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    material = receipt["evidence_artifacts"][0]
+    assert material["expected_identity"] == expected
+    assert material["observed_identity"] == observed
+    assert material["status"] == "FAIL"
+    assert "full-suite" in receipt["outcome"]["reason_codes"]
+    coverage = {
+        row["logical_subject_id"]: row["category"]
+        for row in receipt["core_response"]["verification"]["coverage"]["entries"]
+    }
+    assert coverage["dependency/nexus-learning"] == "COVERED"
+    assert coverage["runtime/full-suite"] == "NOT_COVERED"
+    assert validate_verification_receipt(
+        raised.value.receipt_path, repo=external_repo
+    ) == {"valid": True, "reason_codes": []}
+
+
+def test_v2_required_material_identity_match_is_linked_and_bound(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    identity = "git-commit:" + "b" * 40
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+[[materials]]
+id = "learning-revision"
+observe_command = [{json.dumps(sys.executable)}, "-c", "print({identity!r})"]
+timeout_seconds = 30
+logical_subject_id = "dependency/nexus-learning"
+evidence_kind = "resolved-dependency"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+expected_identity = {json.dumps(identity)}
+
+[[verifiers]]
+id = "full-suite"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(0)"]
+timeout_seconds = 30
+logical_subject_id = "runtime/full-suite"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+required_material_ids = ["learning-revision"]
+""",
+    )
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["evidence_artifacts"][0]["observed_identity"] == identity
+    assert receipt["evidence_links"] == [
+        {"verifier_id": "full-suite", "required_material_ids": ["learning-revision"]}
+    ]
+    assert validate_verification_receipt(result["receipt_path"], repo=external_repo)["valid"] is True
+
+
+def test_v2_unresolved_conditional_subject_is_unverifiable(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+materials = []
+
+[[verifiers]]
+id = "required"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(0)"]
+timeout_seconds = 30
+logical_subject_id = "required/base"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "conditional"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(0)"]
+timeout_seconds = 30
+logical_subject_id = "conditional/runtime"
+evidence_kind = "test-result"
+requirement_mode = "CONDITIONALLY_REQUIRED"
+applicability = "UNRESOLVED"
+""",
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "UNVERIFIABLE"
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert "COVERAGE_UNRESOLVED" in receipt["outcome"]["reason_codes"]
+
+
+def test_v2_rehashed_material_identity_and_link_tamper_is_detected(
+    external_repo: Path, tmp_path: Path
+):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    identity = "git-commit:" + "d" * 40
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+[[materials]]
+id = "learning-revision"
+observe_command = [{json.dumps(sys.executable)}, "-c", "print({identity!r})"]
+timeout_seconds = 30
+logical_subject_id = "dependency/nexus-learning"
+evidence_kind = "resolved-dependency"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+expected_identity = {json.dumps(identity)}
+
+[[verifiers]]
+id = "full-suite"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(0)"]
+timeout_seconds = 30
+logical_subject_id = "runtime/full-suite"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+required_material_ids = ["learning-revision"]
+""",
+    )
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    receipt["evidence_artifacts"][0]["observed_identity"] = "git-commit:" + "e" * 40
+    receipt["evidence_artifacts"][0]["artifact_hash"] = canonical_hash(
+        {
+            key: value
+            for key, value in receipt["evidence_artifacts"][0].items()
+            if key != "artifact_hash"
+        }
+    )
+    receipt["evidence_links"][0]["required_material_ids"] = []
+    path = tmp_path / "material-tamper.json"
+    _write_receipt(path, receipt)
+
+    validation = validate_verification_receipt(path)
+
+    assert validation["valid"] is False
+    assert "MATERIAL_IDENTITY_MISMATCH" in validation["reason_codes"]
+    assert "VERIFIER_BINDING_MISMATCH" in validation["reason_codes"]
+    assert "EVIDENCE_LINK_MISMATCH" in validation["reason_codes"]
+
+
+def test_v2_rejects_unknown_required_material_reference(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+materials = []
+
+[[verifiers]]
+id = "full-suite"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(0)"]
+timeout_seconds = 30
+logical_subject_id = "runtime/full-suite"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+required_material_ids = ["missing-material"]
+""",
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "INVALID_CONFIG"
+    assert "required_material_ids" in raised.value.detail

@@ -228,3 +228,53 @@ def test_default_issue_reader_permission_403_does_not_retry(
 
     assert raised.value.reason_code == "ISSUE_ACCESS_DENIED"
     assert sleeps == []
+
+
+def test_issue_check_binds_v2_evidence_universe_and_issue_contract(issue_repo: Path) -> None:
+    config = issue_repo / ".nexus-core" / "config.toml"
+    config.write_text(
+        "\n".join(
+            [
+                "version = 2",
+                'base_ref = "main"',
+                'allowed_patterns = ["app.py"]',
+                'deletion_policy = "FORBID"',
+                "universe_generation = 7",
+                "materials = []",
+                "",
+                "[[verifiers]]",
+                'id = "issue-behavior"',
+                f"command = [{json.dumps(sys.executable)}, \"-c\", \"import app; assert app.VALUE == 2\"]",
+                "timeout_seconds = 30",
+                'logical_subject_id = "issue/behavior"',
+                'evidence_kind = "test-result"',
+                'requirement_mode = "REQUIRED"',
+                'applicability = "APPLICABLE"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    def reader(repo: str, number: int) -> dict[str, object]:
+        return _issue(body="VALUE must become 2")
+
+    binding_path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    binding = json.loads(binding_path.read_text(encoding="utf-8"))
+
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    request = receipt["inputs"]["request"]
+    assert receipt["schema_version"] == 2
+    assert request["acceptance_contract"]["universe_generation"] == 7
+    assert request["acceptance_contract"]["expected_subjects"] == [
+        {
+            "logical_subject_id": "issue/behavior",
+            "evidence_kind": "test-result",
+            "requirement_mode": "REQUIRED",
+            "applicability": "APPLICABLE",
+        }
+    ]
+    assert receipt["inputs"]["requirements_context"]["binding_hash"] == binding["binding_hash"]
+    assert receipt["core_response"]["verification"]["coverage"]["entries"][0]["category"] == "COVERED"
