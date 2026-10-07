@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,7 +18,47 @@ from product.protocol.generic_verification import canonical_hash
 
 ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v1"
 ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v1"
+ISSUE_RATE_LIMIT_RETRIES = 2
+ISSUE_RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
+ISSUE_RATE_LIMIT_FALLBACK_WAIT_SECONDS = 1.0
 IssueReader = Callable[[str, int], Mapping[str, Any]]
+
+
+def _rate_limit_retry_delay(
+    exc: urllib.error.HTTPError,
+    detail: str,
+) -> float | None:
+    if exc.code not in {403, 429}:
+        return None
+    headers = exc.headers or {}
+    remaining = str(headers.get("X-RateLimit-Remaining") or "").strip()
+    normalized = detail.casefold()
+    rate_limited = (
+        exc.code == 429
+        or remaining == "0"
+        or "rate limit exceeded" in normalized
+        or "secondary rate limit" in normalized
+    )
+    if not rate_limited:
+        return None
+
+    retry_after = str(headers.get("Retry-After") or "").strip()
+    if retry_after:
+        try:
+            value = float(retry_after)
+            if value >= 0:
+                return value
+        except ValueError:
+            pass
+
+    reset = str(headers.get("X-RateLimit-Reset") or "").strip()
+    if reset:
+        try:
+            return max(0.0, float(reset) - time.time() + 1.0)
+        except ValueError:
+            pass
+
+    return ISSUE_RATE_LIMIT_FALLBACK_WAIT_SECONDS
 
 
 def _repo_root(path: str | Path) -> Path:
@@ -89,18 +130,38 @@ def _default_issue_reader(github_repo: str, issue_number: int) -> Mapping[str, A
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(url, headers=headers), timeout=15
-        ) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        code = "ISSUE_NOT_FOUND" if exc.code == 404 else (
-            "ISSUE_ACCESS_DENIED" if exc.code in {401, 403} else "ISSUE_FETCH_FAILED"
-        )
-        raise LocalCheckError(code, f"{github_repo}#{issue_number}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        raise LocalCheckError("ISSUE_FETCH_FAILED", str(exc)) from exc
+
+    payload: Any = None
+    for attempt in range(ISSUE_RATE_LIMIT_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(url, headers=headers), timeout=15
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read(8192).decode("utf-8", errors="replace").strip()
+            retry_delay = _rate_limit_retry_delay(exc, detail)
+            if retry_delay is not None:
+                if (
+                    attempt >= ISSUE_RATE_LIMIT_RETRIES
+                    or retry_delay > ISSUE_RATE_LIMIT_MAX_WAIT_SECONDS
+                ):
+                    raise LocalCheckError(
+                        "ISSUE_RATE_LIMIT_EXHAUSTED",
+                        (
+                            f"{github_repo}#{issue_number}; "
+                            f"retry_after_seconds={retry_delay:.3f}"
+                        ),
+                    ) from exc
+                time.sleep(retry_delay)
+                continue
+            code = "ISSUE_NOT_FOUND" if exc.code == 404 else (
+                "ISSUE_ACCESS_DENIED" if exc.code in {401, 403} else "ISSUE_FETCH_FAILED"
+            )
+            raise LocalCheckError(code, f"{github_repo}#{issue_number}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise LocalCheckError("ISSUE_FETCH_FAILED", str(exc)) from exc
     if not isinstance(payload, dict) or "pull_request" in payload:
         raise LocalCheckError("ISSUE_REQUIRED", f"{github_repo}#{issue_number}")
     return payload
