@@ -255,7 +255,9 @@ def test_issue_check_binds_v2_evidence_universe_and_issue_contract(issue_repo: P
         ),
         encoding="utf-8",
     )
-    reader = lambda repo, number: _issue(body="VALUE must become 2")
+    def reader(repo: str, number: int) -> dict[str, object]:
+        return _issue(body="VALUE must become 2")
+
     binding_path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
     binding = json.loads(binding_path.read_text(encoding="utf-8"))
 
