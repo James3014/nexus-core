@@ -908,6 +908,9 @@ required_material_ids = ["learning-revision"]
     }
     assert coverage["dependency/nexus-learning"] == "COVERED"
     assert coverage["runtime/full-suite"] == "NOT_COVERED"
+    assert validate_verification_receipt(
+        raised.value.receipt_path, repo=external_repo
+    ) == {"valid": True, "reason_codes": []}
 
 
 def test_v2_required_material_identity_match_is_linked_and_bound(external_repo: Path):
