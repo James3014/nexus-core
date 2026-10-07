@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
 
+from product.clients import issue_golden_path as issue_gp
 from product.clients.issue_golden_path import check_issue, init_issue_binding
 from product.clients.local_golden_path import LocalCheckError, init_repository
 from product.protocol.generic_verification import canonical_hash
@@ -128,3 +131,100 @@ def test_issue_init_rejects_repository_mismatch(issue_repo: Path) -> None:
         )
 
     assert raised.value.reason_code == "GITHUB_REPOSITORY_MISMATCH"
+
+class _FakeHTTPResponse:
+    def __init__(self, payload: object) -> None:
+        self._raw = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self) -> bytes:
+        return self._raw
+
+
+def _http_error(
+    *,
+    body: str,
+    headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://api.github.com/repos/example/project/issues/85",
+        403,
+        "Forbidden",
+        headers or {},
+        io.BytesIO(body.encode("utf-8")),
+    )
+
+
+def test_default_issue_reader_retries_rate_limit_and_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        nonlocal calls
+        assert timeout == 15
+        calls += 1
+        if calls == 1:
+            raise _http_error(
+                body='{"message":"API rate limit exceeded for installation"}',
+                headers={"X-RateLimit-Remaining": "0", "Retry-After": "0"},
+            )
+        return _FakeHTTPResponse(_issue())
+
+    monkeypatch.setattr(issue_gp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(issue_gp.time, "sleep", sleeps.append)
+
+    result = issue_gp._default_issue_reader("example/project", 85)
+
+    assert result["number"] == 85
+    assert calls == 2
+    assert sleeps == [0.0]
+
+
+def test_default_issue_reader_rate_limit_exhaustion_is_not_access_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        raise _http_error(
+            body='{"message":"API rate limit exceeded for installation"}',
+            headers={"X-RateLimit-Remaining": "0", "Retry-After": "120"},
+        )
+
+    monkeypatch.setattr(issue_gp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(issue_gp.time, "sleep", sleeps.append)
+
+    with pytest.raises(LocalCheckError) as raised:
+        issue_gp._default_issue_reader("example/project", 85)
+
+    assert raised.value.reason_code == "ISSUE_RATE_LIMIT_EXHAUSTED"
+    assert "retry_after_seconds=120.000" in raised.value.detail
+    assert sleeps == []
+
+
+def test_default_issue_reader_permission_403_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    def fake_urlopen(_request, timeout):
+        raise _http_error(
+            body='{"message":"Resource not accessible by integration"}',
+            headers={"X-RateLimit-Remaining": "4999"},
+        )
+
+    monkeypatch.setattr(issue_gp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(issue_gp.time, "sleep", sleeps.append)
+
+    with pytest.raises(LocalCheckError) as raised:
+        issue_gp._default_issue_reader("example/project", 85)
+
+    assert raised.value.reason_code == "ISSUE_ACCESS_DENIED"
+    assert sleeps == []
