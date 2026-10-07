@@ -62,7 +62,7 @@ def _issue(*, body: str = "Change VALUE", state: str = "open") -> dict[str, obje
 
 
 def test_issue_init_and_check_bind_requirements_to_issue(issue_repo: Path) -> None:
-    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_hash"]
 
     def reader(repo: str, number: int) -> dict[str, object]:
         return _issue(
@@ -156,7 +156,7 @@ def test_unrelated_change_with_green_generic_verifier_cannot_issue_false_green(
 def test_issue_evidence_universe_binding_goes_stale_when_verification_contract_changes(
     issue_repo: Path,
 ) -> None:
-    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_hash"]
     def reader(repo: str, number: int) -> dict[str, object]:
         return _issue(
             body=f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
@@ -179,7 +179,7 @@ def test_issue_evidence_universe_binding_goes_stale_when_verification_contract_c
 
 
 def test_rehashed_substituted_issue_evidence_binding_fails_closed(issue_repo: Path) -> None:
-    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_hash"]
     def reader(repo: str, number: int) -> dict[str, object]:
         return _issue(
             body=f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
@@ -187,7 +187,7 @@ def test_rehashed_substituted_issue_evidence_binding_fails_closed(issue_repo: Pa
 
     path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["evidence_sufficiency"]["config_file_sha256"] = "sha256:" + "f" * 64
+    payload["evidence_sufficiency"]["config_hash"] = "sha256:" + "f" * 64
     payload["binding_hash"] = issue_gp._hash_without_binding(payload)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -397,7 +397,7 @@ def test_issue_check_binds_v2_evidence_universe_and_issue_contract(issue_repo: P
         ),
         encoding="utf-8",
     )
-    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_hash"]
 
     def reader(repo: str, number: int) -> dict[str, object]:
         return _issue(
