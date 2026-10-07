@@ -395,7 +395,6 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
         issue_number=args.issue,
         github_repo=args.github_repo,
         force=args.force,
-        bind_current_evidence_universe=args.bind_current_evidence_universe,
     )
     print(f"issue binding initialized: {path}")
     return 0
@@ -572,14 +571,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="GitHub repository owner/name (default: derive from origin)",
     )
     p_issue_init.add_argument("--force", action="store_true", help="Replace existing binding")
-    p_issue_init.add_argument(
-        "--bind-current-evidence-universe",
-        action="store_true",
-        help=(
-            "Explicitly declare the current repository verification contract sufficient "
-            "for this exact Issue; omit to keep the strong Issue claim unbound"
-        ),
-    )
 
     p_issue_check = subparsers.add_parser(
         "issue-check", help="Verify the current repository change against a bound GitHub Issue"
