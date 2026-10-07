@@ -37,10 +37,12 @@ from product.protocol.generic_verification import (
 CONFIG_DIRECTORY = ".nexus-core"
 CONFIG_FILENAME = "config.toml"
 RECEIPT_KIND = "NEXUS_CORE_LOCAL_VERIFICATION_RECEIPT"
-RECEIPT_SCHEMA_VERSION = 1
+RECEIPT_SCHEMA_VERSION = 2
+LEGACY_RECEIPT_SCHEMA_VERSION = 1
 CONFIG_VERSION = 1
+CONFIG_VERSION_MULTI_EVIDENCE = 2
 DEFAULT_TIMEOUT_SECONDS = 300
-_CONFIG_KEYS = {
+_CONFIG_V1_KEYS = {
     "version",
     "base_ref",
     "allowed_patterns",
@@ -48,6 +50,17 @@ _CONFIG_KEYS = {
     "verifier_command",
     "timeout_seconds",
 }
+_CONFIG_V2_KEYS = {
+    "version",
+    "base_ref",
+    "allowed_patterns",
+    "deletion_policy",
+    "universe_generation",
+    "verifiers",
+    "materials",
+}
+_REQUIREMENT_MODES = {"REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"}
+_APPLICABILITY = {"APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"}
 
 
 class LocalCheckError(Exception):
@@ -168,11 +181,61 @@ def init_repository(
     return config_path
 
 
+def _validate_command(value: Any, field: str) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or not item or "\x00" in item for item in value)
+    ):
+        raise LocalCheckError("INVALID_CONFIG", f"{field} must be a non-empty array")
+    return value
+
+
+def _validate_timeout(value: Any, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1 or value > 3600:
+        raise LocalCheckError("INVALID_CONFIG", f"{field} must be between 1 and 3600")
+    return value
+
+
+def _validate_subject_fields(item: Mapping[str, Any], field: str) -> None:
+    for key in ("id", "logical_subject_id", "evidence_kind"):
+        value = item.get(key)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            or "\x00" in value
+        ):
+            raise LocalCheckError("INVALID_CONFIG", f"{field}.{key} must be normalized text")
+    mode = item.get("requirement_mode", "REQUIRED")
+    applicability = item.get("applicability", "APPLICABLE")
+    if mode not in _REQUIREMENT_MODES:
+        raise LocalCheckError("INVALID_CONFIG", f"{field}.requirement_mode is invalid")
+    if applicability not in _APPLICABILITY:
+        raise LocalCheckError("INVALID_CONFIG", f"{field}.applicability is invalid")
+    if mode == "REQUIRED" and applicability != "APPLICABLE":
+        raise LocalCheckError(
+            "INVALID_CONFIG", f"{field}: REQUIRED subjects require APPLICABLE applicability"
+        )
+    if mode == "NOT_APPLICABLE" and applicability != "NOT_APPLICABLE":
+        raise LocalCheckError(
+            "INVALID_CONFIG", f"{field}: NOT_APPLICABLE subjects require NOT_APPLICABLE applicability"
+        )
+
+
 def _validate_config(value: Any) -> dict[str, Any]:
-    if type(value) is not dict or set(value) != _CONFIG_KEYS:
-        raise LocalCheckError("INVALID_CONFIG", "unexpected or missing config keys")
-    if value["version"] != CONFIG_VERSION:
+    if type(value) is not dict:
+        raise LocalCheckError("INVALID_CONFIG", "config must be a table")
+    version_value = value.get("version")
+    if version_value == CONFIG_VERSION:
+        if set(value) != _CONFIG_V1_KEYS:
+            raise LocalCheckError("INVALID_CONFIG", "unexpected or missing config keys")
+    elif version_value == CONFIG_VERSION_MULTI_EVIDENCE:
+        if set(value) != _CONFIG_V2_KEYS:
+            raise LocalCheckError("INVALID_CONFIG", "unexpected or missing config keys")
+    else:
         raise LocalCheckError("INVALID_CONFIG", "unsupported config version")
+
     if not isinstance(value["base_ref"], str) or not value["base_ref"].strip():
         raise LocalCheckError("INVALID_CONFIG", "base_ref must be non-empty")
     patterns = value["allowed_patterns"]
@@ -191,17 +254,141 @@ def _validate_config(value: Any) -> dict[str, Any]:
         raise LocalCheckError("INVALID_CONFIG", "allowed_patterns must be relative globs")
     if value["deletion_policy"] not in {"FORBID", "ALLOW"}:
         raise LocalCheckError("INVALID_CONFIG", "deletion_policy must be FORBID or ALLOW")
-    command = value["verifier_command"]
-    if (
-        not isinstance(command, list)
-        or not command
-        or any(not isinstance(item, str) or not item or "\x00" in item for item in command)
+
+    if version_value == CONFIG_VERSION:
+        _validate_command(value["verifier_command"], "verifier_command")
+        _validate_timeout(value["timeout_seconds"], "timeout_seconds")
+        return value
+
+    generation = value["universe_generation"]
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+        raise LocalCheckError("INVALID_CONFIG", "universe_generation must be a positive integer")
+
+    verifiers = value["verifiers"]
+    materials = value["materials"]
+    if not isinstance(verifiers, list) or not isinstance(materials, list) or not (verifiers or materials):
+        raise LocalCheckError("INVALID_CONFIG", "version 2 requires verifiers and/or materials")
+
+    allowed_verifier_keys = {
+        "id",
+        "command",
+        "timeout_seconds",
+        "logical_subject_id",
+        "evidence_kind",
+        "requirement_mode",
+        "applicability",
+        "required_material_ids",
+    }
+    allowed_material_keys = {
+        "id",
+        "observe_command",
+        "timeout_seconds",
+        "logical_subject_id",
+        "evidence_kind",
+        "requirement_mode",
+        "applicability",
+        "expected_identity",
+    }
+    producer_ids: list[str] = []
+    subject_ids: list[str] = []
+    material_ids: list[str] = []
+    for index, item in enumerate(materials):
+        field = f"materials[{index}]"
+        if not isinstance(item, dict) or not set(item).issubset(allowed_material_keys):
+            raise LocalCheckError("INVALID_CONFIG", f"{field} has unexpected fields")
+        required = {
+            "id",
+            "observe_command",
+            "timeout_seconds",
+            "logical_subject_id",
+            "evidence_kind",
+            "expected_identity",
+        }
+        if not required.issubset(item):
+            raise LocalCheckError("INVALID_CONFIG", f"{field} is missing required fields")
+        _validate_subject_fields(item, field)
+        _validate_command(item["observe_command"], f"{field}.observe_command")
+        _validate_timeout(item["timeout_seconds"], f"{field}.timeout_seconds")
+        expected = item["expected_identity"]
+        if (
+            not isinstance(expected, str)
+            or not expected.strip()
+            or expected != expected.strip()
+            or "\x00" in expected
+        ):
+            raise LocalCheckError(
+                "INVALID_CONFIG", f"{field}.expected_identity must be normalized text"
+            )
+        producer_ids.append(item["id"])
+        subject_ids.append(item["logical_subject_id"])
+        material_ids.append(item["id"])
+
+    material_id_set = set(material_ids)
+    for index, item in enumerate(verifiers):
+        field = f"verifiers[{index}]"
+        if not isinstance(item, dict) or not set(item).issubset(allowed_verifier_keys):
+            raise LocalCheckError("INVALID_CONFIG", f"{field} has unexpected fields")
+        required = {"id", "command", "timeout_seconds", "logical_subject_id", "evidence_kind"}
+        if not required.issubset(item):
+            raise LocalCheckError("INVALID_CONFIG", f"{field} is missing required fields")
+        _validate_subject_fields(item, field)
+        _validate_command(item["command"], f"{field}.command")
+        _validate_timeout(item["timeout_seconds"], f"{field}.timeout_seconds")
+        required_material_ids = item.get("required_material_ids", [])
+        if (
+            not isinstance(required_material_ids, list)
+            or any(
+                not isinstance(material_id, str)
+                or not material_id
+                or material_id not in material_id_set
+                for material_id in required_material_ids
+            )
+            or len(required_material_ids) != len(set(required_material_ids))
+        ):
+            raise LocalCheckError(
+                "INVALID_CONFIG",
+                f"{field}.required_material_ids must reference unique declared materials",
+            )
+        producer_ids.append(item["id"])
+        subject_ids.append(item["logical_subject_id"])
+
+    if len(producer_ids) != len(set(producer_ids)):
+        raise LocalCheckError("INVALID_CONFIG", "evidence producer ids must be unique")
+    if len(subject_ids) != len(set(subject_ids)):
+        raise LocalCheckError("INVALID_CONFIG", "logical_subject_id values must be unique")
+    if not any(
+        item.get("requirement_mode", "REQUIRED") == "REQUIRED"
+        for item in [*verifiers, *materials]
     ):
-        raise LocalCheckError("INVALID_CONFIG", "verifier_command must be a non-empty array")
-    timeout = value["timeout_seconds"]
-    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1 or timeout > 3600:
-        raise LocalCheckError("INVALID_CONFIG", "timeout_seconds must be between 1 and 3600")
+        raise LocalCheckError("INVALID_CONFIG", "version 2 requires at least one REQUIRED producer")
     return value
+
+
+def _v2_producers(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    producers: list[dict[str, Any]] = []
+    for item in config.get("materials", []):
+        producers.append(
+            {
+                **item,
+                "kind": "material",
+                "command": item["observe_command"],
+                "requirement_mode": item.get("requirement_mode", "REQUIRED"),
+                "applicability": item.get("applicability", "APPLICABLE"),
+                "required_material_ids": [],
+            }
+        )
+    for item in config.get("verifiers", []):
+        producers.append(
+            {
+                **item,
+                "kind": "verifier",
+                "command": item["command"],
+                "requirement_mode": item.get("requirement_mode", "REQUIRED"),
+                "applicability": item.get("applicability", "APPLICABLE"),
+                "required_material_ids": list(item.get("required_material_ids", [])),
+            }
+        )
+    return producers
 
 
 def _load_config(repo: Path) -> dict[str, Any]:
@@ -270,11 +457,23 @@ def doctor_repository(path: str | Path = ".") -> dict[str, Any]:
     except LocalCheckError as exc:
         checks["base_ref"] = "ERROR"
         reasons.append(exc.reason_code)
-    if _command_available(repo, config["verifier_command"]):
-        checks["verifier"] = "OK"
+    if config["version"] == CONFIG_VERSION:
+        if _command_available(repo, config["verifier_command"]):
+            checks["verifier"] = "OK"
+        else:
+            checks["verifier"] = "ERROR"
+            reasons.append("VERIFIER_UNAVAILABLE")
     else:
-        checks["verifier"] = "ERROR"
-        reasons.append("VERIFIER_UNAVAILABLE")
+        unavailable = [
+            producer["id"]
+            for producer in _v2_producers(config)
+            if producer["applicability"] == "APPLICABLE"
+            and not _command_available(repo, producer["command"])
+        ]
+        checks["verifier"] = "OK" if not unavailable else "ERROR"
+        checks["evidence_producers"] = "OK" if not unavailable else "ERROR"
+        if unavailable:
+            reasons.append("EVIDENCE_PRODUCER_UNAVAILABLE")
     checks["python"] = "OK" if shutil.which("python") or shutil.which("python3") else "ERROR"
     if checks["python"] == "ERROR":
         reasons.append("PYTHON_UNAVAILABLE")
@@ -475,6 +674,60 @@ def _verifier_artifact(
     return artifact
 
 
+def _v2_artifact(
+    producer: Mapping[str, Any],
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+    *,
+    execution_subject: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    artifact = _verifier_artifact(
+        producer["command"],
+        returncode,
+        stdout,
+        stderr,
+        execution_subject=execution_subject,
+    )
+    artifact.pop("artifact_hash", None)
+    artifact.update(
+        {
+            "producer_id": producer["id"],
+            "producer_kind": producer["kind"],
+            "logical_subject_id": producer["logical_subject_id"],
+            "evidence_kind": producer["evidence_kind"],
+            "requirement_mode": producer["requirement_mode"],
+            "applicability": producer["applicability"],
+            "required_material_ids": list(producer.get("required_material_ids", [])),
+        }
+    )
+    if producer["kind"] == "material":
+        observed_identity = stdout.decode("utf-8", errors="replace").strip()
+        artifact["expected_identity"] = producer["expected_identity"]
+        artifact["observed_identity"] = observed_identity
+        artifact["status"] = (
+            "PASS"
+            if returncode == 0 and observed_identity == producer["expected_identity"]
+            else "FAIL"
+        )
+    artifact["artifact_hash"] = canonical_hash(artifact)
+    return artifact
+
+
+def _artifact_observation(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "verifier_id": artifact["producer_id"],
+        "artifact_id": (
+            f"{artifact['producer_id']}-"
+            f"{artifact['artifact_hash'].removeprefix('sha256:')[:16]}"
+        ),
+        "artifact_hash": artifact["artifact_hash"],
+        "status": artifact["status"],
+        "logical_subject_id": artifact["logical_subject_id"],
+        "evidence_kind": artifact["evidence_kind"],
+    }
+
+
 def _cleanup_verifier_sandbox(path: Path) -> None:
     shutil.rmtree(path)
 
@@ -622,7 +875,7 @@ def _build_request(
     config: Mapping[str, Any],
     config_hash: str,
     snapshot: _GitSnapshot,
-    verifier: Mapping[str, Any],
+    artifacts: Sequence[Mapping[str, Any]],
     *,
     requirements_hash: str | None = None,
 ) -> dict[str, Any]:
@@ -630,13 +883,51 @@ def _build_request(
     deleted = [
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
     ]
+    if config["version"] == CONFIG_VERSION:
+        if len(artifacts) != 1:
+            raise LocalCheckError("INTERNAL_EVIDENCE_MISMATCH", "legacy config requires one artifact")
+        verifier = artifacts[0]
+        required_verifier_ids = ["local-command"]
+        expected_subjects = None
+        observations = [
+            {
+                "verifier_id": "local-command",
+                "artifact_id": (
+                    f"local-command-{verifier['artifact_hash'].removeprefix('sha256:')[:16]}"
+                ),
+                "artifact_hash": verifier["artifact_hash"],
+                "status": verifier["status"],
+            }
+        ]
+    else:
+        producers = _v2_producers(config)
+        required_verifier_ids = [
+            producer["id"]
+            for producer in producers
+            if producer["requirement_mode"] == "REQUIRED"
+        ]
+        expected_subjects = [
+            {
+                "logical_subject_id": producer["logical_subject_id"],
+                "evidence_kind": producer["evidence_kind"],
+                "requirement_mode": producer["requirement_mode"],
+                "applicability": producer["applicability"],
+            }
+            for producer in producers
+        ]
+        observations = [_artifact_observation(artifact) for artifact in artifacts]
+
     contract = {
         "contract_id": f"local-contract-{config_hash.removeprefix('sha256:')[:16]}",
         "requirements_hash": requirements_hash or config_hash,
-        "required_verifier_ids": ["local-command"],
+        "required_verifier_ids": required_verifier_ids,
         "allowed_paths": paths,
         "deletion_policy": config["deletion_policy"],
     }
+    if expected_subjects is not None:
+        contract["expected_subjects"] = expected_subjects
+        contract["universe_generation"] = config["universe_generation"]
+
     change_set = {
         "change_set_id": f"local-change-{snapshot.target_tree[:16]}",
         "source_revision": f"git-commit:{snapshot.source_commit}",
@@ -649,21 +940,14 @@ def _build_request(
         "plan_id": f"local-plan-{snapshot.target_tree[:16]}",
         "acceptance_contract_hash": acceptance_contract_hash(contract),
         "change_set_hash": change_set_hash(change_set),
-        "required_verifier_ids": ["local-command"],
+        "required_verifier_ids": required_verifier_ids,
     }
     evidence = {
         "bundle_id": f"local-evidence-{snapshot.target_tree[:16]}",
         "acceptance_contract_hash": plan["acceptance_contract_hash"],
         "change_set_hash": plan["change_set_hash"],
         "verification_plan_hash": verification_plan_hash(plan),
-        "observations": [
-            {
-                "verifier_id": "local-command",
-                "artifact_id": f"local-command-{verifier['artifact_hash'].removeprefix('sha256:')[:16]}",
-                "artifact_hash": verifier["artifact_hash"],
-                "status": verifier["status"],
-            }
-        ],
+        "observations": observations,
         "claimed_bundle_hash": None,
     }
     evidence["claimed_bundle_hash"] = evidence_bundle_hash(evidence)
@@ -698,15 +982,20 @@ def _base_receipt(
     config: Mapping[str, Any] | None,
     config_hash: str | None,
     snapshot: _GitSnapshot | None,
-    verifier: Mapping[str, Any] | None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
     request: Mapping[str, Any] | None,
     response: Mapping[str, Any] | None,
     status: str,
     reasons: Sequence[str],
     requirements_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": RECEIPT_SCHEMA_VERSION,
+    config_version = config.get("version") if isinstance(config, Mapping) else None
+    receipt: dict[str, Any] = {
+        "schema_version": (
+            LEGACY_RECEIPT_SCHEMA_VERSION
+            if config_version in {None, CONFIG_VERSION}
+            else RECEIPT_SCHEMA_VERSION
+        ),
         "kind": RECEIPT_KIND,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "product": {"name": "nexus-core", "version": _product_version()},
@@ -716,7 +1005,6 @@ def _base_receipt(
         "target_tree": f"git-tree:{snapshot.target_tree}" if snapshot else None,
         "manifest_hash": change_manifest_hash(snapshot.manifest) if snapshot else None,
         "config_hash": config_hash,
-        "verifier": verifier,
         "inputs": {
             "config": config,
             "requirements_context": dict(requirements_context) if requirements_context else None,
@@ -729,6 +1017,44 @@ def _base_receipt(
             "transport_error": False,
         },
     }
+    if config_version in {None, CONFIG_VERSION}:
+        receipt["verifier"] = dict(artifacts[0]) if artifacts else None
+    else:
+        receipt["evidence_artifacts"] = [dict(artifact) for artifact in artifacts]
+        receipt["evidence_links"] = [
+            {
+                "verifier_id": artifact["producer_id"],
+                "required_material_ids": list(artifact.get("required_material_ids", [])),
+            }
+            for artifact in artifacts
+            if artifact.get("producer_kind") == "verifier"
+        ]
+        if request is not None:
+            contract = request.get("acceptance_contract", {})
+            receipt["evidence_universe"] = {
+                "universe_generation": contract.get("universe_generation"),
+                "expected_subjects": contract.get("expected_subjects", []),
+                "required_verifier_ids": contract.get("required_verifier_ids", []),
+            }
+        else:
+            receipt["evidence_universe"] = {
+                "universe_generation": config.get("universe_generation"),
+                "expected_subjects": [
+                    {
+                        "logical_subject_id": producer["logical_subject_id"],
+                        "evidence_kind": producer["evidence_kind"],
+                        "requirement_mode": producer["requirement_mode"],
+                        "applicability": producer["applicability"],
+                    }
+                    for producer in _v2_producers(config)
+                ],
+                "required_verifier_ids": [
+                    producer["id"]
+                    for producer in _v2_producers(config)
+                    if producer["requirement_mode"] == "REQUIRED"
+                ],
+            }
+    return receipt
 
 
 def _raise_with_receipt(
@@ -739,14 +1065,14 @@ def _raise_with_receipt(
     config: Mapping[str, Any] | None = None,
     config_hash: str | None = None,
     snapshot: _GitSnapshot | None = None,
-    verifier: Mapping[str, Any] | None = None,
+    artifacts: Sequence[Mapping[str, Any]] = (),
     requirements_context: Mapping[str, Any] | None = None,
 ) -> None:
     receipt = _base_receipt(
         config=config,
         config_hash=config_hash,
         snapshot=snapshot,
-        verifier=verifier,
+        artifacts=artifacts,
         request=None,
         response=None,
         status="FAILED_CLOSED",
@@ -762,13 +1088,7 @@ def check_repository(
     *,
     requirements_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run the local Golden Path and return the canonical Core verdict.
-
-    ``requirements_context`` is an optional evidence-binding projection for a
-    higher-level consumer such as the Issue Golden Path. It participates only in
-    the AcceptanceContract requirements hash; it does not grant execution,
-    approval, merge, release, or deployment authority.
-    """
+    """Run the local Golden Path and return the canonical Core verdict."""
 
     repo = _repo_root(path)
     config = _load_config(repo)
@@ -778,15 +1098,39 @@ def check_repository(
         if requirements_context is None
         else canonical_hash({"config_hash": config_hash, "context": dict(requirements_context)})
     )
-    if not _command_available(repo, config["verifier_command"]):
-        _raise_with_receipt(
-            repo,
-            "VERIFIER_UNAVAILABLE",
-            config["verifier_command"][0],
-            config=config,
-            config_hash=config_hash,
-            requirements_context=requirements_context,
-        )
+
+    if config["version"] == CONFIG_VERSION:
+        producers = [
+            {
+                "id": "local-command",
+                "kind": "verifier",
+                "command": config["verifier_command"],
+                "timeout_seconds": config["timeout_seconds"],
+                "requirement_mode": "REQUIRED",
+                "applicability": "APPLICABLE",
+                "required_material_ids": [],
+            }
+        ]
+    else:
+        producers = _v2_producers(config)
+
+    for producer in producers:
+        if producer["applicability"] != "APPLICABLE":
+            continue
+        if not _command_available(repo, producer["command"]):
+            _raise_with_receipt(
+                repo,
+                (
+                    "VERIFIER_UNAVAILABLE"
+                    if config["version"] == CONFIG_VERSION
+                    else "EVIDENCE_PRODUCER_UNAVAILABLE"
+                ),
+                producer["id"],
+                config=config,
+                config_hash=config_hash,
+                requirements_context=requirements_context,
+            )
+
     try:
         snapshot = _snapshot(repo, config["base_ref"])
     except LocalCheckError as exc:
@@ -828,67 +1172,108 @@ def check_repository(
             requirements_context=requirements_context,
         )
 
-    verifier_env = os.environ.copy()
-    verifier_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
-    if config["verifier_command"][:3] == [config["verifier_command"][0], "-m", "pytest"]:
-        existing = verifier_env.get("PYTEST_ADDOPTS", "")
-        verifier_env["PYTEST_ADDOPTS"] = (existing + " -p no:cacheprovider").strip()
-    try:
-        executed, verifier_subject, verifier_mutation = _run_verifier_isolated(
-            repo,
-            snapshot,
-            config["verifier_command"],
-            verifier_env,
-            config["timeout_seconds"],
-        )
-    except LocalCheckError as exc:
-        _raise_with_receipt(
-            repo,
-            exc.reason_code,
-            exc.detail,
-            config=config,
-            config_hash=config_hash,
-            snapshot=snapshot,
-            requirements_context=requirements_context,
-        )
-    except subprocess.TimeoutExpired as exc:
-        _raise_with_receipt(
-            repo,
-            "VERIFIER_TIMEOUT",
-            str(exc),
-            config=config,
-            config_hash=config_hash,
-            snapshot=snapshot,
-            requirements_context=requirements_context,
-        )
-    except OSError as exc:
-        _raise_with_receipt(
-            repo,
-            "VERIFIER_EXECUTION_FAILED",
-            str(exc),
-            config=config,
-            config_hash=config_hash,
-            snapshot=snapshot,
-            requirements_context=requirements_context,
-        )
-    verifier = _verifier_artifact(
-        config["verifier_command"],
-        executed.returncode,
-        executed.stdout,
-        executed.stderr,
-        execution_subject=verifier_subject,
-    )
-    if verifier_mutation is not None:
-        _raise_with_receipt(
-            repo,
-            "VERIFIER_SUBJECT_MUTATED",
-            verifier_mutation,
-            config=config,
-            config_hash=config_hash,
-            snapshot=snapshot,
-            verifier=verifier,
-            requirements_context=requirements_context,
-        )
+    artifacts: list[dict[str, Any]] = []
+    material_status: dict[str, str] = {}
+    for producer in producers:
+        if producer["applicability"] != "APPLICABLE":
+            continue
+        if producer["kind"] == "verifier":
+            failed_materials = [
+                material_id
+                for material_id in producer.get("required_material_ids", [])
+                if material_status.get(material_id) != "PASS"
+            ]
+            if failed_materials:
+                _raise_with_receipt(
+                    repo,
+                    "REQUIRED_MATERIAL_UNSATISFIED",
+                    f"{producer['id']}: {', '.join(failed_materials)}",
+                    config=config,
+                    config_hash=config_hash,
+                    snapshot=snapshot,
+                    artifacts=artifacts,
+                    requirements_context=requirements_context,
+                )
+
+        verifier_env = os.environ.copy()
+        verifier_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+        command = producer["command"]
+        if command[:3] == [command[0], "-m", "pytest"]:
+            existing = verifier_env.get("PYTEST_ADDOPTS", "")
+            verifier_env["PYTEST_ADDOPTS"] = (existing + " -p no:cacheprovider").strip()
+        try:
+            executed, verifier_subject, verifier_mutation = _run_verifier_isolated(
+                repo,
+                snapshot,
+                command,
+                verifier_env,
+                producer["timeout_seconds"],
+            )
+        except LocalCheckError as exc:
+            _raise_with_receipt(
+                repo,
+                exc.reason_code,
+                f"{producer['id']}: {exc.detail}",
+                config=config,
+                config_hash=config_hash,
+                snapshot=snapshot,
+                artifacts=artifacts,
+                requirements_context=requirements_context,
+            )
+        except subprocess.TimeoutExpired as exc:
+            _raise_with_receipt(
+                repo,
+                "VERIFIER_TIMEOUT",
+                f"{producer['id']}: {exc}",
+                config=config,
+                config_hash=config_hash,
+                snapshot=snapshot,
+                artifacts=artifacts,
+                requirements_context=requirements_context,
+            )
+        except OSError as exc:
+            _raise_with_receipt(
+                repo,
+                "VERIFIER_EXECUTION_FAILED",
+                f"{producer['id']}: {exc}",
+                config=config,
+                config_hash=config_hash,
+                snapshot=snapshot,
+                artifacts=artifacts,
+                requirements_context=requirements_context,
+            )
+
+        if config["version"] == CONFIG_VERSION:
+            artifact = _verifier_artifact(
+                command,
+                executed.returncode,
+                executed.stdout,
+                executed.stderr,
+                execution_subject=verifier_subject,
+            )
+        else:
+            artifact = _v2_artifact(
+                producer,
+                executed.returncode,
+                executed.stdout,
+                executed.stderr,
+                execution_subject=verifier_subject,
+            )
+        artifacts.append(artifact)
+        if producer["kind"] == "material":
+            material_status[producer["id"]] = artifact["status"]
+
+        if verifier_mutation is not None:
+            _raise_with_receipt(
+                repo,
+                "VERIFIER_SUBJECT_MUTATED",
+                f"{producer['id']}: {verifier_mutation}",
+                config=config,
+                config_hash=config_hash,
+                snapshot=snapshot,
+                artifacts=artifacts,
+                requirements_context=requirements_context,
+            )
 
     try:
         _check_ignored_residue(repo)
@@ -900,7 +1285,7 @@ def check_repository(
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
-            verifier=verifier,
+            artifacts=artifacts,
             requirements_context=requirements_context,
         )
 
@@ -909,11 +1294,11 @@ def check_repository(
         _raise_with_receipt(
             repo,
             "GIT_MANIFEST_MISMATCH",
-            "repository target changed while verifier executed",
+            "repository target changed while evidence producers executed",
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
-            verifier=verifier,
+            artifacts=artifacts,
             requirements_context=requirements_context,
         )
 
@@ -921,7 +1306,7 @@ def check_repository(
         config,
         config_hash,
         snapshot,
-        verifier,
+        artifacts,
         requirements_hash=requirements_hash,
     )
     http_status, response = verify_generic_changeset(request)
@@ -931,7 +1316,7 @@ def check_repository(
             config=config,
             config_hash=config_hash,
             snapshot=snapshot,
-            verifier=verifier,
+            artifacts=artifacts,
             request=request,
             response=response,
             status="FAILED_CLOSED",
@@ -947,7 +1332,7 @@ def check_repository(
         config=config,
         config_hash=config_hash,
         snapshot=snapshot,
-        verifier=verifier,
+        artifacts=artifacts,
         requirements_context=requirements_context,
         request=request,
         response=response,
@@ -966,24 +1351,102 @@ def check_repository(
     }
 
 
+def _validate_artifact_payload(
+    artifact: Any,
+    *,
+    producer: Mapping[str, Any] | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+    if not isinstance(artifact, dict):
+        return ["VERIFIER_ARTIFACT_MISMATCH"]
+    artifact_body = {key: value for key, value in artifact.items() if key != "artifact_hash"}
+    if artifact.get("artifact_hash") != canonical_hash(artifact_body):
+        reasons.append("VERIFIER_ARTIFACT_MISMATCH")
+    try:
+        stdout = base64.b64decode(artifact["stdout_base64"], validate=True)
+        stderr = base64.b64decode(artifact["stderr_base64"], validate=True)
+    except (KeyError, TypeError, ValueError):
+        stdout = stderr = b""
+        reasons.append("VERIFIER_OUTPUT_MISMATCH")
+    if (
+        artifact.get("stdout_hash") != _sha256_bytes(stdout)
+        or artifact.get("stderr_hash") != _sha256_bytes(stderr)
+        or artifact.get("output_hash")
+        != canonical_hash(
+            {
+                "stdout_sha256": _sha256_bytes(stdout),
+                "stderr_sha256": _sha256_bytes(stderr),
+            }
+        )
+        or artifact.get("stdout") != stdout.decode("utf-8", errors="replace")
+        or artifact.get("stderr") != stderr.decode("utf-8", errors="replace")
+    ):
+        reasons.append("VERIFIER_OUTPUT_MISMATCH")
+    exit_code = artifact.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        reasons.append("VERIFIER_STATUS_MISMATCH")
+        return reasons
+
+    expected_status = "PASS" if exit_code == 0 else "FAIL"
+    if producer is not None:
+        if (
+            artifact.get("producer_id") != producer["id"]
+            or artifact.get("producer_kind") != producer["kind"]
+            or artifact.get("logical_subject_id") != producer["logical_subject_id"]
+            or artifact.get("evidence_kind") != producer["evidence_kind"]
+            or artifact.get("requirement_mode") != producer["requirement_mode"]
+            or artifact.get("applicability") != producer["applicability"]
+            or artifact.get("required_material_ids")
+            != list(producer.get("required_material_ids", []))
+            or artifact.get("command") != producer["command"]
+        ):
+            reasons.append("VERIFIER_BINDING_MISMATCH")
+        if producer["kind"] == "material":
+            observed = stdout.decode("utf-8", errors="replace").strip()
+            if (
+                artifact.get("expected_identity") != producer["expected_identity"]
+                or artifact.get("observed_identity") != observed
+            ):
+                reasons.append("MATERIAL_IDENTITY_MISMATCH")
+            expected_status = (
+                "PASS"
+                if exit_code == 0 and observed == producer["expected_identity"]
+                else "FAIL"
+            )
+    if artifact.get("status") != expected_status:
+        reasons.append("VERIFIER_STATUS_MISMATCH")
+    return reasons
+
+
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
-    """Independently recompute a local verification receipt payload.
-
-    This is the transport-neutral validation seam used by file-based local
-    readback and read-only remote adapters. It performs no network access and
-    does not execute repository verifier commands.
-    """
+    """Independently recompute a local verification receipt payload."""
 
     if not isinstance(payload, Mapping):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     payload = dict(payload)
     reasons: list[str] = []
     product = payload.get("product")
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict):
+        reasons.append("MALFORMED_RECEIPT")
+        return {"valid": False, "reason_codes": sorted(set(reasons))}
+    config = inputs.get("config")
+    requirements_context = inputs.get("requirements_context")
+    request = inputs.get("request")
+    config_version = config.get("version") if isinstance(config, dict) else None
+    expected_schema_version = (
+        LEGACY_RECEIPT_SCHEMA_VERSION
+        if config_version == CONFIG_VERSION
+        else RECEIPT_SCHEMA_VERSION
+        if config_version == CONFIG_VERSION_MULTI_EVIDENCE
+        else None
+    )
     if (
         payload.get("kind") != RECEIPT_KIND
-        or payload.get("schema_version") != RECEIPT_SCHEMA_VERSION
+        or expected_schema_version is None
+        or payload.get("schema_version") != expected_schema_version
         or not isinstance(product, dict)
         or set(product) != {"name", "version"}
         or product.get("name") != "nexus-core"
@@ -993,55 +1456,55 @@ def validate_verification_receipt_payload(
         reasons.append("UNSUPPORTED_RECEIPT")
     if payload.get("receipt_hash") != _receipt_hash(payload):
         reasons.append("RECEIPT_HASH_MISMATCH")
-    inputs = payload.get("inputs")
-    if not isinstance(inputs, dict):
-        reasons.append("MALFORMED_RECEIPT")
-        return {"valid": False, "reason_codes": sorted(set(reasons))}
-    config = inputs.get("config")
-    requirements_context = inputs.get("requirements_context")
-    request = inputs.get("request")
+
     config_hash = canonical_hash(config) if isinstance(config, dict) else None
     if config_hash is None or payload.get("config_hash") != config_hash:
         reasons.append("CONFIG_HASH_MISMATCH")
-    verifier = payload.get("verifier")
-    if isinstance(verifier, dict):
-        verifier_body = {key: value for key, value in verifier.items() if key != "artifact_hash"}
-        if verifier.get("artifact_hash") != canonical_hash(verifier_body):
-            reasons.append("VERIFIER_ARTIFACT_MISMATCH")
+
+    artifacts: list[dict[str, Any]] = []
+    if config_version == CONFIG_VERSION:
+        verifier = payload.get("verifier")
+        reasons.extend(_validate_artifact_payload(verifier))
+        if isinstance(verifier, dict):
+            artifacts = [verifier]
+    elif config_version == CONFIG_VERSION_MULTI_EVIDENCE and isinstance(config, dict):
         try:
-            stdout = base64.b64decode(verifier["stdout_base64"], validate=True)
-            stderr = base64.b64decode(verifier["stderr_base64"], validate=True)
-        except (KeyError, TypeError, ValueError):
-            stdout = stderr = b""
-            reasons.append("VERIFIER_OUTPUT_MISMATCH")
-        if (
-            verifier.get("stdout_hash") != _sha256_bytes(stdout)
-            or verifier.get("stderr_hash") != _sha256_bytes(stderr)
-            or verifier.get("output_hash")
-            != canonical_hash(
-                {
-                    "stdout_sha256": _sha256_bytes(stdout),
-                    "stderr_sha256": _sha256_bytes(stderr),
-                }
-            )
-            or verifier.get("stdout") != stdout.decode("utf-8", errors="replace")
-            or verifier.get("stderr") != stderr.decode("utf-8", errors="replace")
-        ):
-            reasons.append("VERIFIER_OUTPUT_MISMATCH")
-        exit_code = verifier.get("exit_code")
-        expected_status = (
-            "PASS"
-            if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code == 0
-            else "FAIL"
-        )
-        if (
-            not isinstance(exit_code, int)
-            or isinstance(exit_code, bool)
-            or verifier.get("status") != expected_status
-        ):
-            reasons.append("VERIFIER_STATUS_MISMATCH")
+            validated_config = _validate_config(dict(config))
+            producers = _v2_producers(validated_config)
+            producers_by_id = {producer["id"]: producer for producer in producers}
+        except LocalCheckError:
+            reasons.append("CONFIG_BINDING_MISMATCH")
+            producers = []
+            producers_by_id = {}
+        raw_artifacts = payload.get("evidence_artifacts")
+        if not isinstance(raw_artifacts, list):
+            reasons.append("VERIFIER_ARTIFACT_MISMATCH")
+            raw_artifacts = []
+        seen_ids: set[str] = set()
+        for artifact in raw_artifacts:
+            producer_id = artifact.get("producer_id") if isinstance(artifact, dict) else None
+            producer = producers_by_id.get(producer_id) if isinstance(producer_id, str) else None
+            if producer is None:
+                reasons.append("VERIFIER_BINDING_MISMATCH")
+            else:
+                if producer_id in seen_ids:
+                    reasons.append("VERIFIER_BINDING_MISMATCH")
+                seen_ids.add(producer_id)
+            reasons.extend(_validate_artifact_payload(artifact, producer=producer))
+            if isinstance(artifact, dict):
+                artifacts.append(artifact)
+        expected_links = [
+            {
+                "verifier_id": producer["id"],
+                "required_material_ids": list(producer.get("required_material_ids", [])),
+            }
+            for producer in producers
+            if producer["kind"] == "verifier"
+        ]
+        if payload.get("evidence_links") != expected_links:
+            reasons.append("EVIDENCE_LINK_MISMATCH")
     else:
-        reasons.append("VERIFIER_ARTIFACT_MISMATCH")
+        reasons.append("CONFIG_BINDING_MISMATCH")
 
     if isinstance(request, dict):
         manifest = request.get("change_manifest")
@@ -1051,18 +1514,40 @@ def validate_verification_receipt_payload(
         status, recomputed = verify_generic_changeset(request)
         if status != 200 or recomputed != payload.get("core_response"):
             reasons.append("CORE_RESPONSE_MISMATCH")
+
         try:
             observations = request["evidence_bundle"]["observations"]
-            observation = observations[0]
-            if (
-                len(observations) != 1
-                or not isinstance(verifier, dict)
-                or observation["artifact_hash"] != verifier.get("artifact_hash")
-                or observation["status"] != verifier.get("status")
-            ):
-                reasons.append("VERIFIER_BINDING_MISMATCH")
+            if config_version == CONFIG_VERSION:
+                verifier = artifacts[0] if len(artifacts) == 1 else None
+                observation = observations[0]
+                if (
+                    len(observations) != 1
+                    or verifier is None
+                    or observation["artifact_hash"] != verifier.get("artifact_hash")
+                    or observation["status"] != verifier.get("status")
+                ):
+                    reasons.append("VERIFIER_BINDING_MISMATCH")
+            elif config_version == CONFIG_VERSION_MULTI_EVIDENCE:
+                artifacts_by_id = {
+                    artifact.get("producer_id"): artifact
+                    for artifact in artifacts
+                    if isinstance(artifact.get("producer_id"), str)
+                }
+                if len(observations) != len(artifacts_by_id):
+                    reasons.append("VERIFIER_BINDING_MISMATCH")
+                for observation in observations:
+                    artifact = artifacts_by_id.get(observation.get("verifier_id"))
+                    if (
+                        artifact is None
+                        or observation.get("artifact_hash") != artifact.get("artifact_hash")
+                        or observation.get("status") != artifact.get("status")
+                        or observation.get("logical_subject_id") != artifact.get("logical_subject_id")
+                        or observation.get("evidence_kind") != artifact.get("evidence_kind")
+                    ):
+                        reasons.append("VERIFIER_BINDING_MISMATCH")
         except (KeyError, IndexError, TypeError):
             reasons.append("VERIFIER_BINDING_MISMATCH")
+
         try:
             if (
                 payload.get("source_revision") != request["change_set"]["source_revision"]
@@ -1078,9 +1563,39 @@ def validate_verification_receipt_payload(
             )
             if request["acceptance_contract"]["requirements_hash"] != expected_requirements_hash:
                 reasons.append("CONFIG_BINDING_MISMATCH")
+            if config_version == CONFIG_VERSION_MULTI_EVIDENCE:
+                contract = request["acceptance_contract"]
+                expected_universe = {
+                    "universe_generation": contract.get("universe_generation"),
+                    "expected_subjects": contract.get("expected_subjects", []),
+                    "required_verifier_ids": contract.get("required_verifier_ids", []),
+                }
+                if payload.get("evidence_universe") != expected_universe:
+                    reasons.append("EVIDENCE_UNIVERSE_MISMATCH")
+                expected_subjects = [
+                    {
+                        "logical_subject_id": producer["logical_subject_id"],
+                        "evidence_kind": producer["evidence_kind"],
+                        "requirement_mode": producer["requirement_mode"],
+                        "applicability": producer["applicability"],
+                    }
+                    for producer in _v2_producers(config)
+                ]
+                required_ids = [
+                    producer["id"]
+                    for producer in _v2_producers(config)
+                    if producer["requirement_mode"] == "REQUIRED"
+                ]
+                if (
+                    contract.get("universe_generation") != config["universe_generation"]
+                    or contract.get("expected_subjects") != expected_subjects
+                    or contract.get("required_verifier_ids") != required_ids
+                ):
+                    reasons.append("CONFIG_BINDING_MISMATCH")
         except (KeyError, TypeError):
             reasons.append("RECEIPT_BINDING_MISMATCH")
             reasons.append("CONFIG_BINDING_MISMATCH")
+
         if status == 200:
             try:
                 outcome = payload["outcome"]
