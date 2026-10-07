@@ -27,9 +27,8 @@ LEGACY_ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v1"
 ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v2"
 ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v1"
 ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
-ISSUE_EVIDENCE_SUFFICIENCY_DECLARATION = (
-    "CURRENT_VERIFICATION_CONTRACT_SUFFICIENT_FOR_BOUND_ISSUE"
-)
+ISSUE_EVIDENCE_MARKER_PREFIX = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: "
+ISSUE_EVIDENCE_MARKER_SUFFIX = " -->"
 ISSUE_EVIDENCE_UNBOUND_REASON = "ISSUE_EVIDENCE_UNIVERSE_UNBOUND"
 ISSUE_EVIDENCE_STALE_REASON = "ISSUE_EVIDENCE_UNIVERSE_STALE"
 ISSUE_RATE_LIMIT_RETRIES = 2
@@ -230,13 +229,55 @@ def _verification_contract_identity(repo: Path) -> dict[str, Any]:
         "config_path": f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}",
         "config_file_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "config_hash": canonical_hash(config),
-        "declaration": ISSUE_EVIDENCE_SUFFICIENCY_DECLARATION,
     }
 
 
-def _evidence_sufficiency_binding(repo: Path, issue_contract_hash: str) -> dict[str, Any]:
+def _issue_evidence_universe_marker(contract: Mapping[str, Any]) -> str | None:
+    body = contract.get("body")
+    if not isinstance(body, str):
+        raise LocalCheckError("ISSUE_MALFORMED", "Issue body must be text")
+    matches: list[str] = []
+    malformed = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if "NEXUS_CORE_EVIDENCE_UNIVERSE" not in stripped:
+            continue
+        if not (
+            stripped.startswith(ISSUE_EVIDENCE_MARKER_PREFIX)
+            and stripped.endswith(ISSUE_EVIDENCE_MARKER_SUFFIX)
+        ):
+            malformed = True
+            continue
+        value = stripped[
+            len(ISSUE_EVIDENCE_MARKER_PREFIX) : -len(ISSUE_EVIDENCE_MARKER_SUFFIX)
+        ]
+        if not _is_sha256(value):
+            malformed = True
+            continue
+        matches.append(value)
+    if malformed or len(matches) > 1:
+        raise LocalCheckError(
+            "ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED",
+            "expected at most one exact NEXUS_CORE_EVIDENCE_UNIVERSE marker",
+        )
+    return matches[0] if matches else None
+
+
+def _evidence_sufficiency_binding(
+    repo: Path,
+    issue_contract_hash: str,
+    *,
+    declared_config_identity: str,
+) -> dict[str, Any]:
+    identity = _verification_contract_identity(repo)
+    if identity["config_file_sha256"] != declared_config_identity:
+        raise LocalCheckError(
+            ISSUE_EVIDENCE_STALE_REASON,
+            "Issue evidence-universe marker does not match current verification contract",
+        )
     return {
-        **_verification_contract_identity(repo),
+        **identity,
+        "source": "issue-contract-marker",
         "issue_contract_hash": issue_contract_hash,
     }
 
@@ -257,7 +298,7 @@ def _validate_evidence_sufficiency(
         "config_path",
         "config_file_sha256",
         "config_hash",
-        "declaration",
+        "source",
         "issue_contract_hash",
     }
     if type(value) is not dict or set(value) != required:
@@ -266,8 +307,8 @@ def _validate_evidence_sufficiency(
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unsupported evidence sufficiency binding")
     if value.get("config_path") != f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}":
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unexpected verification config path")
-    if value.get("declaration") != ISSUE_EVIDENCE_SUFFICIENCY_DECLARATION:
-        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid evidence sufficiency declaration")
+    if value.get("source") != "issue-contract-marker":
+        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid evidence sufficiency source")
     if value.get("issue_contract_hash") != issue_contract_hash:
         raise LocalCheckError(
             "ISSUE_BINDING_TAMPERED",
@@ -314,7 +355,6 @@ def init_issue_binding(
     issue_number: int,
     github_repo: str | None = None,
     force: bool = False,
-    bind_current_evidence_universe: bool = False,
     issue_reader: IssueReader | None = None,
 ) -> Path:
     if issue_number < 1:
@@ -332,6 +372,7 @@ def init_issue_binding(
     if target.exists() and not force:
         raise LocalCheckError("ISSUE_BINDING_EXISTS", str(target))
     issue_contract_hash = canonical_hash(contract)
+    declared_config_identity = _issue_evidence_universe_marker(contract)
     payload = {
         "schema": ISSUE_BINDING_SCHEMA,
         "version": 2,
@@ -342,8 +383,12 @@ def init_issue_binding(
         "issue_contract_hash": issue_contract_hash,
         "github_updated_at": raw.get("updated_at"),
         "evidence_sufficiency": (
-            _evidence_sufficiency_binding(repo, issue_contract_hash)
-            if bind_current_evidence_universe
+            _evidence_sufficiency_binding(
+                repo,
+                issue_contract_hash,
+                declared_config_identity=declared_config_identity,
+            )
+            if declared_config_identity is not None
             else None
         ),
         "binding_hash": None,
@@ -382,6 +427,7 @@ def check_issue(
             "ISSUE_REBIND_REQUIRED",
             f"{github_repo}#{issue_number} contract changed since binding",
         )
+    declared_config_identity = _issue_evidence_universe_marker(current)
     sufficiency = (
         binding.get("evidence_sufficiency")
         if binding.get("schema") == ISSUE_BINDING_SCHEMA
@@ -389,6 +435,11 @@ def check_issue(
     )
     sufficiency_status = "UNBOUND"
     if sufficiency is not None:
+        if declared_config_identity != sufficiency["config_file_sha256"]:
+            raise LocalCheckError(
+                "ISSUE_BINDING_TAMPERED",
+                "bound evidence universe does not match the current Issue declaration",
+            )
         current_verification_contract = _verification_contract_identity(repo)
         if (
             sufficiency["config_file_sha256"]
