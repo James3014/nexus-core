@@ -213,6 +213,18 @@ def test_legacy_issue_binding_cannot_retain_strong_issue_claim(issue_repo: Path)
     assert result["claim_ceiling"] == "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND"
 
 
+def test_issue_check_no_changes_preserves_existing_fail_closed_behavior(
+    issue_repo: Path,
+) -> None:
+    (issue_repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=lambda repo, number: _issue())
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(issue_repo, issue_number=85, issue_reader=lambda repo, number: _issue())
+
+    assert raised.value.reason_code == "NO_CHANGES"
+
+
 def test_issue_check_requires_rebind_after_contract_drift(issue_repo: Path) -> None:
     init_issue_binding(issue_repo, issue_number=85, issue_reader=lambda repo, number: _issue())
 
