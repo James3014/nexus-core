@@ -24,7 +24,7 @@ from product.protocol.generic_verification import canonical_hash
 
 LEGACY_ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v1"
 ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v2"
-ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v1"
+ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v2"
 ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
 ISSUE_EVIDENCE_MARKER_PREFIX = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: "
 ISSUE_EVIDENCE_MARKER_SUFFIX = " -->"
