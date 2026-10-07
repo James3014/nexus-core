@@ -1033,3 +1033,29 @@ required_material_ids = ["learning-revision"]
     assert "MATERIAL_IDENTITY_MISMATCH" in validation["reason_codes"]
     assert "VERIFIER_BINDING_MISMATCH" in validation["reason_codes"]
     assert "EVIDENCE_LINK_MISMATCH" in validation["reason_codes"]
+
+
+def test_v2_rejects_unknown_required_material_reference(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _write_multi_evidence_config(
+        external_repo,
+        f"""
+materials = []
+
+[[verifiers]]
+id = "full-suite"
+command = [{json.dumps(sys.executable)}, "-c", "raise SystemExit(0)"]
+timeout_seconds = 30
+logical_subject_id = "runtime/full-suite"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+required_material_ids = ["missing-material"]
+""",
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "INVALID_CONFIG"
+    assert "required_material_ids" in raised.value.detail
