@@ -1184,16 +1184,11 @@ def check_repository(
                 if material_status.get(material_id) != "PASS"
             ]
             if failed_materials:
-                _raise_with_receipt(
-                    repo,
-                    "REQUIRED_MATERIAL_UNSATISFIED",
-                    f"{producer['id']}: {', '.join(failed_materials)}",
-                    config=config,
-                    config_hash=config_hash,
-                    snapshot=snapshot,
-                    artifacts=artifacts,
-                    requirements_context=requirements_context,
-                )
+                # Execution admission is not verification truth. Do not run a
+                # verifier whose declared material prerequisites are unsatisfied,
+                # but let the canonical Core reducer observe the failed material
+                # plus the missing verifier evidence and return UNVERIFIABLE.
+                continue
 
         verifier_env = os.environ.copy()
         verifier_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
