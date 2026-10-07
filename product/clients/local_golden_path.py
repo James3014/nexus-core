@@ -1023,11 +1023,11 @@ def _base_receipt(
         receipt["evidence_artifacts"] = [dict(artifact) for artifact in artifacts]
         receipt["evidence_links"] = [
             {
-                "verifier_id": artifact["producer_id"],
-                "required_material_ids": list(artifact.get("required_material_ids", [])),
+                "verifier_id": producer["id"],
+                "required_material_ids": list(producer.get("required_material_ids", [])),
             }
-            for artifact in artifacts
-            if artifact.get("producer_kind") == "verifier"
+            for producer in _v2_producers(config)
+            if producer["kind"] == "verifier"
         ]
         if request is not None:
             contract = request.get("acceptance_contract", {})
