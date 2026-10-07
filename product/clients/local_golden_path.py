@@ -1047,11 +1047,11 @@ def _base_receipt(
                         "requirement_mode": producer["requirement_mode"],
                         "applicability": producer["applicability"],
                     }
-                    for producer in _v2_producers(v2_config)
+                    for producer in _v2_producers(config)
                 ],
                 "required_verifier_ids": [
                     producer["id"]
-                    for producer in _v2_producers(v2_config)
+                    for producer in _v2_producers(config)
                     if producer["requirement_mode"] == "REQUIRED"
                 ],
             }
@@ -1577,11 +1577,11 @@ def validate_verification_receipt_payload(
                         "requirement_mode": producer["requirement_mode"],
                         "applicability": producer["applicability"],
                     }
-                    for producer in _v2_producers(config)
+                    for producer in _v2_producers(v2_config)
                 ]
                 required_ids = [
                     producer["id"]
-                    for producer in _v2_producers(config)
+                    for producer in _v2_producers(v2_config)
                     if producer["requirement_mode"] == "REQUIRED"
                 ]
                 if (
