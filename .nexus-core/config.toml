@@ -1,6 +1,60 @@
-version = 1
+version = 2
 base_ref = "origin/main"
 allowed_patterns = ["**"]
 deletion_policy = "FORBID"
-verifier_command = ["uv", "run", "pytest", "-q", "tests/architecture", "tests/product", "tests/benchmark"]
-timeout_seconds = 3600
+universe_generation = 1
+materials = []
+
+[[verifiers]]
+id = "architecture-tests"
+command = ["uv", "run", "pytest", "-q", "tests/architecture"]
+timeout_seconds = 1200
+logical_subject_id = "core/architecture-prohibition"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "product-tests"
+command = ["uv", "run", "pytest", "-q", "tests/product"]
+timeout_seconds = 1800
+logical_subject_id = "core/product-tests"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "benchmark-tests"
+command = ["uv", "run", "pytest", "-q", "tests/benchmark"]
+timeout_seconds = 1200
+logical_subject_id = "core/benchmark-regressions"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "ruff"
+command = ["uv", "run", "ruff", "check", "product", "tests"]
+timeout_seconds = 600
+logical_subject_id = "core/ruff"
+evidence_kind = "static-analysis"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "pyright"
+command = ["uv", "run", "pyright", "product"]
+timeout_seconds = 600
+logical_subject_id = "core/pyright"
+evidence_kind = "static-analysis"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[[verifiers]]
+id = "distribution-smoke"
+command = ["uv", "run", "pytest", "-q", "tests/product/test_distribution_license.py", "tests/product/test_installed_wheel_smoke.py"]
+timeout_seconds = 1200
+logical_subject_id = "core/distribution-install-smoke"
+evidence_kind = "package-smoke"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
