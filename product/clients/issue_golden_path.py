@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,11 +15,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from product.clients.local_golden_path import CONFIG_DIRECTORY, LocalCheckError, check_repository
+from product.clients.local_golden_path import (
+    CONFIG_DIRECTORY,
+    CONFIG_FILENAME,
+    LocalCheckError,
+    check_repository,
+)
 from product.protocol.generic_verification import canonical_hash
 
-ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v1"
+LEGACY_ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v1"
+ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v2"
 ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v1"
+ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
+ISSUE_EVIDENCE_SUFFICIENCY_DECLARATION = (
+    "CURRENT_VERIFICATION_CONTRACT_SUFFICIENT_FOR_BOUND_ISSUE"
+)
+ISSUE_EVIDENCE_UNBOUND_REASON = "ISSUE_EVIDENCE_UNIVERSE_UNBOUND"
+ISSUE_EVIDENCE_STALE_REASON = "ISSUE_EVIDENCE_UNIVERSE_STALE"
 ISSUE_RATE_LIMIT_RETRIES = 2
 ISSUE_RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
 ISSUE_RATE_LIMIT_FALLBACK_WAIT_SECONDS = 1.0
@@ -191,18 +205,104 @@ def _path(repo: Path, issue_number: int) -> Path:
     return repo / CONFIG_DIRECTORY / "issues" / f"{issue_number}.json"
 
 
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("sha256:")
+        and len(value) == 71
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _verification_contract_identity(repo: Path) -> dict[str, Any]:
+    config_path = repo / CONFIG_DIRECTORY / CONFIG_FILENAME
+    if not config_path.is_file():
+        raise LocalCheckError("CONFIG_MISSING", "run nexus-certify init first")
+    try:
+        raw = config_path.read_bytes()
+        config = tomllib.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise LocalCheckError("INVALID_CONFIG", str(exc)) from exc
+    if type(config) is not dict:
+        raise LocalCheckError("INVALID_CONFIG", "config must be a table")
+    return {
+        "schema": ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA,
+        "config_path": f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}",
+        "config_file_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "config_hash": canonical_hash(config),
+        "declaration": ISSUE_EVIDENCE_SUFFICIENCY_DECLARATION,
+    }
+
+
+def _evidence_sufficiency_binding(repo: Path, issue_contract_hash: str) -> dict[str, Any]:
+    return {
+        **_verification_contract_identity(repo),
+        "issue_contract_hash": issue_contract_hash,
+    }
+
+
 def _hash_without_binding(payload: Mapping[str, Any]) -> str:
     return canonical_hash({key: value for key, value in payload.items() if key != "binding_hash"})
 
 
+def _validate_evidence_sufficiency(
+    value: Any,
+    *,
+    issue_contract_hash: str,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    required = {
+        "schema",
+        "config_path",
+        "config_file_sha256",
+        "config_hash",
+        "declaration",
+        "issue_contract_hash",
+    }
+    if type(value) is not dict or set(value) != required:
+        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid evidence sufficiency binding")
+    if value.get("schema") != ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA:
+        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unsupported evidence sufficiency binding")
+    if value.get("config_path") != f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}":
+        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unexpected verification config path")
+    if value.get("declaration") != ISSUE_EVIDENCE_SUFFICIENCY_DECLARATION:
+        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid evidence sufficiency declaration")
+    if value.get("issue_contract_hash") != issue_contract_hash:
+        raise LocalCheckError(
+            "ISSUE_BINDING_TAMPERED",
+            "evidence sufficiency issue contract hash mismatch",
+        )
+    if not _is_sha256(value.get("config_file_sha256")) or not _is_sha256(
+        value.get("config_hash")
+    ):
+        raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid verification contract hash")
+    return value
+
+
 def _validate_binding(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict) or payload.get("schema") != ISSUE_BINDING_SCHEMA:
+    if not isinstance(payload, dict) or payload.get("schema") not in {
+        LEGACY_ISSUE_BINDING_SCHEMA,
+        ISSUE_BINDING_SCHEMA,
+    }:
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unsupported binding")
+    if payload.get("schema") == LEGACY_ISSUE_BINDING_SCHEMA:
+        if payload.get("version") != 1:
+            raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid legacy binding version")
+    else:
+        if payload.get("version") != 2 or "evidence_sufficiency" not in payload:
+            raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid binding version")
     contract = payload.get("issue_contract")
     if not isinstance(contract, dict):
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "missing issue contract")
-    if payload.get("issue_contract_hash") != canonical_hash(contract):
+    issue_contract_hash = payload.get("issue_contract_hash")
+    if issue_contract_hash != canonical_hash(contract):
         raise LocalCheckError("ISSUE_BINDING_TAMPERED", "issue contract hash mismatch")
+    if payload.get("schema") == ISSUE_BINDING_SCHEMA:
+        _validate_evidence_sufficiency(
+            payload.get("evidence_sufficiency"),
+            issue_contract_hash=issue_contract_hash,
+        )
     if payload.get("binding_hash") != _hash_without_binding(payload):
         raise LocalCheckError("ISSUE_BINDING_TAMPERED", "binding hash mismatch")
     return payload
@@ -214,6 +314,7 @@ def init_issue_binding(
     issue_number: int,
     github_repo: str | None = None,
     force: bool = False,
+    bind_current_evidence_universe: bool = False,
     issue_reader: IssueReader | None = None,
 ) -> Path:
     if issue_number < 1:
@@ -230,15 +331,21 @@ def init_issue_binding(
     target = _path(repo, issue_number)
     if target.exists() and not force:
         raise LocalCheckError("ISSUE_BINDING_EXISTS", str(target))
+    issue_contract_hash = canonical_hash(contract)
     payload = {
         "schema": ISSUE_BINDING_SCHEMA,
-        "version": 1,
+        "version": 2,
         "bound_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "github_repository": resolved,
         "issue_number": issue_number,
         "issue_contract": contract,
-        "issue_contract_hash": canonical_hash(contract),
+        "issue_contract_hash": issue_contract_hash,
         "github_updated_at": raw.get("updated_at"),
+        "evidence_sufficiency": (
+            _evidence_sufficiency_binding(repo, issue_contract_hash)
+            if bind_current_evidence_universe
+            else None
+        ),
         "binding_hash": None,
     }
     payload["binding_hash"] = _hash_without_binding(payload)
@@ -275,19 +382,62 @@ def check_issue(
             "ISSUE_REBIND_REQUIRED",
             f"{github_repo}#{issue_number} contract changed since binding",
         )
+    sufficiency = (
+        binding.get("evidence_sufficiency")
+        if binding.get("schema") == ISSUE_BINDING_SCHEMA
+        else None
+    )
+    sufficiency_status = "UNBOUND"
+    if sufficiency is not None:
+        current_verification_contract = _verification_contract_identity(repo)
+        if (
+            sufficiency["config_file_sha256"]
+            != current_verification_contract["config_file_sha256"]
+            or sufficiency["config_hash"] != current_verification_contract["config_hash"]
+        ):
+            raise LocalCheckError(
+                ISSUE_EVIDENCE_STALE_REASON,
+                "verification contract changed since Issue evidence sufficiency was bound",
+            )
+        sufficiency_status = "BOUND"
+
     context = {
         "schema": ISSUE_CONTEXT_SCHEMA,
         "github_repository": github_repo,
         "issue_number": issue_number,
         "issue_contract_hash": binding["issue_contract_hash"],
         "binding_hash": binding["binding_hash"],
+        "evidence_sufficiency": {
+            "status": sufficiency_status,
+            "config_file_sha256": (
+                sufficiency["config_file_sha256"] if sufficiency is not None else None
+            ),
+            "config_hash": sufficiency["config_hash"] if sufficiency is not None else None,
+        },
     }
     result = check_repository(repo, requirements_context=context)
-    return {
-        **result,
+    common = {
         "github_repository": github_repo,
         "issue_number": issue_number,
         "issue_contract_hash": binding["issue_contract_hash"],
         "binding_hash": binding["binding_hash"],
-        "claim_ceiling": "ISSUE_VERIFIED_NOT_RELEASED",
+        "issue_evidence_sufficiency_status": sufficiency_status,
+        "repository_evidence_status": result["status"],
+    }
+    if result["status"] == "VERIFIED" and sufficiency_status != "BOUND":
+        return {
+            **result,
+            **common,
+            "status": "UNVERIFIABLE",
+            "reason_codes": [ISSUE_EVIDENCE_UNBOUND_REASON],
+            "claim_ceiling": "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND",
+        }
+    return {
+        **result,
+        **common,
+        "claim_ceiling": (
+            "ISSUE_VERIFIED_NOT_RELEASED"
+            if result["status"] == "VERIFIED"
+            else "ISSUE_NOT_VERIFIED"
+        ),
     }
