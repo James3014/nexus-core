@@ -1,0 +1,1 @@
+Core v2 post-merge canary for Issue #106. This branch is intentionally not merged.\n
