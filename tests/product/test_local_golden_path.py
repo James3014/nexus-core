@@ -894,13 +894,20 @@ required_material_ids = ["learning-revision"]
     with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
 
-    assert raised.value.reason_code == "REQUIRED_MATERIAL_UNSATISFIED"
+    assert raised.value.reason_code == "UNVERIFIABLE"
     assert not marker.exists()
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     material = receipt["evidence_artifacts"][0]
     assert material["expected_identity"] == expected
     assert material["observed_identity"] == observed
     assert material["status"] == "FAIL"
+    assert "full-suite" in receipt["outcome"]["reason_codes"]
+    coverage = {
+        row["logical_subject_id"]: row["category"]
+        for row in receipt["core_response"]["verification"]["coverage"]["entries"]
+    }
+    assert coverage["dependency/nexus-learning"] == "COVERED"
+    assert coverage["runtime/full-suite"] == "NOT_COVERED"
 
 
 def test_v2_required_material_identity_match_is_linked_and_bound(external_repo: Path):
