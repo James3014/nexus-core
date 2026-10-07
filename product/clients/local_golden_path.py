@@ -1020,6 +1020,7 @@ def _base_receipt(
     if config_version in {None, CONFIG_VERSION}:
         receipt["verifier"] = dict(artifacts[0]) if artifacts else None
     else:
+        assert config is not None
         receipt["evidence_artifacts"] = [dict(artifact) for artifact in artifacts]
         receipt["evidence_links"] = [
             {
@@ -1046,11 +1047,11 @@ def _base_receipt(
                         "requirement_mode": producer["requirement_mode"],
                         "applicability": producer["applicability"],
                     }
-                    for producer in _v2_producers(config)
+                    for producer in _v2_producers(v2_config)
                 ],
                 "required_verifier_ids": [
                     producer["id"]
-                    for producer in _v2_producers(config)
+                    for producer in _v2_producers(v2_config)
                     if producer["requirement_mode"] == "REQUIRED"
                 ],
             }
@@ -1431,6 +1432,7 @@ def validate_verification_receipt_payload(
     requirements_context = inputs.get("requirements_context")
     request = inputs.get("request")
     config_version = config.get("version") if isinstance(config, dict) else None
+    v2_config: Mapping[str, Any] | None = config if isinstance(config, dict) else None
     expected_schema_version = (
         LEGACY_RECEIPT_SCHEMA_VERSION
         if config_version == CONFIG_VERSION
@@ -1462,9 +1464,9 @@ def validate_verification_receipt_payload(
         reasons.extend(_validate_artifact_payload(verifier))
         if isinstance(verifier, dict):
             artifacts = [verifier]
-    elif config_version == CONFIG_VERSION_MULTI_EVIDENCE and isinstance(config, dict):
+    elif config_version == CONFIG_VERSION_MULTI_EVIDENCE and v2_config is not None:
         try:
-            validated_config = _validate_config(dict(config))
+            validated_config = _validate_config(dict(v2_config))
             producers = _v2_producers(validated_config)
             producers_by_id = {producer["id"]: producer for producer in producers}
         except LocalCheckError:
@@ -1482,6 +1484,7 @@ def validate_verification_receipt_payload(
             if producer is None:
                 reasons.append("VERIFIER_BINDING_MISMATCH")
             else:
+                assert isinstance(producer_id, str)
                 if producer_id in seen_ids:
                     reasons.append("VERIFIER_BINDING_MISMATCH")
                 seen_ids.add(producer_id)
@@ -1558,7 +1561,7 @@ def validate_verification_receipt_payload(
             )
             if request["acceptance_contract"]["requirements_hash"] != expected_requirements_hash:
                 reasons.append("CONFIG_BINDING_MISMATCH")
-            if config_version == CONFIG_VERSION_MULTI_EVIDENCE:
+            if config_version == CONFIG_VERSION_MULTI_EVIDENCE and v2_config is not None:
                 contract = request["acceptance_contract"]
                 expected_universe = {
                     "universe_generation": contract.get("universe_generation"),
@@ -1582,7 +1585,7 @@ def validate_verification_receipt_payload(
                     if producer["requirement_mode"] == "REQUIRED"
                 ]
                 if (
-                    contract.get("universe_generation") != config["universe_generation"]
+                    contract.get("universe_generation") != v2_config["universe_generation"]
                     or contract.get("expected_subjects") != expected_subjects
                     or contract.get("required_verifier_ids") != required_ids
                 ):
