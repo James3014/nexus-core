@@ -332,7 +332,10 @@ def _validate_binding(payload: Any) -> dict[str, Any]:
     if not isinstance(contract, dict):
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "missing issue contract")
     issue_contract_hash = payload.get("issue_contract_hash")
-    if issue_contract_hash != canonical_hash(contract):
+    if (
+        not isinstance(issue_contract_hash, str)
+        or issue_contract_hash != canonical_hash(contract)
+    ):
         raise LocalCheckError("ISSUE_BINDING_TAMPERED", "issue contract hash mismatch")
     if payload.get("schema") == ISSUE_BINDING_SCHEMA:
         _validate_evidence_sufficiency(
