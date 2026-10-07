@@ -11,7 +11,11 @@ import pytest
 
 from product.clients import issue_golden_path as issue_gp
 from product.clients.issue_golden_path import check_issue, init_issue_binding
-from product.clients.local_golden_path import LocalCheckError, init_repository
+from product.clients.local_golden_path import (
+    LocalCheckError,
+    init_repository,
+    validate_verification_receipt,
+)
 from product.protocol.generic_verification import canonical_hash
 
 
@@ -58,8 +62,15 @@ def _issue(*, body: str = "Change VALUE", state: str = "open") -> dict[str, obje
 
 
 def test_issue_init_and_check_bind_requirements_to_issue(issue_repo: Path) -> None:
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+
     def reader(repo: str, number: int) -> dict[str, object]:
-        return _issue()
+        return _issue(
+            body=(
+                "Change VALUE\n\n"
+                f"<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
+            )
+        )
 
     binding_path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
     binding = json.loads(binding_path.read_text(encoding="utf-8"))
@@ -70,6 +81,7 @@ def test_issue_init_and_check_bind_requirements_to_issue(issue_repo: Path) -> No
     assert result["github_repository"] == "example/project"
     assert result["issue_number"] == 85
     assert result["claim_ceiling"] == "ISSUE_VERIFIED_NOT_RELEASED"
+    assert result["issue_evidence_sufficiency_status"] == "BOUND"
 
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     context = receipt["inputs"]["requirements_context"]
@@ -81,6 +93,118 @@ def test_issue_init_and_check_bind_requirements_to_issue(issue_repo: Path) -> No
         receipt["inputs"]["request"]["acceptance_contract"]["requirements_hash"]
         == expected
     )
+
+
+def test_issue_check_downgrades_green_repository_evidence_without_issue_sufficiency(
+    issue_repo: Path,
+) -> None:
+    reader = lambda repo, number: _issue()
+
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["repository_evidence_status"] == "VERIFIED"
+    assert result["reason_codes"] == [issue_gp.ISSUE_EVIDENCE_UNBOUND_REASON]
+    assert result["claim_ceiling"] == "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["outcome"]["status"] == "VERIFIED"
+    assert receipt["inputs"]["requirements_context"]["evidence_sufficiency"]["status"] == "UNBOUND"
+    assert validate_verification_receipt(result["receipt_path"], repo=issue_repo) == {
+        "valid": True,
+        "reason_codes": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "content"),
+    [
+        ("docs/dsh-core-negative-control.txt", "unrelated docs-only negative control\n"),
+        ("unrelated.py", "UNRELATED = True\n"),
+    ],
+)
+def test_unrelated_change_with_green_generic_verifier_cannot_issue_false_green(
+    issue_repo: Path,
+    relative_path: str,
+    content: str,
+) -> None:
+    (issue_repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    config = issue_repo / ".nexus-core" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            'allowed_patterns = ["app.py"]',
+            'allowed_patterns = ["**"]',
+        ),
+        encoding="utf-8",
+    )
+    target = issue_repo / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    reader = lambda repo, number: _issue(body="Change app.py VALUE to 2")
+
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    assert result["repository_evidence_status"] == "VERIFIED"
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["reason_codes"] == [issue_gp.ISSUE_EVIDENCE_UNBOUND_REASON]
+    assert result["claim_ceiling"] == "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND"
+
+
+def test_issue_evidence_universe_binding_goes_stale_when_verification_contract_changes(
+    issue_repo: Path,
+) -> None:
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+    reader = lambda repo, number: _issue(
+        body=f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
+    )
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    config = issue_repo / ".nexus-core" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "timeout_seconds = 300",
+            "timeout_seconds = 301",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    assert raised.value.reason_code == issue_gp.ISSUE_EVIDENCE_STALE_REASON
+
+
+def test_rehashed_substituted_issue_evidence_binding_fails_closed(issue_repo: Path) -> None:
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+    reader = lambda repo, number: _issue(
+        body=f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
+    )
+    path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["evidence_sufficiency"]["config_file_sha256"] = "sha256:" + "f" * 64
+    payload["binding_hash"] = issue_gp._hash_without_binding(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    assert raised.value.reason_code == "ISSUE_BINDING_TAMPERED"
+
+
+def test_legacy_issue_binding_cannot_retain_strong_issue_claim(issue_repo: Path) -> None:
+    path = init_issue_binding(issue_repo, issue_number=85, issue_reader=lambda repo, number: _issue())
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["schema"] = issue_gp.LEGACY_ISSUE_BINDING_SCHEMA
+    payload["version"] = 1
+    payload.pop("evidence_sufficiency")
+    payload["binding_hash"] = issue_gp._hash_without_binding(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = check_issue(issue_repo, issue_number=85, issue_reader=lambda repo, number: _issue())
+
+    assert result["status"] == "UNVERIFIABLE"
+    assert result["repository_evidence_status"] == "VERIFIED"
+    assert result["claim_ceiling"] == "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND"
 
 
 def test_issue_check_requires_rebind_after_contract_drift(issue_repo: Path) -> None:
@@ -255,8 +379,15 @@ def test_issue_check_binds_v2_evidence_universe_and_issue_contract(issue_repo: P
         ),
         encoding="utf-8",
     )
+    identity = issue_gp._verification_contract_identity(issue_repo)["config_file_sha256"]
+
     def reader(repo: str, number: int) -> dict[str, object]:
-        return _issue(body="VALUE must become 2")
+        return _issue(
+            body=(
+                "VALUE must become 2\n\n"
+                f"<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
+            )
+        )
 
     binding_path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
     binding = json.loads(binding_path.read_text(encoding="utf-8"))
@@ -264,6 +395,7 @@ def test_issue_check_binds_v2_evidence_universe_and_issue_contract(issue_repo: P
     result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
 
     assert result["status"] == "VERIFIED"
+    assert result["issue_evidence_sufficiency_status"] == "BOUND"
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     request = receipt["inputs"]["request"]
     assert receipt["schema_version"] == 2
