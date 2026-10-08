@@ -233,7 +233,7 @@ Every receipt (success and failure) also records, inside the envelope hash,
 (`target_tree == subject_head_tree`). Older receipts without these fields still
 validate.
 
-`nexus-certify receipt-check <receipt>` can additionally fail closed (exit 2,
+`nexus-certify receipt-check --receipt <receipt>` can additionally fail closed (exit 2,
 reported under `expectations` in the JSON):
 
 | Flag | Reason code on mismatch |

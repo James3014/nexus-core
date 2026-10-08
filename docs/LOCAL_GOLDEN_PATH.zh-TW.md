@@ -213,7 +213,7 @@ receipt validation 會重新計算 config、manifest、verifier artifact、envel
 （`git-tree:<HEAD tree sha>`），以及 `subject_clean`（`target_tree == subject_head_tree`）。
 缺少這些欄位的舊 receipt 仍可通過驗證。
 
-`nexus-certify receipt-check <receipt>` 可額外 fail closed（exit 2，並在 JSON 的
+`nexus-certify receipt-check --receipt <receipt>` 可額外 fail closed（exit 2，並在 JSON 的
 `expectations` 中回報）：
 
 | Flag | 不符時的 reason code |

@@ -188,7 +188,7 @@ runs:
       run: |
         set -euo pipefail
         echo "verified=false" >> "$GITHUB_OUTPUT"
-        nexus-certify receipt-check "$RECEIPT" \
+        nexus-certify receipt-check --receipt "$RECEIPT" \
           --expect-status VERIFIED \
           --expect-subject-head "$HEAD_SHA" \
           --expect-target-tree "$TREE" \

@@ -172,7 +172,7 @@ uvx --from "sigstore==4.5.0" sigstore verify github \
   <receipt>.json
 
 TREE=$(git rev-parse '<head-sha>^{tree}')
-nexus-certify receipt-check <receipt>.json \
+nexus-certify receipt-check --receipt <receipt>.json \
   --expect-status VERIFIED \
   --expect-subject-head <head-sha> \
   --expect-target-tree "$TREE" \
