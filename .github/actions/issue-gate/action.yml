@@ -4,6 +4,9 @@ description: >-
   candidate code exists on the runner, then runs issue-init and issue-check
   --require-trusted-config against the candidate. Candidate code is never
   executed on the runner; the verifier runs inside the configured isolation.
+  The newest receipt (success or failure) is signed with Sigstore keyless
+  signing and uploaded with its bundle. The CALLER JOB MUST GRANT
+  'id-token: write' (plus contents/issues/pull-requests: read) or signing fails.
 
 inputs:
   issue-number:
@@ -37,6 +40,18 @@ outputs:
   issue-number:
     description: Resolved Issue number.
     value: ${{ steps.resolve.outputs.issue-number }}
+  artifact-name:
+    description: Name of the uploaded artifact holding the receipt and its Sigstore bundle.
+    value: ${{ steps.names.outputs.artifact-name }}
+  receipt-file:
+    description: Path of the signed receipt (empty when no receipt was produced).
+    value: ${{ steps.sign.outputs.receipt-file }}
+  bundle-file:
+    description: Path of the Sigstore bundle for the receipt (empty when not signed).
+    value: ${{ steps.sign.outputs.bundle-file }}
+  receipt-sha256:
+    description: SHA-256 of the signed receipt (empty when no receipt).
+    value: ${{ steps.sign.outputs.receipt-sha256 }}
 
 runs:
   using: composite
@@ -170,11 +185,63 @@ runs:
         set -euo pipefail
         nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --require-trusted-config
 
+    - name: Sign newest receipt (Sigstore keyless)
+      id: sign
+      if: always()
+      shell: bash
+      env:
+        CANDIDATE: ${{ inputs.candidate-path }}
+        SIGSTORE_VERSION: "4.5.0"
+      run: |
+        set -euo pipefail
+        receipt="$(python3 - <<'PY'
+        import os
+        import re
+        from datetime import datetime
+        from pathlib import Path
+
+        pattern = re.compile(r"^(\d{8}T\d{6}\.\d{6})\+0000-[0-9a-f]{12}\.json$")
+        directory = Path(os.environ["CANDIDATE"]) / ".nexus-core" / "receipts"
+        candidates = []
+        if directory.is_dir():
+            for path in directory.iterdir():
+                match = pattern.match(path.name)
+                if match and path.is_file() and not path.is_symlink():
+                    stamp = datetime.strptime(match.group(1), "%Y%m%dT%H%M%S.%f")
+                    candidates.append((stamp, path.name, path))
+        if candidates:
+            print(max(candidates)[2])
+        PY
+        )"
+        if [ -z "$receipt" ]; then
+          echo "NEXUS_CORE_SIGN: no receipt"
+          exit 0
+        fi
+        bundle="${receipt}.sigstore.json"
+        uvx --from "sigstore==${SIGSTORE_VERSION}" sigstore sign --bundle "$bundle" "$receipt"
+        sha="$(sha256sum "$receipt" | cut -d' ' -f1)"
+        echo "NEXUS_CORE_SIGN: signed $receipt sha256=$sha"
+        {
+          echo "receipt-file=$receipt"
+          echo "bundle-file=$bundle"
+          echo "receipt-sha256=$sha"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Name receipt artifact
+      id: names
+      if: always()
+      shell: bash
+      env:
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        echo "artifact-name=nexus-core-receipts-${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
     - name: Upload receipts
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
       with:
-        name: nexus-core-receipts-${{ github.event.pull_request.head.sha }}
+        name: ${{ steps.names.outputs.artifact-name }}
         path: ${{ inputs.candidate-path }}/.nexus-core/receipts/
         if-no-files-found: warn
         retention-days: 30
