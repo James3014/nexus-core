@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -348,9 +349,25 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if result["healthy"] else 2
 
 
+def _require_trusted_config(args: argparse.Namespace) -> bool:
+    return bool(
+        getattr(args, "require_trusted_config", False)
+        or os.environ.get("NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG") == "1"
+    )
+
+
+def _print_config_source(result: dict) -> None:
+    source = result.get("config_source") or {}
+    if source.get("kind") == "base-ref":
+        print(f"config: trusted ({source['ref']}@{source['commit'][:12]})")
+    else:
+        print(f"config: untrusted (not committed on {result.get('base_ref', 'base ref')})")
+
+
 def cmd_check(args: argparse.Namespace) -> int:
-    result = check_repository(args.repo)
+    result = check_repository(args.repo, require_trusted_config=_require_trusted_config(args))
     print(f"verification: {result['status']} (not CERTIFIED)")
+    _print_config_source(result)
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
@@ -401,8 +418,13 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
 
 
 def cmd_issue_check(args: argparse.Namespace) -> int:
-    result = check_issue(args.repo, issue_number=args.issue)
+    result = check_issue(
+        args.repo,
+        issue_number=args.issue,
+        require_trusted_config=_require_trusted_config(args),
+    )
     print(f"issue verification: {result['status']} (not RELEASED)")
+    _print_config_source(result)
     print(f"claim ceiling: {result['claim_ceiling']}")
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
@@ -537,6 +559,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_check = subparsers.add_parser("check", help="Run local deterministic verification")
     p_check.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_check.add_argument(
+        "--require-trusted-config",
+        action="store_true",
+        help="Fail closed unless the config is committed on the base ref",
+    )
 
     p_receipt_check = subparsers.add_parser(
         "receipt-check", help="Validate a local verification receipt without rerunning its verifier"
@@ -576,6 +603,11 @@ def build_parser() -> argparse.ArgumentParser:
         "issue-check", help="Verify the current repository change against a bound GitHub Issue"
     )
     p_issue_check.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_issue_check.add_argument(
+        "--require-trusted-config",
+        action="store_true",
+        help="Fail closed unless the config is committed on the base ref",
+    )
     p_issue_check.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
 
     # Machine-readable candidate acquisition (issue-1312).

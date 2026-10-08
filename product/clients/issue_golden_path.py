@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import time
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +17,7 @@ from product.clients.local_golden_path import (
     CONFIG_DIRECTORY,
     CONFIG_FILENAME,
     LocalCheckError,
+    _load_effective_config,
     check_repository,
 )
 from product.protocol.generic_verification import canonical_hash
@@ -213,16 +213,12 @@ def _is_sha256(value: Any) -> bool:
 
 
 def _verification_contract_identity(repo: Path) -> dict[str, Any]:
-    config_path = repo / CONFIG_DIRECTORY / CONFIG_FILENAME
-    if not config_path.is_file():
-        raise LocalCheckError("CONFIG_MISSING", "run nexus-certify init first")
     try:
-        raw = config_path.read_bytes()
-        config = tomllib.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise LocalCheckError("INVALID_CONFIG", str(exc)) from exc
-    if type(config) is not dict:
-        raise LocalCheckError("INVALID_CONFIG", "config must be a table")
+        config, _source, _worktree = _load_effective_config(repo)
+    except LocalCheckError as exc:
+        if exc.reason_code == "CONFIG_MISSING":
+            raise LocalCheckError("CONFIG_MISSING", "run nexus-certify init first") from exc
+        raise
     return {
         "schema": ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA,
         "config_path": f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}",
@@ -412,6 +408,7 @@ def check_issue(
     *,
     issue_number: int,
     issue_reader: IssueReader | None = None,
+    require_trusted_config: bool = False,
 ) -> dict[str, Any]:
     repo = _repo_root(path)
     binding = load_issue_binding(repo, issue_number)
@@ -457,7 +454,11 @@ def check_issue(
             "config_hash": sufficiency["config_hash"] if sufficiency is not None else None,
         },
     }
-    result = check_repository(repo, requirements_context=context)
+    result = check_repository(
+        repo,
+        requirements_context=context,
+        require_trusted_config=require_trusted_config,
+    )
     common = {
         "github_repository": github_repo,
         "issue_number": issue_number,

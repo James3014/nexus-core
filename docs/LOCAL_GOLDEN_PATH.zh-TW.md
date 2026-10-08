@@ -87,6 +87,84 @@ timeout_seconds = 300
 
 config hash 會綁定 normalized config。path pattern 只屬於 product-shell acquisition policy；在 admitted run 中，它們會被投影成 exact changed paths，交給既有 canonical contract。
 
+## 受信任的 config 來源
+
+`check` 與 `issue-check` 只會讀取 worktree 的 config 來得知 `base_ref`，
+實際生效的 config 則從 `base_ref` commit 讀取
+（`git show <base>:.nexus-core/config.toml`）。其 `base_ref` 必須與 worktree
+一致，否則以 `CONFIG_BASE_REF_MISMATCH` 失敗。Receipt 會記錄 `config_source`
+（`{"kind": "base-ref", "commit": ..., "blob": ...}`）、worktree config hash
+與 `config_drift`。因此在 worktree 放寬 `allowed_patterns` 不會產生任何效果。
+
+若 base commit 沒有 config，會改用 worktree config，receipt 記錄
+`config_source.kind = "worktree"`，CLI 會印出以下其中一行：
+
+```text
+config: trusted (<ref>@<sha>)
+config: untrusted (not committed on <base_ref>)
+```
+
+若要拒絕 untrusted 情況，請加上 `--require-trusted-config`（或設定
+`NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`），此時會以 `CONFIG_UNTRUSTED` fail closed：
+
+```bash
+nexus-certify check --repo . --require-trusted-config
+nexus-certify issue-check --repo . --issue <NUMBER> --require-trusted-config
+```
+
+Config 的變更只有在合併進 base ref 之後才會生效（第 N 代在舊 config 下驗證，
+第 N+1 代才使用新 config）。
+
+## 隔離模式
+
+Verifier 一律在 detached clone 中執行：沒有 remote、沒有 alternates
+（`execution_subject.mode = isolated_detached_clone`），環境變數採 allowlist
+（`PATH`、`LANG`/`LC_ALL`、`PYTHONDONTWRITEBYTECODE`、`PYTEST_ADDOPTS`，以及
+sandbox 專用的 `HOME`/`TMPDIR`），並在獨立 process group 中執行，timeout 時整組終止。
+可用 `env_passthrough` 額外開放變數名稱；receipt 只記錄名稱。除非明確列出，
+`GITHUB_TOKEN` 與雲端憑證不會被 verifier 看到。
+
+對於惡意或遭 injection 的 agent，建議使用 container 模式：
+
+```toml
+version = 2
+base_ref = "origin/main"
+allowed_patterns = ["src/**", "tests/**"]
+deletion_policy = "FORBID"
+universe_generation = 1
+materials = []
+env_passthrough = ["MY_TEST_FLAG"]   # names only; ^[A-Z_][A-Z0-9_]*$, unique; recorded in the receipt
+
+[[verifiers]]
+id = "tests"
+command = ["uv", "run", "pytest", "-q"]
+timeout_seconds = 300
+logical_subject_id = "app/tests"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
+
+[isolation]
+mode = "container"          # exactly "process" (default) | "container"
+image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<64 hex>"  # must end with @sha256:<64 hex>
+network = "bridge"          # exactly "bridge" (default) | "none"
+```
+
+Container 模式以 `docker run --rm --network <network> --user <uid>:<gid>`
+執行 verifier，唯一的 mount 是 sandbox 的上層目錄（`/sandbox`），工作目錄為
+`/sandbox/repo`，`HOME=/sandbox/home`、`TMPDIR=/sandbox/tmp`，且只傳入 allowlist
+環境變數。Image 必須以 `@sha256:<64 hex>` 結尾；找不到 `docker` 時以
+`ISOLATION_UNAVAILABLE` fail closed，非 digest image 或無效的 `[isolation]`／
+`env_passthrough` 值則為 `INVALID_CONFIG`。Image 會在 verifier timeout 開始計時之前
+先 pull，pull 失敗為 `ISOLATION_IMAGE_UNAVAILABLE`。
+Verifier 執行前，Core 會先證明 bind mount 是真的：在沙箱父目錄寫入隨機 nonce，
+再透過 `docker run ... cat` 讀回；不一致或失敗即為 `ISOLATION_MOUNT_UNAVAILABLE`
+（通常是 Docker VM 沒有分享該路徑）。沙箱父目錄位於 `NEXUS_CERTIFY_SANDBOX_ROOT`
+（若有設定）；macOS 預設為 `~/.cache/nexus-certify/sandbox`（Docker Desktop 分享
+`/Users`，colima 分享 `$HOME`），其他平台預設為系統暫存目錄。Receipt 會記錄
+`mount_probe = "PASS"` 以及 image 是否經過 pull。
+Receipt 會記錄 mode、image 與 network。`process` 模式無法限制呼叫者的 OS 權限。
+
 ## Fail-closed negative controls
 
 遇到以下任何情況，`check` 都不會產生 `VERIFIED`：
@@ -101,6 +179,8 @@ config hash 會綁定 normalized config。path pattern 只屬於 product-shell a
 - verifier 不存在、launch 失敗、timeout 或回傳非零 exit code；
 - verifier 執行期間 target state 發生改變；
 - canonical input malformed、cross-bound、stale、mismatched 或遭竄改；
+- `ISOLATION_IMAGE_UNAVAILABLE`（container image 無法 pull）或 `ISOLATION_MOUNT_UNAVAILABLE`（容器內看不到沙箱）；
+- `CONFIG_UNTRUSTED`（使用 `--require-trusted-config` 但 base ref 上沒有已提交的 config）、`CONFIG_BASE_REF_MISMATCH`（base-ref config 與 worktree config 的 base ref 不一致），或 `ISOLATION_UNAVAILABLE`（要求 container 模式但 `docker` 不可用）；
 - canonical Core 回傳任何非 `VERIFIED` 結果。
 
 一般 verifier 的 result contract 刻意保持簡單：process 必須成功啟動、在 timeout 前完成，且 exit code 0 代表 `PASS`。

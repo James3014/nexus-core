@@ -65,12 +65,11 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-已有發布及檔案驗證紀錄的 PyPI baseline 是 `0.1.2`，支援 repository 與
-Issue-bound CLI。下一版 source candidate 為 `0.1.3`，包含後續跨 Repo 證據
-與 Issue 專屬充分性防護。在新版發布並完成 artifact readback 前，可固定安裝既有版本：
+已發布的版本是 `0.1.3`，支援 repository 與 Issue-bound CLI、跨 Repo 證據
+與 Issue 專屬充分性防護。請明確指定版本安裝：
 
 ```bash
-python -m pip install nexus-certify==0.1.2
+python -m pip install nexus-certify==0.1.3
 ```
 
 不要只因為 host 的 `PATH` 裡有一個沒有版本綁定的
@@ -112,8 +111,7 @@ receipt: .nexus-core/receipts/...
 
 ### Issue-bound 快速綁定
 
-`0.1.2` 已提供 Issue-bound 綁定；`0.1.3` candidate 另外包含後續的
-證據全集與 Issue 專屬充分性防護：
+`0.1.3` 已提供 Issue-bound 綁定，並包含證據全集與 Issue 專屬充分性防護：
 
 ```bash
 nexus-certify issue-init --issue <NUMBER>
@@ -128,8 +126,13 @@ nexus-certify issue-check --issue <NUMBER>
 execution lane、routing、Candidate acceptance、merge、release、deployment
 或 production authority。
 
-不能假設公開的 `0.1.2` 已包含後續 #104/#109 防護。若需要這些防護，在
-`0.1.3` 發布及 readback 前，請固定使用經驗證的 exact source / wheel Candidate。
+### 隔離與受信任 config
+
+Verifier 隔離（detached clone、環境變數 allowlist、可選的 container 模式）與
+以 base ref 為準的受信任 config 來源，請見
+[`docs/LOCAL_GOLDEN_PATH.zh-TW.md`](docs/LOCAL_GOLDEN_PATH.zh-TW.md)
+（「受信任的 config 來源」、「隔離模式」）。Pull request gate 請見
+[`docs/GITHUB_REPOSITORY_CHECK.md`](docs/GITHUB_REPOSITORY_CHECK.md)。
 
 ### 它會在你的 repository 裡寫入什麼
 
@@ -200,8 +203,7 @@ Nexus Core 的設計目標，是讓「信任」不依賴修改程式的人自己
 ## 目前成熟度
 
 - **公開套件：** `nexus-certify`
-- **目前 source candidate version：** `0.1.3`（跨 Repo 證據與 Issue sufficiency 防護；尚待正式發布及 readback）
-- **最近已驗證的 PyPI baseline：** `0.1.2`（包含 Issue-bound CLI，但不含後續 #104/#109 防護）
+- **已發布版本：** `0.1.3`（Issue-bound CLI、跨 Repo 證據與 Issue sufficiency 防護）
 - **Local Golden Path：** 已通過 published-artifact external-repository canary
 - **License：** Apache-2.0
 - **Python：** 3.11+

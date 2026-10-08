@@ -1,0 +1,234 @@
+name: Nexus Core issue gate
+description: >-
+  Two-stage pull-request gate. Installs a pinned nexus-certify before any
+  candidate code exists on the runner, then runs issue-init and issue-check
+  --require-trusted-config against the candidate. Candidate code is never
+  executed on the runner; the verifier runs inside the configured isolation.
+
+inputs:
+  issue-number:
+    description: >-
+      Issue number. When empty, exactly one '<!-- NEXUS_CORE_ISSUE: N -->'
+      marker is parsed from the pull request body (fail closed otherwise).
+    required: false
+    default: ""
+  nexus-certify-source:
+    description: "'ref' installs from a pinned nexus-core commit; 'path' installs from a trusted local checkout."
+    required: false
+    default: ref
+  nexus-certify-ref:
+    description: "40-hex nexus-core commit sha to install from (required when nexus-certify-source is 'ref')."
+    required: false
+    default: ""
+  nexus-certify-path:
+    description: "Trusted local source directory (used when nexus-certify-source is 'path'; must NOT be the candidate)."
+    required: false
+    default: ""
+  python-version:
+    description: Python version installed by uv.
+    required: false
+    default: "3.11"
+  candidate-path:
+    description: Directory the candidate head is checked out into.
+    required: false
+    default: candidate
+
+outputs:
+  issue-number:
+    description: Resolved Issue number.
+    value: ${{ steps.resolve.outputs.issue-number }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs and resolve Issue binding
+      id: resolve
+      shell: bash
+      env:
+        IN_ISSUE: ${{ inputs.issue-number }}
+        IN_SOURCE: ${{ inputs.nexus-certify-source }}
+        IN_REF: ${{ inputs.nexus-certify-ref }}
+        IN_PATH: ${{ inputs.nexus-certify-path }}
+        IN_CANDIDATE: ${{ inputs.candidate-path }}
+        IN_PYTHON: ${{ inputs.python-version }}
+        PR_BODY: ${{ github.event.pull_request.body || '' }}
+      run: |
+        set -euo pipefail
+        case "$IN_SOURCE" in
+          ref)
+            if ! [[ "$IN_REF" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "NEXUS_CORE_GATE_REF_INVALID: nexus-certify-ref must be a 40-hex commit sha" >&2
+              exit 1
+            fi
+            ;;
+          path)
+            if [ -z "$IN_PATH" ] || [ "$IN_PATH" = "$IN_CANDIDATE" ]; then
+              echo "NEXUS_CORE_GATE_PATH_INVALID: nexus-certify-path must be set and differ from candidate-path" >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "NEXUS_CORE_GATE_SOURCE_INVALID: nexus-certify-source must be 'ref' or 'path'" >&2
+            exit 1
+            ;;
+        esac
+        if ! [[ "$IN_CANDIDATE" =~ ^[A-Za-z0-9_-][A-Za-z0-9_./-]*$ ]] || [[ "$IN_CANDIDATE" == *..* ]]; then
+          echo "NEXUS_CORE_GATE_CANDIDATE_PATH_INVALID" >&2
+          exit 1
+        fi
+        if ! [[ "$IN_PYTHON" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+          echo "NEXUS_CORE_GATE_PYTHON_VERSION_INVALID" >&2
+          exit 1
+        fi
+        if [ -n "$IN_ISSUE" ]; then
+          if ! [[ "$IN_ISSUE" =~ ^[1-9][0-9]*$ ]]; then
+            echo "NEXUS_CORE_ISSUE_BINDING_REQUIRED: issue-number must be a positive integer" >&2
+            exit 1
+          fi
+          number="$IN_ISSUE"
+        else
+          number="$(python3 - <<'PY'
+        import os
+        import re
+        import sys
+
+        body = os.environ.get("PR_BODY", "")
+        matches = re.findall(r"<!--\s*NEXUS_CORE_ISSUE:\s*([1-9][0-9]*)\s*-->", body)
+        if len(matches) != 1:
+            sys.stderr.write(
+                "NEXUS_CORE_ISSUE_BINDING_REQUIRED: PR body must contain exactly one "
+                "'<!-- NEXUS_CORE_ISSUE: <number> -->' marker.\n"
+            )
+            raise SystemExit(1)
+        print(matches[0])
+        PY
+        )"
+        fi
+        echo "issue-number=$number" >> "$GITHUB_OUTPUT"
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.1
+
+    - name: Install pinned nexus-certify (before any candidate code exists)
+      shell: bash
+      env:
+        IN_SOURCE: ${{ inputs.nexus-certify-source }}
+        IN_REF: ${{ inputs.nexus-certify-ref }}
+        IN_PATH: ${{ inputs.nexus-certify-path }}
+        IN_PYTHON: ${{ inputs.python-version }}
+        UV_TOOL_DIR: ${{ runner.temp }}/nexus-core-tools
+        UV_TOOL_BIN_DIR: ${{ runner.temp }}/nexus-core-bin
+      run: |
+        set -euo pipefail
+        uv python install "$IN_PYTHON"
+        mkdir -p "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR"
+        if [ "$IN_SOURCE" = "ref" ]; then
+          uv tool install --force --python "$IN_PYTHON" "git+https://github.com/James3014/nexus-core.git@${IN_REF}"
+        else
+          uv tool install --force --python "$IN_PYTHON" "$IN_PATH"
+        fi
+        "$UV_TOOL_BIN_DIR/nexus-certify" --help >/dev/null
+        echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
+
+    - name: Checkout candidate head
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        path: ${{ inputs.candidate-path }}
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Pin exact base ref
+      shell: bash
+      env:
+        CANDIDATE: ${{ inputs.candidate-path }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+      run: |
+        set -euo pipefail
+        # '+' forces the update so a moved base does not reject a non-fast-forward.
+        # If BASE_SHA is not an ancestor of head, Core reports BASE_REF_NOT_ANCESTOR.
+        git -C "$CANDIDATE" fetch --no-tags origin "+${BASE_SHA}:refs/remotes/origin/${BASE_REF}"
+
+    - name: Bind exact Issue contract
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        CANDIDATE: ${{ inputs.candidate-path }}
+        ISSUE: ${{ steps.resolve.outputs.issue-number }}
+      run: |
+        set -euo pipefail
+        nexus-certify issue-init --repo "$CANDIDATE" --issue "$ISSUE"
+
+    - name: Verify exact Issue-bound candidate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        CANDIDATE: ${{ inputs.candidate-path }}
+        ISSUE: ${{ steps.resolve.outputs.issue-number }}
+      run: |
+        set -euo pipefail
+        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --require-trusted-config
+
+    - name: Upload receipts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+      with:
+        name: nexus-core-receipts-${{ github.event.pull_request.head.sha }}
+        path: ${{ inputs.candidate-path }}/.nexus-core/receipts/
+        if-no-files-found: warn
+        retention-days: 30
+
+    - name: Diagnose Core verifier failure
+      if: failure()
+      shell: bash
+      env:
+        CANDIDATE: ${{ inputs.candidate-path }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        from datetime import datetime
+        from pathlib import Path
+
+        pattern = re.compile(r"^(\d{8}T\d{6}\.\d{6})\+0000-[0-9a-f]{12}\.json$")
+        directory = Path(os.environ["CANDIDATE"]) / ".nexus-core" / "receipts"
+        candidates = []
+        if directory.is_dir():
+            for path in directory.iterdir():
+                match = pattern.match(path.name)
+                if match and path.is_file() and not path.is_symlink():
+                    stamp = datetime.strptime(match.group(1), "%Y%m%dT%H%M%S.%f")
+                    candidates.append((stamp, path.name, path))
+        if not candidates:
+            print("NEXUS_CORE_DIAGNOSTIC: no receipt available")
+            raise SystemExit(0)
+        path = max(candidates)[2]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        verifier = payload.get("verifier") or {}
+        artifacts = payload.get("evidence_artifacts") or []
+        outcome = payload.get("outcome") or {}
+        print("NEXUS_CORE_DIAGNOSTIC_RECEIPT:", path.name)
+        print("status:", outcome.get("status") or payload.get("status"))
+        print("reason_codes:", outcome.get("reason_codes") or payload.get("reason_codes"))
+        print("config_source:", payload.get("config_source"))
+        if verifier:
+            print("verifier_command:", verifier.get("command"))
+            print("verifier_exit_code:", verifier.get("exit_code"))
+            print("--- verifier stdout ---")
+            print(verifier.get("stdout", ""))
+            print("--- verifier stderr ---")
+            print(verifier.get("stderr", ""))
+        for artifact in artifacts:
+            print("--- evidence artifact ---")
+            print("producer_id:", artifact.get("producer_id"))
+            print("kind:", artifact.get("producer_kind"))
+            print("status:", artifact.get("status"))
+            print("expected_identity:", artifact.get("expected_identity"))
+            print("observed_identity:", artifact.get("observed_identity"))
+            print("exit_code:", artifact.get("exit_code"))
+            print(artifact.get("stdout", ""))
+            print(artifact.get("stderr", ""))
+        PY
