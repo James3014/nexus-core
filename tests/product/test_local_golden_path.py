@@ -1296,7 +1296,13 @@ def test_container_mode_runs_verifier_with_only_sandbox_visible(
         "mode": "container",
         "image": ALPINE_IMAGE,
         "network": "none",
+        "image_pulled": receipt["evidence_artifacts"][0]["execution_subject"]["isolation"][
+            "image_pulled"
+        ],
     }
+    assert isinstance(
+        receipt["evidence_artifacts"][0]["execution_subject"]["isolation"]["image_pulled"], bool
+    )
 
     _v2_config(external_repo, ["sh", "-c", "exit 3"], top=top, timeout=120)
     assert check_repository(external_repo)["status"] == "FAILED_VERIFICATION"
@@ -1402,7 +1408,7 @@ def test_cli_check_prints_config_trust_and_honors_env(
     _init(external_repo)
     (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert cli_main(["check", "--repo", str(external_repo)]) == 0
-    assert "config: untrusted (not committed on base ref)" in capsys.readouterr().out
+    assert "config: untrusted (not committed on main)" in capsys.readouterr().out
     monkeypatch.setenv("NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG", "1")
     assert cli_main(["check", "--repo", str(external_repo)]) != 0
     capsys.readouterr()
@@ -1413,3 +1419,68 @@ def test_cli_check_prints_config_trust_and_honors_env(
     _git(external_repo, "add", "-A")
     _git(external_repo, "commit", "-m", "cfg")
     assert doctor_repository(external_repo)["checks"]["config_source"] == "TRUSTED"
+
+
+def _fake_docker(root: Path, inspect_rc: int, pull_rc: int) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    calls = root / "docker-calls.txt"
+    shim = root / "docker"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'echo "$1 $2" >> {calls}\n'
+        'case "$1 $2" in\n'
+        f'  "image inspect") exit {inspect_rc};;\n'
+        f'  "pull --quiet") echo "pull denied" >&2; exit {pull_rc};;\n'
+        "esac\nexit 1\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    return root
+
+
+def _prepend_path(monkeypatch: pytest.MonkeyPatch, directory: Path) -> None:
+    import os
+
+    monkeypatch.setenv("PATH", f"{directory}:{os.environ['PATH']}")
+
+
+def test_container_image_pull_failure_fails_closed_with_receipt(
+    external_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bin_dir = _fake_docker(tmp_path / "fake1", inspect_rc=1, pull_rc=1)
+    _prepend_path(monkeypatch, bin_dir)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _v2_config(
+        external_repo,
+        ["sh", "-c", "true"],
+        top=f'[isolation]\nmode = "container"\nimage = "alpine:3.20@{_FAKE_DIGEST}"',
+    )
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "ISOLATION_IMAGE_UNAVAILABLE"
+    assert "pull denied" in raised.value.detail
+    assert raised.value.receipt_path is not None
+    assert (bin_dir / "docker-calls.txt").read_text().splitlines() == [
+        "image inspect",
+        "pull --quiet",
+    ]
+
+
+def test_container_image_present_skips_pull_and_absent_pulls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from product.clients import local_golden_path as lgp
+
+    image = f"alpine:3.20@{_FAKE_DIGEST}"
+    present = _fake_docker(tmp_path / "present", inspect_rc=0, pull_rc=1)
+    _prepend_path(monkeypatch, present)
+    assert lgp._ensure_container_image(image) is False
+    assert (present / "docker-calls.txt").read_text().splitlines() == ["image inspect"]
+
+    absent = _fake_docker(tmp_path / "absent", inspect_rc=1, pull_rc=0)
+    _prepend_path(monkeypatch, absent)
+    assert lgp._ensure_container_image(image) is True
+    assert (absent / "docker-calls.txt").read_text().splitlines() == [
+        "image inspect",
+        "pull --quiet",
+    ]
