@@ -12,14 +12,18 @@ Because Nexus Certify can execute caller-configured verifier commands, it crosse
 
 | Surface / Component | Trust Level | Execution Boundary | Security Invariants |
 | :--- | :--- | :--- | :--- |
-| **Local Repository & Working Tree** | Untrusted / Caller-Supplied | Local filesystem + Git plumbing | Local acquisition does not change `HEAD`, the normal Git index, or working-tree files. It uses a temporary Git index; Git plumbing may write Git objects while materializing the target tree. |
+| **Local Repository & Working Tree** | Untrusted / Caller-Supplied | Local filesystem + Git plumbing | Local acquisition does not change `HEAD`, the normal Git index, or working-tree files. It uses a temporary Git index; Git plumbing may write Git objects while materializing the target tree. The worktree `.nexus-core/config.toml` is not authoritative (see Governance config source). |
 | **Git Binary & Metadata** | Trusted Host Dependency | Subprocess execution | Nexus relies on the host `git` executable and uses Git object IDs as content-addressed identities. Git object IDs are not treated as a universal proof of collision-free or trustworthy content. |
-| **Configured Verifier Command** | **Executable Code** | **Caller's OS User Permissions** | Deliberately executed as specified by configuration. Nexus does NOT sandbox or isolate OS capabilities. |
+| **Configured Verifier Command** | **Executable Code** | **Detached clone; optional container** | Deliberately executed as specified by the base-ref configuration, in a detached clone with no remote and no alternates, inside a process group that is killed on timeout. In `process` mode it still runs with the caller's OS user permissions and is NOT an OS sandbox; use `container` mode for adversarial agents. |
+| **Verifier environment** | Allowlisted | Verifier process / container | Only `PATH`, `LANG`/`LC_ALL`, `PYTHONDONTWRITEBYTECODE`, `PYTEST_ADDOPTS`, and sandbox-private `HOME`/`TMPDIR` are passed. `GITHUB_TOKEN`, `GH_TOKEN` and cloud credentials are not visible unless named in `env_passthrough`; the names (never values) are recorded in the receipt. |
+| **Verifier sandbox** | Detached Clone | `isolated_detached_clone` | The sandbox is cloned with `--no-hardlinks`, the `origin` remote is removed and `objects/info/alternates` must be absent, so the verifier cannot reach back into the original repository through Git. The verifier runs in its own session/process group and the whole group is killed on timeout. Container mode (`[isolation] mode = "container"`, digest-pinned image, sandbox as sole mount) is the recommended setting for adversarial agents; it requires `docker` and fails closed with `ISOLATION_UNAVAILABLE`. |
+| **Governance config source** | Base-Ref Authoritative | `git show <base_ref>:.nexus-core/config.toml` | The config committed on the base ref is the effective config; a differing `base_ref` fails with `CONFIG_BASE_REF_MISMATCH`. A worktree-only config is reported as `config: untrusted` and `--require-trusted-config` (or `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`) fails closed with `CONFIG_UNTRUSTED`. The receipt records `config_source` and `config_drift`. |
 | **Python Runtime & Package Dependencies** | Environment-Resolved Dependencies | Python interpreter | Published dependencies are version-constrained, not cryptographically pinned for every end-user install. Repository development/test resolution is locked by `uv.lock`; GitHub Actions dependencies are separately pinned to immutable identities. |
 | **Local Receipt Files** | Caller-Writable Evidence Files | `.nexus-core/receipts/` | Each receipt is self-hashed and can be recomputed/validated. Local receipt files are not append-only, are not hash-chained to prior receipts, and can be deleted or replaced by a principal with filesystem access. |
 | **GitHub Acquisition Adapter** | Untrusted Remote Snapshot | Controller-injected read port | `product.acquisition.github` contains no network client or credential parameter. It validates the supplied snapshot schema, identities, hashes, paths, pagination completion, and convergence across two reads; authentication/network transport are owned outside this module. |
 | **Loopback HTTP Runtime** | Local Service | `127.0.0.1` | Local bearer token authentication; does not expose external network interfaces by default. |
 | **GitHub Actions / CI Surface** | Ephemeral Runner | CI Runner Environment | Actions dependencies pinned to immutable commit SHAs; advisory-only claim ceilings for external intelligence. |
+| **PR gate** | Trusted Base + Untrusted Candidate | `pull_request_target`, composite action `issue-gate` | Same-repository branches only (fork guard). The workflow and action come from the base ref; the pinned tool is installed into a runner-private directory before any candidate code exists, and the runner never runs candidate `uv sync`/`uv build`/scripts. `GITHUB_TOKEN` is set only on the `issue-init`/`issue-check` steps, and receipts are uploaded as a workflow artifact. Changes to the gate or config are verified under the old generation and take effect after an ordinary reviewed merge. |
 
 ---
 
@@ -30,6 +34,7 @@ Because Nexus Certify can execute caller-configured verifier commands, it crosse
 - Verifier processes run locally with the **exact permissions of the invoking user or service account**.
 - In the local Golden Path, Nexus invokes the configured argv directly rather than through an intermediate shell. This reduces shell-expansion exposure but **does not** make an untrusted verifier safe.
 - Users must review and audit verifier command definitions just as they would any arbitrary build or test script. Running untrusted verifier configurations against untrusted repositories is unsafe.
+- A `VERIFIED` result means the base-ref verification contract passed inside the configured isolation against this exact tree; it does not prove semantic completion of the Issue.
 - Expected command execution according to user configuration is an intended feature and is not considered a vulnerability.
 
 ---
@@ -52,7 +57,7 @@ A receipt's SHA-256 field makes that receipt **tamper-evident when revalidated**
 - **No Vulnerability-Free Guarantee**: `VERIFIED` does not mean the code is secure, free of vulnerabilities, or resistant to exploit.
 - **No Oracle Adequacy**: A green test suite only proves what the test suite checks. It does not prove the test suite is adequate, exhaustive, or bug-free.
 - **No Dependency Trust**: It does not prove third-party upstream dependencies are safe or uncompromised.
-- **No Execution Containment**: It does not prove the verifier or repository was sandboxed or unable to perform side effects outside Nexus's observed evidence.
+- **No Execution Containment**: It does not prove the verifier or repository was sandboxed or unable to perform side effects outside Nexus's observed evidence. Detached-clone and container isolation reduce, but do not eliminate, this exposure (kernel or container-runtime escapes, and network access under `bridge`, are out of scope).
 - **No Deployment or Release Authority**: A receipt is evidence; it does not authorize git merge, branch promotion, release, or production deployment.
 - **No Execution Safety**: It does not guarantee that the repository code is safe to execute or install.
 
