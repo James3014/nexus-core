@@ -59,9 +59,8 @@ runs the verifier.
 6. rejects any verifier mutation of the isolated tracked/non-ignored target
    subject, while allowing ignored verifier-local environment/cache output to
    remain outside the canonical repository subject;
-7. removes the verifier clone, then re-reads the original repository's ignored
-   residue and target tree so any verifier escape or concurrent source mutation
-   still fails closed;
+7. removes the verifier clone, then re-reads the original repository's target
+   tree so any concurrent source mutation still fails closed;
 8. captures verifier exit/output hashes plus the isolated execution subject and
    binds the artifact hash into the canonical `EvidenceBundle`;
 9. invokes the existing generic Core adapter and writes a local verification
@@ -189,13 +188,22 @@ that does not share the sandbox path). The sandbox parent lives under
 The receipt records mode, image and
 network. `process` mode does not contain the OS capabilities of the invoking user.
 
+## Ignored residue policy
+
+Residue policy is `sandbox-only`: ignored files in the original repository
+(`.venv`, `__pycache__`, `node_modules`, caches) never block `check` because the
+verifier runs in an isolated detached clone built from repository objects and
+cannot see them. Verifier mutation of tracked/non-ignored files inside the sandbox
+still fails with `VERIFIER_SUBJECT_MUTATED`, the receipt records
+`residue_policy = "sandbox-only"`, and `doctor` reports the original repository's
+ignored paths as an informational count only.
+
 ## Fail-closed negative controls
 
 `check` produces no `VERIFIED` result for any of these conditions:
 
 - not a Git repository, missing/invalid config, an unresolved base ref, or a base
   commit outside current `HEAD` ancestry;
-- ignored untracked physical residue outside `.nexus-core/**`. Physical acquisition treats such ignored residue as ambiguous/unverifiable and fails closed with `IGNORED_RESIDUE` before verifier execution. `.nexus-core/**` retains documented Core-local exclusion. Users who keep ignored environment/vendor/cache state inside the repo must remove/relocate it before `check` unless a future explicit product policy says otherwise. This is fail-closed acquisition, not a claim that ignored files are task changes.
 - no change relative to the base;
 - a changed path outside every allowed pattern;
 - a deletion while `deletion_policy = "FORBID"`;
