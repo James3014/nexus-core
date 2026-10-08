@@ -12,10 +12,13 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import tomllib
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
@@ -59,6 +62,10 @@ _CONFIG_V2_KEYS = {
     "verifiers",
     "materials",
 }
+_CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation"}
+_ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+_ISOLATION_KEYS = {"mode", "image", "network"}
 _REQUIREMENT_MODES = {"REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"}
 _APPLICABILITY = {"APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"}
 
@@ -223,6 +230,36 @@ def _validate_subject_fields(item: Mapping[str, Any], field: str) -> None:
         )
 
 
+def _validate_env_passthrough(value: Any) -> None:
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not _ENV_NAME_RE.match(item) for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise LocalCheckError(
+            "INVALID_CONFIG", "env_passthrough must be unique names matching ^[A-Z_][A-Z0-9_]*$"
+        )
+
+
+def _validate_isolation(value: Any) -> None:
+    if not isinstance(value, dict) or not set(value) <= _ISOLATION_KEYS:
+        raise LocalCheckError("INVALID_CONFIG", "isolation has unexpected fields")
+    mode = value.get("mode", "process")
+    network = value.get("network", "bridge")
+    if mode not in {"process", "container"}:
+        raise LocalCheckError("INVALID_CONFIG", "isolation.mode must be process or container")
+    if network not in {"bridge", "none"}:
+        raise LocalCheckError("INVALID_CONFIG", "isolation.network must be bridge or none")
+    image = value.get("image")
+    if mode == "container":
+        if not isinstance(image, str) or not _IMAGE_DIGEST_RE.search(image) or "\x00" in image:
+            raise LocalCheckError(
+                "INVALID_CONFIG", "isolation.image must be digest-pinned (@sha256:<64 hex>)"
+            )
+    elif image is not None:
+        raise LocalCheckError("INVALID_CONFIG", "isolation.image requires mode = container")
+
+
 def _validate_config(value: Any) -> dict[str, Any]:
     if type(value) is not dict:
         raise LocalCheckError("INVALID_CONFIG", "config must be a table")
@@ -231,7 +268,8 @@ def _validate_config(value: Any) -> dict[str, Any]:
         if set(value) != _CONFIG_V1_KEYS:
             raise LocalCheckError("INVALID_CONFIG", "unexpected or missing config keys")
     elif version_value == CONFIG_VERSION_MULTI_EVIDENCE:
-        if set(value) != _CONFIG_V2_KEYS:
+        keys = set(value)
+        if not _CONFIG_V2_KEYS <= keys or not keys <= (_CONFIG_V2_KEYS | _CONFIG_V2_OPTIONAL_KEYS):
             raise LocalCheckError("INVALID_CONFIG", "unexpected or missing config keys")
     else:
         raise LocalCheckError("INVALID_CONFIG", "unsupported config version")
@@ -260,6 +298,9 @@ def _validate_config(value: Any) -> dict[str, Any]:
         _validate_timeout(value["timeout_seconds"], "timeout_seconds")
         return value
 
+    _validate_env_passthrough(value.get("env_passthrough", []))
+    if "isolation" in value:
+        _validate_isolation(value["isolation"])
     generation = value["universe_generation"]
     if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
         raise LocalCheckError("INVALID_CONFIG", "universe_generation must be a positive integer")
@@ -404,6 +445,53 @@ def _load_config(repo: Path) -> dict[str, Any]:
         raise LocalCheckError("INVALID_CONFIG", str(exc)) from exc
 
 
+def _load_effective_config(
+    repo: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+    """Return (effective config, config_source, worktree config).
+
+    The worktree config only names ``base_ref``; when that ref's commit carries
+    ``.nexus-core/config.toml`` the committed (trusted) config is authoritative.
+    """
+
+    worktree_config = _load_config(repo)
+    worktree_hash = canonical_hash(worktree_config)
+    base_ref = worktree_config["base_ref"]
+    config_rel = f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}"
+    resolved = _run_git(repo, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+    effective = worktree_config
+    source: dict[str, Any] = {"kind": "worktree"}
+    if resolved.returncode == 0:
+        commit = resolved.stdout.strip()
+        shown = _run_git(repo, "show", f"{commit}:{config_rel}", text=False)
+        if shown.returncode == 0:
+            try:
+                base_config = _validate_config(tomllib.loads(shown.stdout.decode("utf-8")))
+            except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+                raise LocalCheckError("INVALID_CONFIG", f"base-ref config: {exc}") from exc
+            if base_config["base_ref"] != base_ref:
+                raise LocalCheckError(
+                    "CONFIG_BASE_REF_MISMATCH",
+                    f"worktree base_ref {base_ref!r} != base-ref config {base_config['base_ref']!r}",
+                )
+            effective = base_config
+            source = {
+                "kind": "base-ref",
+                "ref": base_ref,
+                "commit": commit,
+                "blob": _git_stdout(repo, "rev-parse", f"{commit}:{config_rel}"),
+            }
+    full_source = {
+        "kind": source["kind"],
+        "ref": source.get("ref"),
+        "commit": source.get("commit"),
+        "blob": source.get("blob"),
+        "worktree_config_hash": worktree_hash,
+        "config_drift": worktree_hash != canonical_hash(effective),
+    }
+    return effective, full_source, worktree_config
+
+
 def _command_available(repo: Path, command: Sequence[str]) -> bool:
     executable = command[0]
     if "/" in executable:
@@ -450,6 +538,13 @@ def doctor_repository(path: str | Path = ".") -> dict[str, Any]:
         checks["config"] = "ERROR"
         reasons.append(exc.reason_code)
         return {"healthy": False, "checks": checks, "reason_codes": reasons}
+
+    try:
+        _effective, doctor_source, _wt = _load_effective_config(repo)
+        checks["config_source"] = "TRUSTED" if doctor_source["kind"] == "base-ref" else "UNTRACKED"
+    except LocalCheckError as exc:
+        checks["config_source"] = "ERROR"
+        reasons.append(exc.reason_code)
 
     try:
         _resolve_base_and_head(repo, config["base_ref"])
@@ -732,25 +827,142 @@ def _cleanup_verifier_sandbox(path: Path) -> None:
     shutil.rmtree(path)
 
 
+def _isolation_settings(config: Mapping[str, Any]) -> dict[str, Any]:
+    raw = config.get("isolation") or {}
+    mode = raw.get("mode", "process")
+    settings: dict[str, Any] = {"mode": mode}
+    if mode == "container":
+        settings["image"] = raw["image"]
+        settings["network"] = raw.get("network", "bridge")
+    return settings
+
+
+def _passthrough_names(config: Mapping[str, Any]) -> list[str]:
+    return [name for name in config.get("env_passthrough", []) if name in os.environ]
+
+
+def _verifier_environment(
+    config: Mapping[str, Any],
+    sandbox_home: str,
+    sandbox_tmp: str,
+    command: Sequence[str] = (),
+) -> dict[str, str]:
+    """Allowlisted verifier environment; nothing is inherited implicitly."""
+
+    env: dict[str, str] = {}
+    if "PATH" in os.environ:
+        env["PATH"] = os.environ["PATH"]
+    for name in ("LANG", "LC_ALL"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["HOME"] = str(sandbox_home)
+    env["TMPDIR"] = str(sandbox_tmp)
+    for name in _passthrough_names(config):
+        env[name] = os.environ[name]
+    if len(command) >= 3 and list(command[1:3]) == ["-m", "pytest"]:
+        existing = env.get("PYTEST_ADDOPTS", "")
+        env["PYTEST_ADDOPTS"] = (existing + " -p no:cacheprovider").strip()
+    return env
+
+
+def _container_argv(
+    image: str,
+    network: str,
+    sandbox_repo: str | Path,
+    env: Mapping[str, str],
+    command: Sequence[str],
+    uid: int,
+    gid: int,
+    *,
+    name: str | None = None,
+) -> list[str]:
+    """Docker argv exposing only the sandbox parent directory at /sandbox."""
+
+    sandbox_parent = Path(sandbox_repo).parent
+    argv = ["docker", "run", "--rm"]
+    if name is not None:
+        argv += ["--name", name]
+    argv += [
+        "--network",
+        network,
+        "--user",
+        f"{uid}:{gid}",
+        "-v",
+        f"{sandbox_parent}:/sandbox",
+        "-w",
+        "/sandbox/repo",
+    ]
+    for key, value in env.items():
+        argv += ["-e", f"{key}={value}"]
+    return [*argv, image, *command]
+
+
+def _kill_group(proc: "subprocess.Popen[bytes]") -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _run_in_new_session(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout_seconds: int,
+    on_timeout: Any = None,
+) -> subprocess.CompletedProcess[bytes]:
+    with subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=dict(env),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)
+            if on_timeout is not None:
+                on_timeout()
+            proc.communicate()
+            raise
+        except BaseException:
+            _kill_group(proc)
+            raise
+        _kill_group(proc)  # reap any backgrounded grandchildren
+        return subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
+
+
 def _run_verifier_isolated(
     repo: Path,
     snapshot: _GitSnapshot,
     command: Sequence[str],
-    verifier_env: Mapping[str, str],
+    config: Mapping[str, Any],
     timeout_seconds: int,
 ) -> tuple[subprocess.CompletedProcess[bytes], dict[str, Any], str | None]:
     """Run the verifier against an isolated exact-target Git subject.
 
-    The clone has independent refs/index/worktree state while sharing immutable
-    object storage with the source repository. The original repository remains
-    the canonical ChangeSet subject and is re-read after verifier completion.
+    The clone has independent refs/index/worktree state, no remote and no
+    alternates, so the verifier cannot reach the source repository through Git.
+    The original repository remains the canonical ChangeSet subject and is
+    re-read after verifier completion.
     """
+
+    isolation = _isolation_settings(config)
+    if isolation["mode"] == "container" and shutil.which("docker") is None:
+        raise LocalCheckError("ISOLATION_UNAVAILABLE", "docker is not installed")
 
     source_head = _git_stdout(repo, "rev-parse", "HEAD^{commit}")
     execution_subject = {
-        "mode": "isolated_shared_clone",
+        "mode": "isolated_detached_clone",
         "source_head": f"git-commit:{source_head}",
         "target_tree": f"git-tree:{snapshot.target_tree}",
+        "isolation": isolation,
+        "env_passthrough": _passthrough_names(config),
     }
     parent = Path(tempfile.mkdtemp(prefix="nexus-core-verifier-"))
     verifier_repo = parent / "repo"
@@ -763,8 +975,8 @@ def _run_verifier_isolated(
         clone = _run_git(
             repo,
             "clone",
+            "--no-hardlinks",
             "--no-checkout",
-            "--shared",
             "--quiet",
             str(repo),
             str(verifier_repo),
@@ -772,6 +984,15 @@ def _run_verifier_isolated(
         if clone.returncode != 0:
             detail = (clone.stderr or clone.stdout).strip()
             raise LocalCheckError("VERIFIER_SANDBOX_PREPARE_FAILED", detail)
+
+        remove_origin = _run_git(verifier_repo, "remote", "remove", "origin")
+        if remove_origin.returncode != 0:
+            detail = (remove_origin.stderr or remove_origin.stdout).strip()
+            raise LocalCheckError("VERIFIER_SANDBOX_PREPARE_FAILED", detail)
+        if (verifier_repo / ".git" / "objects" / "info" / "alternates").exists():
+            raise LocalCheckError(
+                "VERIFIER_SANDBOX_PREPARE_FAILED", "isolated clone has object alternates"
+            )
 
         checkout = _run_git(
             verifier_repo,
@@ -800,15 +1021,52 @@ def _run_verifier_isolated(
                 "isolated verifier index does not match target tree",
             )
 
+        sandbox_home = parent / "home"
+        sandbox_tmp = parent / "tmp"
+        sandbox_home.mkdir()
+        sandbox_tmp.mkdir()
         try:
-            executed = subprocess.run(
-                command,
-                cwd=verifier_repo,
-                env=dict(verifier_env),
-                capture_output=True,
-                timeout=timeout_seconds,
-                check=False,
-            )
+            if isolation["mode"] == "container":
+                env = _verifier_environment(
+                    config, "/sandbox/home", "/sandbox/tmp", command
+                )
+                name = f"nexus-verifier-{uuid.uuid4().hex[:16]}"
+                argv = _container_argv(
+                    isolation["image"],
+                    isolation["network"],
+                    verifier_repo,
+                    env,
+                    command,
+                    os.getuid(),
+                    os.getgid(),
+                    name=name,
+                )
+
+                def _remove_container() -> None:
+                    subprocess.run(
+                        ["docker", "rm", "-f", name],
+                        capture_output=True,
+                        check=False,
+                        timeout=30,
+                    )
+
+                executed = _run_in_new_session(
+                    argv,
+                    cwd=verifier_repo,
+                    env=os.environ,
+                    timeout_seconds=timeout_seconds,
+                    on_timeout=_remove_container,
+                )
+            else:
+                env = _verifier_environment(
+                    config, str(sandbox_home), str(sandbox_tmp), command
+                )
+                executed = _run_in_new_session(
+                    command,
+                    cwd=verifier_repo,
+                    env=env,
+                    timeout_seconds=timeout_seconds,
+                )
         except (subprocess.TimeoutExpired, OSError) as exc:
             execution_error = exc
 
@@ -988,6 +1246,7 @@ def _base_receipt(
     status: str,
     reasons: Sequence[str],
     requirements_context: Mapping[str, Any] | None = None,
+    config_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_version = config.get("version") if isinstance(config, Mapping) else None
     receipt: dict[str, Any] = {
@@ -1017,6 +1276,8 @@ def _base_receipt(
             "transport_error": False,
         },
     }
+    if config_source is not None:
+        receipt["config_source"] = dict(config_source)
     if config_version in {None, CONFIG_VERSION}:
         receipt["verifier"] = dict(artifacts[0]) if artifacts else None
     else:
@@ -1068,6 +1329,7 @@ def _raise_with_receipt(
     snapshot: _GitSnapshot | None = None,
     artifacts: Sequence[Mapping[str, Any]] = (),
     requirements_context: Mapping[str, Any] | None = None,
+    config_source: Mapping[str, Any] | None = None,
 ) -> None:
     receipt = _base_receipt(
         config=config,
@@ -1079,6 +1341,7 @@ def _raise_with_receipt(
         status="FAILED_CLOSED",
         reasons=[reason],
         requirements_context=requirements_context,
+        config_source=config_source,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path)
@@ -1088,17 +1351,29 @@ def check_repository(
     path: str | Path = ".",
     *,
     requirements_context: Mapping[str, Any] | None = None,
+    require_trusted_config: bool = False,
 ) -> dict[str, Any]:
     """Run the local Golden Path and return the canonical Core verdict."""
 
     repo = _repo_root(path)
-    config = _load_config(repo)
+    config, config_source, _worktree_config = _load_effective_config(repo)
     config_hash = canonical_hash(config)
     requirements_hash = (
         config_hash
         if requirements_context is None
         else canonical_hash({"config_hash": config_hash, "context": dict(requirements_context)})
     )
+
+    if require_trusted_config and config_source["kind"] != "base-ref":
+        _raise_with_receipt(
+            repo,
+            "CONFIG_UNTRUSTED",
+            f"no {CONFIG_DIRECTORY}/{CONFIG_FILENAME} committed on {config['base_ref']}",
+            config=config,
+            config_hash=config_hash,
+            config_source=config_source,
+            requirements_context=requirements_context,
+        )
 
     if config["version"] == CONFIG_VERSION:
         producers = [
@@ -1118,7 +1393,10 @@ def check_repository(
     for producer in producers:
         if producer["applicability"] != "APPLICABLE":
             continue
-        if not _command_available(repo, producer["command"]):
+        if (
+            config.get("isolation", {}).get("mode", "process") != "container"
+            and not _command_available(repo, producer["command"])
+        ):
             _raise_with_receipt(
                 repo,
                 (
@@ -1129,6 +1407,7 @@ def check_repository(
                 producer["id"],
                 config=config,
                 config_hash=config_hash,
+                config_source=config_source,
                 requirements_context=requirements_context,
             )
 
@@ -1141,6 +1420,7 @@ def check_repository(
             exc.detail,
             config=config,
             config_hash=config_hash,
+            config_source=config_source,
             requirements_context=requirements_context,
         )
 
@@ -1156,6 +1436,7 @@ def check_repository(
             ", ".join(forbidden),
             config=config,
             config_hash=config_hash,
+            config_source=config_source,
             snapshot=snapshot,
             requirements_context=requirements_context,
         )
@@ -1169,6 +1450,7 @@ def check_repository(
             ", ".join(deleted),
             config=config,
             config_hash=config_hash,
+            config_source=config_source,
             snapshot=snapshot,
             requirements_context=requirements_context,
         )
@@ -1191,18 +1473,13 @@ def check_repository(
                 # plus the missing verifier evidence and return UNVERIFIABLE.
                 continue
 
-        verifier_env = os.environ.copy()
-        verifier_env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
         command = producer["command"]
-        if command[:3] == [command[0], "-m", "pytest"]:
-            existing = verifier_env.get("PYTEST_ADDOPTS", "")
-            verifier_env["PYTEST_ADDOPTS"] = (existing + " -p no:cacheprovider").strip()
         try:
             executed, verifier_subject, verifier_mutation = _run_verifier_isolated(
                 repo,
                 snapshot,
                 command,
-                verifier_env,
+                config,
                 producer["timeout_seconds"],
             )
         except LocalCheckError as exc:
@@ -1212,6 +1489,7 @@ def check_repository(
                 f"{producer['id']}: {exc.detail}",
                 config=config,
                 config_hash=config_hash,
+                config_source=config_source,
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
@@ -1223,6 +1501,7 @@ def check_repository(
                 f"{producer['id']}: {exc}",
                 config=config,
                 config_hash=config_hash,
+                config_source=config_source,
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
@@ -1234,6 +1513,7 @@ def check_repository(
                 f"{producer['id']}: {exc}",
                 config=config,
                 config_hash=config_hash,
+                config_source=config_source,
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
@@ -1266,6 +1546,7 @@ def check_repository(
                 f"{producer['id']}: {verifier_mutation}",
                 config=config,
                 config_hash=config_hash,
+                config_source=config_source,
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
@@ -1280,6 +1561,7 @@ def check_repository(
             exc.detail,
             config=config,
             config_hash=config_hash,
+            config_source=config_source,
             snapshot=snapshot,
             artifacts=artifacts,
             requirements_context=requirements_context,
@@ -1293,6 +1575,7 @@ def check_repository(
             "repository target changed while evidence producers executed",
             config=config,
             config_hash=config_hash,
+            config_source=config_source,
             snapshot=snapshot,
             artifacts=artifacts,
             requirements_context=requirements_context,
@@ -1311,6 +1594,7 @@ def check_repository(
         receipt = _base_receipt(
             config=config,
             config_hash=config_hash,
+            config_source=config_source,
             snapshot=snapshot,
             artifacts=artifacts,
             request=request,
@@ -1327,6 +1611,7 @@ def check_repository(
     receipt = _base_receipt(
         config=config,
         config_hash=config_hash,
+        config_source=config_source,
         snapshot=snapshot,
         artifacts=artifacts,
         requirements_context=requirements_context,
@@ -1344,6 +1629,7 @@ def check_repository(
         "certification": response["certification"],
         "transport_error": False,
         "receipt_path": receipt_path,
+        "config_source": config_source,
     }
 
 
@@ -1453,6 +1739,14 @@ def validate_verification_receipt_payload(
         reasons.append("UNSUPPORTED_RECEIPT")
     if payload.get("receipt_hash") != _receipt_hash(payload):
         reasons.append("RECEIPT_HASH_MISMATCH")
+    if "config_source" in payload:
+        source = payload["config_source"]
+        if (
+            not isinstance(source, dict)
+            or source.get("kind") not in {"base-ref", "worktree"}
+            or not isinstance(source.get("config_drift"), bool)
+        ):
+            reasons.append("MALFORMED_RECEIPT")
 
     config_hash = canonical_hash(config) if isinstance(config, dict) else None
     if config_hash is None or payload.get("config_hash") != config_hash:
