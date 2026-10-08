@@ -76,8 +76,10 @@ image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<digest>"
 network = "bridge"
 ```
 
-The image must be pinned by digest. If `docker` is missing, the run fails closed
-with `ISOLATION_UNAVAILABLE`. See [`LOCAL_GOLDEN_PATH.md`](LOCAL_GOLDEN_PATH.md)
+The image must be pinned by digest and only the sandbox parent directory is mounted
+(at `/sandbox`). If `docker` is missing, the run fails closed with
+`ISOLATION_UNAVAILABLE`; the image is pulled before the verifier timeout starts and a
+pull failure is `ISOLATION_IMAGE_UNAVAILABLE`. See [`LOCAL_GOLDEN_PATH.md`](LOCAL_GOLDEN_PATH.md)
 for the isolation modes and trusted config source.
 
 ## Why fork pull requests are excluded
