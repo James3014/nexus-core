@@ -104,6 +104,73 @@ certification identity. The config hash binds this normalized config. Path patte
 are product-shell acquisition policy only; on an admitted run they are projected
 to the exact changed paths supplied to the existing canonical contract.
 
+## Trusted config source
+
+`check` and `issue-check` read the worktree config only to learn `base_ref`. The
+effective config is then read from the `base_ref` commit
+(`git show <base>:.nexus-core/config.toml`). Its `base_ref` must equal the
+worktree's, otherwise the run fails with `CONFIG_BASE_REF_MISMATCH`. The receipt
+records `config_source` (`{"kind": "base-ref", "commit": ..., "blob": ...}`), the
+worktree config hash, and `config_drift`. A widened `allowed_patterns` in the
+worktree therefore has no effect.
+
+If the base commit has no config, the worktree config is used, the receipt records
+`config_source.kind = "worktree"`, and the CLI prints one of:
+
+```text
+config: trusted (<ref>@<sha>)
+config: untrusted (not committed on <base_ref>)
+```
+
+To refuse the untrusted case, pass `--require-trusted-config` (or set
+`NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`); the run then fails closed with
+`CONFIG_UNTRUSTED`:
+
+```bash
+nexus-certify check --repo . --require-trusted-config
+nexus-certify issue-check --repo . --issue <NUMBER> --require-trusted-config
+```
+
+Changes to the config take effect only after they are merged into the base ref
+(generation N is verified under the old config; N+1 uses the new one).
+
+## Isolation modes
+
+The verifier always runs in a detached clone with no remote and no alternates
+(`execution_subject.mode = isolated_detached_clone`), with an allowlisted
+environment (`PATH`, `LANG`/`LC_ALL`, `PYTHONDONTWRITEBYTECODE`, `PYTEST_ADDOPTS`,
+and sandbox-private `HOME`/`TMPDIR`), in its own process group that is killed on
+timeout. Extra variable names may be exposed with `env_passthrough`; only the
+names are recorded in the receipt. `GITHUB_TOKEN` and cloud credentials are never
+visible unless explicitly listed.
+
+For adversarial or injection-compromised agents, use container mode:
+
+```toml
+version = 2
+base_ref = "origin/main"
+allowed_patterns = ["src/**", "tests/**"]
+deletion_policy = "FORBID"
+env_passthrough = ["MY_TEST_FLAG"]   # names only; recorded in the receipt
+
+[[verifiers]]
+id = "tests"
+command = ["uv", "run", "pytest", "-q"]
+timeout_seconds = 300
+
+[isolation]
+mode = "container"          # "process" (default) | "container"
+image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<digest>"  # digest pin required
+network = "bridge"          # "none" | "bridge" (default "bridge")
+```
+
+Container mode runs the verifier via `docker run --rm --network <network>
+--user <uid>:<gid> -v <sandbox>:/work -w /work` with only the allowlisted
+environment and the sandbox as the sole mount. The image must be pinned by digest;
+a missing `docker` binary fails closed with `ISOLATION_UNAVAILABLE`, and a
+non-digest image with `INVALID_CONFIG`. The receipt records mode, image and
+network. `process` mode does not contain the OS capabilities of the invoking user.
+
 ## Fail-closed negative controls
 
 `check` produces no `VERIFIED` result for any of these conditions:
@@ -117,6 +184,7 @@ to the exact changed paths supplied to the existing canonical contract.
 - unavailable verifier, launch failure, timeout, or non-zero verifier exit;
 - target state changing while the verifier runs;
 - malformed, cross-bound, stale, mismatched, or tampered canonical input;
+- `CONFIG_UNTRUSTED` (with `--require-trusted-config`, no config committed on the base ref), `CONFIG_BASE_REF_MISMATCH` (base-ref config and worktree config name different base refs), or `ISOLATION_UNAVAILABLE` (container mode requested but `docker` is unavailable);
 - any canonical Core result other than `VERIFIED`.
 
 A normal verifier's result contract is deliberately small: process launch must

@@ -58,3 +58,8 @@ logical_subject_id = "core/distribution-install-smoke"
 evidence_kind = "package-smoke"
 requirement_mode = "REQUIRED"
 applicability = "APPLICABLE"
+
+[isolation]
+mode = "container"
+image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf"
+network = "bridge"

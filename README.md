@@ -65,13 +65,12 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-The published PyPI baseline is `0.1.2`, with repository and Issue-bound CLI commands.
-The next release candidate is `0.1.3`, adding the merged multi-repository evidence
-and Issue-specific sufficiency safeguards. Until publication and artifact readback,
-install the currently published baseline explicitly:
+The published release is `0.1.3`, with repository and Issue-bound CLI commands,
+multi-repository evidence, and Issue-specific sufficiency safeguards. Install it
+explicitly:
 
 ```bash
-python -m pip install nexus-certify==0.1.2
+python -m pip install nexus-certify==0.1.3
 ```
 
 Do not infer Issue-bound support from an unversioned ambient
@@ -112,9 +111,8 @@ receipt: .nexus-core/receipts/...
 
 ### Issue-bound quick binding
 
-The `0.1.2` release includes an Issue-bound layer over the repository verifier.
-The `0.1.3` candidate adds the subsequent evidence-universe and Issue sufficiency
-safeguards:
+The `0.1.3` release includes an Issue-bound layer over the repository verifier,
+with evidence-universe and Issue sufficiency safeguards:
 
 ```bash
 nexus-certify issue-init --issue <NUMBER>
@@ -130,9 +128,13 @@ The maximum claim remains `ISSUE_VERIFIED_NOT_RELEASED`. The Issue does not
 grant execution lane, routing, Candidate acceptance, merge, release, deployment,
 or production authority.
 
-Do not assume public `0.1.2` includes the later #104/#109 safeguards. Until the
-`0.1.3` artifact is published and read back, use its exact validated source or
-wheel candidate when those safeguards are required.
+### Isolation and trusted config
+
+Verifier isolation (detached clone, environment allowlist, optional container
+mode) and the base-ref trusted config source are described in
+[`docs/LOCAL_GOLDEN_PATH.md`](docs/LOCAL_GOLDEN_PATH.md) ("Trusted config source",
+"Isolation modes"). The pull-request gate is described in
+[`docs/GITHUB_REPOSITORY_CHECK.md`](docs/GITHUB_REPOSITORY_CHECK.md).
 
 ### What gets written to your repository
 
@@ -204,8 +206,7 @@ The public `nexus-certify==0.1.1` artifact was installed from PyPI in a fresh en
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Source candidate version:** `0.1.3` (multi-repo evidence and Issue sufficiency safeguards; publishing still separate)
-- **Last verified published PyPI baseline:** `0.1.2` (Issue-bound CLI; excludes #104/#109 safeguards)
+- **Published release:** `0.1.3` (Issue-bound CLI, multi-repo evidence and Issue sufficiency safeguards)
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
