@@ -65,11 +65,9 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-目前 PyPI 已公開的版本是 `0.1.1`。它支援 repository Golden Path
-（`init / doctor / check`），但還不包含 Issue-bound 指令。
-
-目前 source candidate 是 `0.1.2`。等這個 exact release 正式發布，
-並完成 artifact identity readback 後，Issue-bound Golden Path 應固定安裝：
+已有發布及檔案驗證紀錄的 PyPI baseline 是 `0.1.2`，支援 repository 與
+Issue-bound CLI。下一版 source candidate 為 `0.1.3`，包含後續跨 Repo 證據
+與 Issue 專屬充分性防護。在新版發布並完成 artifact readback 前，可固定安裝既有版本：
 
 ```bash
 python -m pip install nexus-certify==0.1.2
@@ -114,8 +112,8 @@ receipt: .nexus-core/receipts/...
 
 ### Issue-bound 快速綁定
 
-`0.1.2` source candidate 在相同 repository verifier 上增加一層很薄的
-Issue-bound 綁定：
+`0.1.2` 已提供 Issue-bound 綁定；`0.1.3` candidate 另外包含後續的
+證據全集與 Issue 專屬充分性防護：
 
 ```bash
 nexus-certify issue-init --issue <NUMBER>
@@ -130,8 +128,8 @@ nexus-certify issue-check --issue <NUMBER>
 execution lane、routing、Candidate acceptance、merge、release、deployment
 或 production authority。
 
-在 `0.1.2` 尚未正式發布且 artifact hash 尚未 read back 前，應使用
-exact accepted source / wheel Candidate，不要假設公開的 `0.1.1` 已含這些指令。
+不能假設公開的 `0.1.2` 已包含後續 #104/#109 防護。若需要這些防護，在
+`0.1.3` 發布及 readback 前，請固定使用經驗證的 exact source / wheel Candidate。
 
 ### 它會在你的 repository 裡寫入什麼
 
@@ -202,8 +200,8 @@ Nexus Core 的設計目標，是讓「信任」不依賴修改程式的人自己
 ## 目前成熟度
 
 - **公開套件：** `nexus-certify`
-- **目前 source candidate version：** `0.1.2`（已含 Issue-bound CLI；公開 release/readback 仍是獨立步驟）
-- **目前已公開 PyPI baseline：** `0.1.1`（僅 repository Golden Path）
+- **目前 source candidate version：** `0.1.3`（跨 Repo 證據與 Issue sufficiency 防護；尚待正式發布及 readback）
+- **最近已驗證的 PyPI baseline：** `0.1.2`（包含 Issue-bound CLI，但不含後續 #104/#109 防護）
 - **Local Golden Path：** 已通過 published-artifact external-repository canary
 - **License：** Apache-2.0
 - **Python：** 3.11+

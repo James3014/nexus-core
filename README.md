@@ -65,12 +65,10 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
-The currently published PyPI release is `0.1.1`. It supports the repository
-Golden Path (`init / doctor / check`) but predates the Issue-bound commands.
-
-The current source candidate is `0.1.2`. After that exact release is
-published and its artifact identity is read back, install it explicitly for the
-Issue-bound Golden Path:
+The published PyPI baseline is `0.1.2`, with repository and Issue-bound CLI commands.
+The next release candidate is `0.1.3`, adding the merged multi-repository evidence
+and Issue-specific sufficiency safeguards. Until publication and artifact readback,
+install the currently published baseline explicitly:
 
 ```bash
 python -m pip install nexus-certify==0.1.2
@@ -114,8 +112,9 @@ receipt: .nexus-core/receipts/...
 
 ### Issue-bound quick binding
 
-The `0.1.2` source candidate adds a thin Issue-bound layer over the same
-repository verifier:
+The `0.1.2` release includes an Issue-bound layer over the repository verifier.
+The `0.1.3` candidate adds the subsequent evidence-universe and Issue sufficiency
+safeguards:
 
 ```bash
 nexus-certify issue-init --issue <NUMBER>
@@ -131,9 +130,9 @@ The maximum claim remains `ISSUE_VERIFIED_NOT_RELEASED`. The Issue does not
 grant execution lane, routing, Candidate acceptance, merge, release, deployment,
 or production authority.
 
-Until `0.1.2` is actually published and its artifact hash is read back, use
-the exact accepted source/wheel Candidate rather than assuming the public
-`0.1.1` package contains these commands.
+Do not assume public `0.1.2` includes the later #104/#109 safeguards. Until the
+`0.1.3` artifact is published and read back, use its exact validated source or
+wheel candidate when those safeguards are required.
 
 ### What gets written to your repository
 
@@ -205,8 +204,8 @@ The public `nexus-certify==0.1.1` artifact was installed from PyPI in a fresh en
 ## Current maturity
 
 - **Public package:** `nexus-certify`
-- **Source candidate version:** `0.1.2` (Issue-bound CLI included; public release/readback still separate)
-- **Current published PyPI baseline:** `0.1.1` (repository Golden Path only)
+- **Source candidate version:** `0.1.3` (multi-repo evidence and Issue sufficiency safeguards; publishing still separate)
+- **Last verified published PyPI baseline:** `0.1.2` (Issue-bound CLI; excludes #104/#109 safeguards)
 - **Local Golden Path:** published-artifact external-repository canary passed
 - **License:** Apache-2.0
 - **Python:** 3.11+
