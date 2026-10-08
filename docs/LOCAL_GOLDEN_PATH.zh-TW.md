@@ -217,6 +217,8 @@ receipt validation 會重新計算 config、manifest、verifier artifact、envel
 （`git-tree:<HEAD tree sha>`），以及 `subject_clean`（`target_tree == subject_head_tree`）。
 缺少這些欄位的舊 receipt 仍可通過驗證。
 
+由 `issue-check` 產生的 receipt 另帶頂層 `issue_verification` 物件（納入 envelope hash）：`status`、`claim_ceiling`、`reason_codes`、`evidence_universe`（`BOUND`、`UNBOUND` 或 `STALE`）、`issue_number`、`github_repository`、`issue_contract_hash`。只有 repository 狀態為 `VERIFIED` 且 evidence universe 為 `BOUND` 時，Issue 狀態才是 `VERIFIED`；否則 repository 綠燈只算 `UNVERIFIABLE`，即使 `outcome.status` 仍是 `VERIFIED`。`--expect-issue N` 要求 `issue_verification.status == VERIFIED` 且 `issue_number == N`（加上 `--expect-github-repository` 時還須 repository 相符），否則回報 `ISSUE_VERIFICATION_MISMATCH`；沒有 `issue_verification` 的 receipt 一律不通過。`--expect-status VERIFIED` 在 receipt 帶有 `issue_verification` 時，也要求其 `status == VERIFIED`。
+
 `nexus-certify receipt-check --receipt <receipt>` 可額外 fail closed（exit 2，並在 JSON 的
 `expectations` 中回報）：
 

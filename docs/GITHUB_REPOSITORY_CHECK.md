@@ -42,6 +42,13 @@ The required status now means: **a receipt signed by this repository's
 main-branch workflow identity describes exactly this head, this base config, this
 Issue, and says VERIFIED.**
 
+"Says VERIFIED" includes the Issue-level verdict: the receipt's
+`issue_verification.status` must be `VERIFIED`, which requires the Issue's evidence
+universe marker to be present and equal to the current verification contract. A
+repository-level `outcome.status` of `VERIFIED` with an unbound or stale marker is
+`UNVERIFIABLE` at the Issue level and fails `--expect-issue` and `--expect-status`
+(see Issue #134, a false green found in nexus-runtime PRs #89 and #91).
+
 The signing identity is the workflow file on the default branch:
 
 ```text

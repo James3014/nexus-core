@@ -1,0 +1,483 @@
+{
+  "config_hash": "sha256:641bedb5a49c91afa8577d55b5d9caf917fb11edc291feeb677c19da54af8fc6",
+  "config_source": {
+    "blob": "31fc95bff72f1c507e23db5c421e0766bb33131d",
+    "commit": "54704a12ee34989199c31b4b69469f3a0bf4e1b6",
+    "config_drift": true,
+    "kind": "base-ref",
+    "ref": "origin/main",
+    "worktree_config_hash": "sha256:92421dde891b166ea1b7131238a00f04fb9158facbed0574471d8b9f50c23dfb"
+  },
+  "core_response": {
+    "certification": null,
+    "hashes": {
+      "acceptance_contract_hash": "sha256:f973a070a97a743b45b03258dc6a31461140492f0723867719c1a7570854fe04",
+      "change_manifest_hash": "sha256:68737f4eb1432f03adba1124c39dec9e1a0a56391c2a4a6c3702e9e846d2ab5f",
+      "change_set_hash": "sha256:6a792cc5a21c09a862cd2d99ee0ca29c458239e01bca67ddbbac731d910ada2a",
+      "evidence_bundle_hash": "sha256:653f38cb763e1bf6b838edce5a24356b4faf90c014d4b52251fc3eedd232c370",
+      "verification_plan_hash": "sha256:e2b03ee3da174be4c6542ebaede3edde97eaf92b76bb05fa86d370e94dd553de"
+    },
+    "protocol_version": "0.1.0-experimental",
+    "schema": "nexus.core.generic-verification-response.v1-experimental",
+    "verification": {
+      "coverage": {
+        "entries": [
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "resolved-dependency",
+            "logical_subject_id": "dependency/nexus-learning",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "negative-control",
+            "logical_subject_id": "retry/budget-resolution-fail-closed",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "runtime/full-installed-package-suite",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          }
+        ],
+        "unexpected_subjects": [],
+        "universe_generation": 2,
+        "universe_identity": "sha256:b0b2b3feee17b3684d144c80ae1bbfe6d5457b12a3d93158c963e496824e2f7a"
+      },
+      "integrity": "VALID",
+      "reason_codes": [],
+      "status": "VERIFIED"
+    }
+  },
+  "evidence_artifacts": [
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:65341aa937e86318f1ae24bce1a976ebb03280d41d16d10686e7d4d5c7f23a2a",
+      "command": [
+        "uv",
+        "run",
+        "--no-project",
+        "--with",
+        "nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e",
+        "python",
+        "scripts/ci/nexus_core_observe_learning_revision.py"
+      ],
+      "evidence_kind": "resolved-dependency",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": true,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:1a001a489100fecb65df1aa19cc56ec4915dde39",
+        "target_tree": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9"
+      },
+      "exit_code": 0,
+      "expected_identity": "git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e",
+      "logical_subject_id": "dependency/nexus-learning",
+      "observed_identity": "git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e",
+      "output_hash": "sha256:e70463fd1f989fb0430241a31e69174c4889bbca9b2a9fb353ae5975639d52e9",
+      "producer_id": "learning-revision",
+      "producer_kind": "material",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "   Updating https://github.com/James3014/nexus-learning.git (33acad4332b382fac1196c8ea8a8d0f5b543661e)\n    Updated https://github.com/James3014/nexus-learning.git (33acad4332b382fac1196c8ea8a8d0f5b543661e)\n   Building nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e\n      Built nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e\nInstalled 1 package in 0.69ms\n",
+      "stderr_base64": "ICAgVXBkYXRpbmcgaHR0cHM6Ly9naXRodWIuY29tL0phbWVzMzAxNC9uZXh1cy1sZWFybmluZy5naXQgKDMzYWNhZDQzMzJiMzgyZmFjMTE5NmM4ZWE4YThkMGY1YjU0MzY2MWUpCiAgICBVcGRhdGVkIGh0dHBzOi8vZ2l0aHViLmNvbS9KYW1lczMwMTQvbmV4dXMtbGVhcm5pbmcuZ2l0ICgzM2FjYWQ0MzMyYjM4MmZhYzExOTZjOGVhOGE4ZDBmNWI1NDM2NjFlKQogICBCdWlsZGluZyBuZXh1cy1sZWFybmluZyBAIGdpdCtodHRwczovL2dpdGh1Yi5jb20vSmFtZXMzMDE0L25leHVzLWxlYXJuaW5nLmdpdEAzM2FjYWQ0MzMyYjM4MmZhYzExOTZjOGVhOGE4ZDBmNWI1NDM2NjFlCiAgICAgIEJ1aWx0IG5leHVzLWxlYXJuaW5nIEAgZ2l0K2h0dHBzOi8vZ2l0aHViLmNvbS9KYW1lczMwMTQvbmV4dXMtbGVhcm5pbmcuZ2l0QDMzYWNhZDQzMzJiMzgyZmFjMTE5NmM4ZWE4YThkMGY1YjU0MzY2MWUKSW5zdGFsbGVkIDEgcGFja2FnZSBpbiAwLjY5bXMK",
+      "stderr_hash": "sha256:02782a42f2143454cde99fcabdf41b91a930ad18d84f1c71f30959a586c5074d",
+      "stdout": "git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e\n",
+      "stdout_base64": "Z2l0LWNvbW1pdDozM2FjYWQ0MzMyYjM4MmZhYzExOTZjOGVhOGE4ZDBmNWI1NDM2NjFlCg==",
+      "stdout_hash": "sha256:27c38017321971be50fd1e90642b5921fb11e2b7f48456662f77e9f5eb1fd0d5"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:391ed1ee095ec42a3d968bde907cb2ef875b4da8b92f844a447c0e5d34c5d27b",
+      "command": [
+        "uv",
+        "run",
+        "--no-project",
+        "--with",
+        "pytest==9.0.2",
+        "--with",
+        "pytest-asyncio==1.3.0",
+        "--with",
+        "anyio==4.12.1",
+        "--with",
+        "pydantic==2.13.5",
+        "--with",
+        "PyYAML==6.0.3",
+        "--with",
+        "nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e",
+        "bash",
+        "-c",
+        "set -euo pipefail; test \"$(python scripts/ci/nexus_core_observe_learning_revision.py)\" = \"git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e\"; PYTHONPATH=src python -m pytest -q tests/test_task_retry.py::test_attempt_budget_resolution_failure_fails_closed_before_submit"
+      ],
+      "evidence_kind": "negative-control",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:1a001a489100fecb65df1aa19cc56ec4915dde39",
+        "target_tree": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "retry/budget-resolution-fail-closed",
+      "output_hash": "sha256:d2182f4d28574a90274ce3ec8f75bade1493def4c722068de1d97edd01c7a0c8",
+      "producer_id": "retry-budget-fail-closed",
+      "producer_kind": "verifier",
+      "required_material_ids": [
+        "learning-revision"
+      ],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "   Updating https://github.com/James3014/nexus-learning.git (33acad4332b382fac1196c8ea8a8d0f5b543661e)\nDownloading pygments (1.2MiB)\nDownloading pydantic-core (2.0MiB)\n Downloaded pydantic-core\n Downloaded pygments\n    Updated https://github.com/James3014/nexus-learning.git (33acad4332b382fac1196c8ea8a8d0f5b543661e)\n   Building nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e\n      Built nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e\nInstalled 15 packages in 8ms\n",
+      "stderr_base64": "ICAgVXBkYXRpbmcgaHR0cHM6Ly9naXRodWIuY29tL0phbWVzMzAxNC9uZXh1cy1sZWFybmluZy5naXQgKDMzYWNhZDQzMzJiMzgyZmFjMTE5NmM4ZWE4YThkMGY1YjU0MzY2MWUpCkRvd25sb2FkaW5nIHB5Z21lbnRzICgxLjJNaUIpCkRvd25sb2FkaW5nIHB5ZGFudGljLWNvcmUgKDIuME1pQikKIERvd25sb2FkZWQgcHlkYW50aWMtY29yZQogRG93bmxvYWRlZCBweWdtZW50cwogICAgVXBkYXRlZCBodHRwczovL2dpdGh1Yi5jb20vSmFtZXMzMDE0L25leHVzLWxlYXJuaW5nLmdpdCAoMzNhY2FkNDMzMmIzODJmYWMxMTk2YzhlYThhOGQwZjViNTQzNjYxZSkKICAgQnVpbGRpbmcgbmV4dXMtbGVhcm5pbmcgQCBnaXQraHR0cHM6Ly9naXRodWIuY29tL0phbWVzMzAxNC9uZXh1cy1sZWFybmluZy5naXRAMzNhY2FkNDMzMmIzODJmYWMxMTk2YzhlYThhOGQwZjViNTQzNjYxZQogICAgICBCdWlsdCBuZXh1cy1sZWFybmluZyBAIGdpdCtodHRwczovL2dpdGh1Yi5jb20vSmFtZXMzMDE0L25leHVzLWxlYXJuaW5nLmdpdEAzM2FjYWQ0MzMyYjM4MmZhYzExOTZjOGVhOGE4ZDBmNWI1NDM2NjFlCkluc3RhbGxlZCAxNSBwYWNrYWdlcyBpbiA4bXMK",
+      "stderr_hash": "sha256:158999dd212324a58e6ac7b4aec298caaecfdd9b2efe173f90247bbf35fd8c3f",
+      "stdout": ".                                                                        [100%]\n1 passed in 0.40s\n",
+      "stdout_base64": "LiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFsxMDAlXQoxIHBhc3NlZCBpbiAwLjQwcwo=",
+      "stdout_hash": "sha256:59b9466559aeabf218a54ec041fd83cd357cf9bf1d80a17c47aab62ed0c205bf"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:f443faed3dd2f1aa4b07f8bff81f98349dba627220e469dce82b11aa7da1a620",
+      "command": [
+        "bash",
+        "scripts/ci/nexus_core_full_installed_suite.sh",
+        "33acad4332b382fac1196c8ea8a8d0f5b543661e"
+      ],
+      "evidence_kind": "test-result",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:1a001a489100fecb65df1aa19cc56ec4915dde39",
+        "target_tree": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "runtime/full-installed-package-suite",
+      "output_hash": "sha256:11a4ff7cdc028a4163211d3b1a4a02e4c60ce85ce4a3d63ad7335af1731d01d9",
+      "producer_id": "full-installed-package-suite",
+      "producer_kind": "verifier",
+      "required_material_ids": [
+        "learning-revision"
+      ],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3.11\nCreating virtual environment with seed packages at: /tmp/tmp.rAPvNBMNE8/venv\nwarning: Failed to hardlink files; falling back to full copy. This may lead to degraded performance.\n         If the cache and target directories are on different filesystems, hardlinking may not be supported.\n         If this is intentional, set `export UV_LINK_MODE=copy` or use `--link-mode=copy` to suppress this warning.\n + packaging==26.3\n + pip==26.2.1\n + setuptools==84.0.0\n + wheel==0.48.0\nActivate with: source /tmp/tmp.rAPvNBMNE8/venv/bin/activate\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zLjExCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgd2l0aCBzZWVkIHBhY2thZ2VzIGF0OiAvdG1wL3RtcC5yQVB2TkJNTkU4L3ZlbnYKd2FybmluZzogRmFpbGVkIHRvIGhhcmRsaW5rIGZpbGVzOyBmYWxsaW5nIGJhY2sgdG8gZnVsbCBjb3B5LiBUaGlzIG1heSBsZWFkIHRvIGRlZ3JhZGVkIHBlcmZvcm1hbmNlLgogICAgICAgICBJZiB0aGUgY2FjaGUgYW5kIHRhcmdldCBkaXJlY3RvcmllcyBhcmUgb24gZGlmZmVyZW50IGZpbGVzeXN0ZW1zLCBoYXJkbGlua2luZyBtYXkgbm90IGJlIHN1cHBvcnRlZC4KICAgICAgICAgSWYgdGhpcyBpcyBpbnRlbnRpb25hbCwgc2V0IGBleHBvcnQgVVZfTElOS19NT0RFPWNvcHlgIG9yIHVzZSBgLS1saW5rLW1vZGU9Y29weWAgdG8gc3VwcHJlc3MgdGhpcyB3YXJuaW5nLgogKyBwYWNrYWdpbmc9PTI2LjMKICsgcGlwPT0yNi4yLjEKICsgc2V0dXB0b29scz09ODQuMC4wCiArIHdoZWVsPT0wLjQ4LjAKQWN0aXZhdGUgd2l0aDogc291cmNlIC90bXAvdG1wLnJBUHZOQk1ORTgvdmVudi9iaW4vYWN0aXZhdGUK",
+      "stderr_hash": "sha256:b45d1f549bb167a0d788ada08e8ff7296e690c1bbcdd44145dea1ce288039529",
+      "stdout": "observed_learning=git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e\n........................................................................ [ 12%]\n........................................................................ [ 25%]\n........................................................................ [ 38%]\n........................................................................ [ 51%]\n........................................................................ [ 63%]\n........................................................................ [ 76%]\n........................................................................ [ 89%]\n............................................................             [100%]\n564 passed, 1 skipped in 6.88s\n",
+      "stdout_base64": "b2JzZXJ2ZWRfbGVhcm5pbmc9Z2l0LWNvbW1pdDozM2FjYWQ0MzMyYjM4MmZhYzExOTZjOGVhOGE4ZDBmNWI1NDM2NjFlCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDEyJV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgMjUlXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyAzOCVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDUxJV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgNjMlXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyA3NiVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDg5JV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uICAgICAgICAgICAgIFsxMDAlXQo1NjQgcGFzc2VkLCAxIHNraXBwZWQgaW4gNi44OHMK",
+      "stdout_hash": "sha256:c21551931ed57499a43f66aa4c217c3be5a73b01d80a12090007eda0dafa3369"
+    }
+  ],
+  "evidence_links": [
+    {
+      "required_material_ids": [
+        "learning-revision"
+      ],
+      "verifier_id": "retry-budget-fail-closed"
+    },
+    {
+      "required_material_ids": [
+        "learning-revision"
+      ],
+      "verifier_id": "full-installed-package-suite"
+    }
+  ],
+  "evidence_universe": {
+    "expected_subjects": [
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "resolved-dependency",
+        "logical_subject_id": "dependency/nexus-learning",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "negative-control",
+        "logical_subject_id": "retry/budget-resolution-fail-closed",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "test-result",
+        "logical_subject_id": "runtime/full-installed-package-suite",
+        "requirement_mode": "REQUIRED"
+      }
+    ],
+    "required_verifier_ids": [
+      "learning-revision",
+      "retry-budget-fail-closed",
+      "full-installed-package-suite"
+    ],
+    "universe_generation": 2
+  },
+  "inputs": {
+    "config": {
+      "allowed_patterns": [
+        "**"
+      ],
+      "base_ref": "origin/main",
+      "deletion_policy": "ALLOW",
+      "isolation": {
+        "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+        "mode": "container",
+        "network": "bridge"
+      },
+      "materials": [
+        {
+          "applicability": "APPLICABLE",
+          "evidence_kind": "resolved-dependency",
+          "expected_identity": "git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e",
+          "id": "learning-revision",
+          "logical_subject_id": "dependency/nexus-learning",
+          "observe_command": [
+            "uv",
+            "run",
+            "--no-project",
+            "--with",
+            "nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e",
+            "python",
+            "scripts/ci/nexus_core_observe_learning_revision.py"
+          ],
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 300
+        }
+      ],
+      "universe_generation": 2,
+      "verifiers": [
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "--no-project",
+            "--with",
+            "pytest==9.0.2",
+            "--with",
+            "pytest-asyncio==1.3.0",
+            "--with",
+            "anyio==4.12.1",
+            "--with",
+            "pydantic==2.13.5",
+            "--with",
+            "PyYAML==6.0.3",
+            "--with",
+            "nexus-learning @ git+https://github.com/James3014/nexus-learning.git@33acad4332b382fac1196c8ea8a8d0f5b543661e",
+            "bash",
+            "-c",
+            "set -euo pipefail; test \"$(python scripts/ci/nexus_core_observe_learning_revision.py)\" = \"git-commit:33acad4332b382fac1196c8ea8a8d0f5b543661e\"; PYTHONPATH=src python -m pytest -q tests/test_task_retry.py::test_attempt_budget_resolution_failure_fails_closed_before_submit"
+          ],
+          "evidence_kind": "negative-control",
+          "id": "retry-budget-fail-closed",
+          "logical_subject_id": "retry/budget-resolution-fail-closed",
+          "required_material_ids": [
+            "learning-revision"
+          ],
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 600
+        },
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "bash",
+            "scripts/ci/nexus_core_full_installed_suite.sh",
+            "33acad4332b382fac1196c8ea8a8d0f5b543661e"
+          ],
+          "evidence_kind": "test-result",
+          "id": "full-installed-package-suite",
+          "logical_subject_id": "runtime/full-installed-package-suite",
+          "required_material_ids": [
+            "learning-revision"
+          ],
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 1800
+        }
+      ],
+      "version": 2
+    },
+    "request": {
+      "acceptance_contract": {
+        "allowed_paths": [
+          ".github/workflows/standalone-wheel.yml",
+          ".github/workflows/tests.yml",
+          ".nexus-core/config.toml"
+        ],
+        "contract_id": "local-contract-641bedb5a49c91af",
+        "deletion_policy": "ALLOW",
+        "expected_subjects": [
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "resolved-dependency",
+            "logical_subject_id": "dependency/nexus-learning",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "negative-control",
+            "logical_subject_id": "retry/budget-resolution-fail-closed",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "runtime/full-installed-package-suite",
+            "requirement_mode": "REQUIRED"
+          }
+        ],
+        "required_verifier_ids": [
+          "learning-revision",
+          "retry-budget-fail-closed",
+          "full-installed-package-suite"
+        ],
+        "requirements_hash": "sha256:07f5668b0cba763d462b40f44141e8365bd548a548b893e16f3a4b4ae2a436fb",
+        "universe_generation": 2
+      },
+      "certification_policy": null,
+      "change_manifest": {
+        "entries": [
+          {
+            "after_mode": "100644",
+            "after_oid": "4a4f122515c0bf75974484e9bf8d6d1c2a269ec4",
+            "before_mode": "100644",
+            "before_oid": "3b9a8df871ef7eb126813ea666d32d07cda064f9",
+            "change_type": "MODIFY",
+            "path": ".github/workflows/standalone-wheel.yml"
+          },
+          {
+            "after_mode": "100644",
+            "after_oid": "152cdf3b78796213e71886700b1a80d56a088d9c",
+            "before_mode": "100644",
+            "before_oid": "81e0da336c3f5acf092a7881c8a9cc5459884b13",
+            "change_type": "MODIFY",
+            "path": ".github/workflows/tests.yml"
+          },
+          {
+            "after_mode": "100644",
+            "after_oid": "d6c6b7e93bd2b587542eb44c8a42e6d049dc30d6",
+            "before_mode": "100644",
+            "before_oid": "31fc95bff72f1c507e23db5c421e0766bb33131d",
+            "change_type": "MODIFY",
+            "path": ".nexus-core/config.toml"
+          }
+        ],
+        "source_tree": "git-tree:d45522cb62c1390bfd5bf3530fb28ee7c424d24d",
+        "target_tree": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9"
+      },
+      "change_set": {
+        "change_set_id": "local-change-b3b9140f1e421bc1",
+        "deleted_paths": [],
+        "diff_hash": "sha256:68737f4eb1432f03adba1124c39dec9e1a0a56391c2a4a6c3702e9e846d2ab5f",
+        "paths": [
+          ".github/workflows/standalone-wheel.yml",
+          ".github/workflows/tests.yml",
+          ".nexus-core/config.toml"
+        ],
+        "source_revision": "git-commit:54704a12ee34989199c31b4b69469f3a0bf4e1b6",
+        "target_revision": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9"
+      },
+      "evidence_bundle": {
+        "acceptance_contract_hash": "sha256:f973a070a97a743b45b03258dc6a31461140492f0723867719c1a7570854fe04",
+        "bundle_id": "local-evidence-b3b9140f1e421bc1",
+        "change_set_hash": "sha256:6a792cc5a21c09a862cd2d99ee0ca29c458239e01bca67ddbbac731d910ada2a",
+        "claimed_bundle_hash": "sha256:653f38cb763e1bf6b838edce5a24356b4faf90c014d4b52251fc3eedd232c370",
+        "observations": [
+          {
+            "artifact_hash": "sha256:65341aa937e86318f1ae24bce1a976ebb03280d41d16d10686e7d4d5c7f23a2a",
+            "artifact_id": "learning-revision-65341aa937e86318",
+            "evidence_kind": "resolved-dependency",
+            "logical_subject_id": "dependency/nexus-learning",
+            "status": "PASS",
+            "verifier_id": "learning-revision"
+          },
+          {
+            "artifact_hash": "sha256:391ed1ee095ec42a3d968bde907cb2ef875b4da8b92f844a447c0e5d34c5d27b",
+            "artifact_id": "retry-budget-fail-closed-391ed1ee095ec42a",
+            "evidence_kind": "negative-control",
+            "logical_subject_id": "retry/budget-resolution-fail-closed",
+            "status": "PASS",
+            "verifier_id": "retry-budget-fail-closed"
+          },
+          {
+            "artifact_hash": "sha256:f443faed3dd2f1aa4b07f8bff81f98349dba627220e469dce82b11aa7da1a620",
+            "artifact_id": "full-installed-package-suite-f443faed3dd2f1aa",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "runtime/full-installed-package-suite",
+            "status": "PASS",
+            "verifier_id": "full-installed-package-suite"
+          }
+        ],
+        "verification_plan_hash": "sha256:e2b03ee3da174be4c6542ebaede3edde97eaf92b76bb05fa86d370e94dd553de"
+      },
+      "protocol_version": "0.1.0-experimental",
+      "schema": "nexus.core.generic-verification-request.v1-experimental",
+      "verification_plan": {
+        "acceptance_contract_hash": "sha256:f973a070a97a743b45b03258dc6a31461140492f0723867719c1a7570854fe04",
+        "change_set_hash": "sha256:6a792cc5a21c09a862cd2d99ee0ca29c458239e01bca67ddbbac731d910ada2a",
+        "plan_id": "local-plan-b3b9140f1e421bc1",
+        "required_verifier_ids": [
+          "learning-revision",
+          "retry-budget-fail-closed",
+          "full-installed-package-suite"
+        ]
+      }
+    },
+    "requirements_context": {
+      "binding_hash": "sha256:6347c9d81d4175a7135da96841e629b90e0a013ad2e3ecd961f8d4d76a783d1e",
+      "evidence_sufficiency": {
+        "config_hash": null,
+        "status": "UNBOUND"
+      },
+      "github_repository": "James3014/nexus-runtime",
+      "issue_contract_hash": "sha256:c7df095ff3169467c3a014967d9dacfe3b9382dace1b09b805cc8cc3743a0404",
+      "issue_number": 88,
+      "schema": "nexus.core.issue-binding-context.v2"
+    }
+  },
+  "kind": "NEXUS_CORE_LOCAL_VERIFICATION_RECEIPT",
+  "manifest_hash": "sha256:68737f4eb1432f03adba1124c39dec9e1a0a56391c2a4a6c3702e9e846d2ab5f",
+  "outcome": {
+    "reason_codes": [],
+    "status": "VERIFIED",
+    "transport_error": false
+  },
+  "product": {
+    "name": "nexus-core",
+    "version": "0.2.0"
+  },
+  "receipt_hash": "sha256:af7a66d9ba80b3103ec17d0e39a449105a6ed8a6dba27cd6d99f935a14d499c3",
+  "residue_policy": "sandbox-only",
+  "schema_version": 2,
+  "source_revision": "git-commit:54704a12ee34989199c31b4b69469f3a0bf4e1b6",
+  "source_tree": "git-tree:d45522cb62c1390bfd5bf3530fb28ee7c424d24d",
+  "subject_clean": true,
+  "subject_head": "git-commit:1a001a489100fecb65df1aa19cc56ec4915dde39",
+  "subject_head_tree": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9",
+  "target_revision": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9",
+  "target_tree": "git-tree:b3b9140f1e421bc1b3cc7d86cba6227dd027d4a9",
+  "timestamp": "2026-10-08T22:26:31.412913+00:00"
+}

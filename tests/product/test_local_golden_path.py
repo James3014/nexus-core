@@ -1704,6 +1704,11 @@ def _synthetic_payload() -> dict[str, Any]:
         "subject_head": f"git-commit:{HEX_A}",
         "target_tree": f"git-tree:{HEX_B}",
         "subject_clean": True,
+        "issue_verification": {
+            "status": "VERIFIED",
+            "issue_number": 120,
+            "github_repository": "owner/name",
+        },
         "config_source": {"kind": "base-ref", "commit": HEX_A, "config_drift": False},
         "inputs": {
             "requirements_context": {
@@ -1729,7 +1734,7 @@ def test_evaluate_receipt_expectations_all_pass():
     )
     assert result["passed"] is True
     assert result["reason_codes"] == []
-    assert len(result["expectations"]) == 8
+    assert len(result["expectations"]) == 9
     assert set(result["expectations"].values()) == {"PASS"}
 
 
@@ -1775,9 +1780,31 @@ def test_evaluate_receipt_expectations_negative(
 
     result = evaluate_receipt_expectations(payload, **kwargs)
 
+    expected = {code}
+    if kwargs.get("expect_issue") == 121:
+        expected.add("ISSUE_VERIFICATION_MISMATCH")
     assert result["passed"] is False
-    assert result["reason_codes"] == [code]
+    assert result["reason_codes"] == sorted(expected)
     assert "FAIL" in result["expectations"].values()
+
+
+@pytest.mark.parametrize("mutate", ["absent", "unverifiable", "other_repo"])
+def test_expect_issue_requires_verified_issue_verification(mutate: str):
+    payload = _synthetic_payload()
+    if mutate == "absent":
+        del payload["issue_verification"]
+    elif mutate == "unverifiable":
+        payload["issue_verification"]["status"] = "UNVERIFIABLE"
+    else:
+        payload["issue_verification"]["github_repository"] = "other/repo"
+
+    result = evaluate_receipt_expectations(
+        payload, expect_issue=120, expect_github_repository="owner/name"
+    )
+    assert "ISSUE_VERIFICATION_MISMATCH" in result["reason_codes"]
+    if mutate != "other_repo":
+        status = evaluate_receipt_expectations(payload, expect_status="VERIFIED")
+        assert status["passed"] is (mutate == "absent")
 
 
 def _run_receipt_check(

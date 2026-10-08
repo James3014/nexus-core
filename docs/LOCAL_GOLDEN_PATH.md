@@ -241,6 +241,18 @@ Every receipt (success and failure) also records, inside the envelope hash,
 (`target_tree == subject_head_tree`). Older receipts without these fields still
 validate.
 
+Receipts produced by `issue-check` also carry a top-level `issue_verification` object
+(inside the envelope hash): `status`, `claim_ceiling`, `reason_codes`,
+`evidence_universe` (`BOUND`, `UNBOUND` or `STALE`), `issue_number`,
+`github_repository` and `issue_contract_hash`. The Issue status is `VERIFIED` only when
+the repository status is `VERIFIED` and the evidence universe is `BOUND`; otherwise a
+green repository result is `UNVERIFIABLE` while `outcome.status` still reads `VERIFIED`.
+`--expect-issue N` requires `issue_verification.status == VERIFIED` and
+`issue_number == N` (and the repository with `--expect-github-repository`), else
+`ISSUE_VERIFICATION_MISMATCH`; a receipt without `issue_verification` fails it.
+`--expect-status VERIFIED` also requires `issue_verification.status == VERIFIED`
+whenever the field is present.
+
 `nexus-certify receipt-check --receipt <receipt>` can additionally fail closed (exit 2,
 reported under `expectations` in the JSON):
 
