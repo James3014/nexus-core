@@ -156,9 +156,12 @@ for the isolation modes and trusted config source.
 ## Why fork pull requests are excluded
 
 `pull_request_target` runs with the base repository's token and permissions. The
-job guard (`head.repo.full_name == github.repository` and `head.repo.fork ==
-false`) skips fork PRs, because verifying untrusted fork code is a different
-trust problem that this gate does not claim to solve. Also keep the repository's
+job guard (`head.repo.full_name == github.repository`) skips fork PRs, because
+verifying untrusted fork code is a different
+trust problem that this gate does not claim to solve. Do not add a
+`head.repo.fork == false` clause: when the repository is itself a GitHub fork that
+clause is true for every branch, the jobs are skipped, and a skipped required check
+counts as passing. Also keep the repository's
 fork-PR workflow approval set to require approval for external contributors.
 Same-repository branches, the normal agent path, are covered by the container
 isolation and the trusted config source.

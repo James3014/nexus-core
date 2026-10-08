@@ -32,9 +32,9 @@ concurrency:
 jobs:
   run:
     name: Nexus Core issue run
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.repo.fork == false
+    # Same-repository branches only. Do not add `head.repo.fork == false`: when the
+    # repository is itself a fork, that clause is true for every branch and skips the gate.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -63,10 +63,7 @@ jobs:
   verify:
     name: Nexus Core issue completion
     needs: run
-    if: >-
-      always() &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.repo.fork == false
+    if: always() && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
