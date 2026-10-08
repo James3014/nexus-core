@@ -1341,6 +1341,76 @@ def _subject_fields(repo: Path | None, snapshot: _GitSnapshot | None) -> dict[st
     }
 
 
+ISSUE_EVIDENCE_UNBOUND_REASON = "ISSUE_EVIDENCE_UNIVERSE_UNBOUND"
+ISSUE_EVIDENCE_STALE_REASON = "ISSUE_EVIDENCE_UNIVERSE_STALE"
+ISSUE_CEILING_UNBOUND = "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND"
+ISSUE_CEILING_NOT_VERIFIED = "ISSUE_NOT_VERIFIED"
+_ISSUE_UNIVERSE_STATES = {"BOUND", "UNBOUND", "STALE"}
+_ISSUE_VERIFICATION_STATUSES = {"VERIFIED", "UNVERIFIABLE", "FAILED_VERIFICATION", "FAILED_CLOSED"}
+_ISSUE_VERIFICATION_KEYS = {
+    "status",
+    "claim_ceiling",
+    "reason_codes",
+    "evidence_universe",
+    "issue_number",
+    "github_repository",
+    "issue_contract_hash",
+}
+
+
+def _issue_status_from(repo_status: str, universe: Any) -> str:
+    if repo_status == "VERIFIED":
+        return "VERIFIED" if universe == "BOUND" else "UNVERIFIABLE"
+    return repo_status
+
+
+def derive_issue_verification(
+    issue_input: Mapping[str, Any], repo_status: str, repo_reasons: Sequence[str]
+) -> dict[str, Any]:
+    """Single derivation of the Issue-level verdict from the repository verdict."""
+
+    universe = issue_input["evidence_universe"]
+    status = _issue_status_from(repo_status, universe)
+    reasons = list(repo_reasons)
+    ceiling = issue_input["claim_ceiling"]
+    if status == "UNVERIFIABLE":
+        reasons = [
+            ISSUE_EVIDENCE_STALE_REASON
+            if universe == "STALE"
+            else ISSUE_EVIDENCE_UNBOUND_REASON
+        ]
+        ceiling = ISSUE_CEILING_UNBOUND
+    elif status != "VERIFIED":
+        ceiling = ISSUE_CEILING_NOT_VERIFIED
+    return {
+        "status": status,
+        "claim_ceiling": ceiling,
+        "reason_codes": reasons,
+        "evidence_universe": universe,
+        "issue_number": issue_input["issue_number"],
+        "github_repository": issue_input["github_repository"],
+        "issue_contract_hash": issue_input["issue_contract_hash"],
+    }
+
+
+def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != _ISSUE_VERIFICATION_KEYS:
+        return False
+    number = value["issue_number"]
+    return (
+        value["status"] in _ISSUE_VERIFICATION_STATUSES
+        and value["evidence_universe"] in _ISSUE_UNIVERSE_STATES
+        and isinstance(number, int)
+        and not isinstance(number, bool)
+        and isinstance(value["github_repository"], str)
+        and isinstance(value["issue_contract_hash"], str)
+        and isinstance(value["claim_ceiling"], str)
+        and isinstance(value["reason_codes"], list)
+        and all(isinstance(code, str) for code in value["reason_codes"])
+        and value["status"] == _issue_status_from(str(outcome_status), value["evidence_universe"])
+    )
+
+
 def _base_receipt(
     *,
     repo: Path | None = None,
@@ -1354,6 +1424,7 @@ def _base_receipt(
     reasons: Sequence[str],
     requirements_context: Mapping[str, Any] | None = None,
     config_source: Mapping[str, Any] | None = None,
+    issue_verification: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_version = config.get("version") if isinstance(config, Mapping) else None
     receipt: dict[str, Any] = {
@@ -1384,6 +1455,10 @@ def _base_receipt(
         },
     }
     receipt.update(_subject_fields(repo, snapshot))
+    if issue_verification is not None:
+        receipt["issue_verification"] = derive_issue_verification(
+            issue_verification, status, reasons
+        )
     if config_source is not None:
         receipt["config_source"] = dict(config_source)
         receipt["residue_policy"] = RESIDUE_POLICY
@@ -1439,6 +1514,7 @@ def _raise_with_receipt(
     artifacts: Sequence[Mapping[str, Any]] = (),
     requirements_context: Mapping[str, Any] | None = None,
     config_source: Mapping[str, Any] | None = None,
+    issue_verification: Mapping[str, Any] | None = None,
 ) -> None:
     receipt = _base_receipt(
         repo=repo,
@@ -1452,6 +1528,7 @@ def _raise_with_receipt(
         reasons=[reason],
         requirements_context=requirements_context,
         config_source=config_source,
+        issue_verification=issue_verification,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path)
@@ -1462,6 +1539,7 @@ def check_repository(
     *,
     requirements_context: Mapping[str, Any] | None = None,
     require_trusted_config: bool = False,
+    issue_verification: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the local Golden Path and return the canonical Core verdict."""
 
@@ -1483,6 +1561,7 @@ def check_repository(
             config_hash=config_hash,
             config_source=config_source,
             requirements_context=requirements_context,
+            issue_verification=issue_verification,
         )
 
     if config["version"] == CONFIG_VERSION:
@@ -1519,6 +1598,7 @@ def check_repository(
                 config_hash=config_hash,
                 config_source=config_source,
                 requirements_context=requirements_context,
+                issue_verification=issue_verification,
             )
 
     try:
@@ -1532,6 +1612,7 @@ def check_repository(
             config_hash=config_hash,
             config_source=config_source,
             requirements_context=requirements_context,
+            issue_verification=issue_verification,
         )
 
     forbidden = [
@@ -1549,6 +1630,7 @@ def check_repository(
             config_source=config_source,
             snapshot=snapshot,
             requirements_context=requirements_context,
+            issue_verification=issue_verification,
         )
     deleted = [
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
@@ -1563,6 +1645,7 @@ def check_repository(
             config_source=config_source,
             snapshot=snapshot,
             requirements_context=requirements_context,
+            issue_verification=issue_verification,
         )
 
     artifacts: list[dict[str, Any]] = []
@@ -1603,6 +1686,7 @@ def check_repository(
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
+                issue_verification=issue_verification,
             )
         except subprocess.TimeoutExpired as exc:
             _raise_with_receipt(
@@ -1615,6 +1699,7 @@ def check_repository(
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
+                issue_verification=issue_verification,
             )
         except OSError as exc:
             _raise_with_receipt(
@@ -1627,6 +1712,7 @@ def check_repository(
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
+                issue_verification=issue_verification,
             )
 
         if config["version"] == CONFIG_VERSION:
@@ -1660,6 +1746,7 @@ def check_repository(
                 snapshot=snapshot,
                 artifacts=artifacts,
                 requirements_context=requirements_context,
+                issue_verification=issue_verification,
             )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
@@ -1674,6 +1761,7 @@ def check_repository(
             snapshot=snapshot,
             artifacts=artifacts,
             requirements_context=requirements_context,
+            issue_verification=issue_verification,
         )
 
     request = _build_request(
@@ -1698,6 +1786,7 @@ def check_repository(
             status="FAILED_CLOSED",
             reasons=[reason],
             requirements_context=requirements_context,
+            issue_verification=issue_verification,
         )
         path_out = _write_receipt(repo, receipt)
         raise LocalCheckError(reason, "canonical Core rejected request", receipt_path=path_out)
@@ -1712,6 +1801,7 @@ def check_repository(
         snapshot=snapshot,
         artifacts=artifacts,
         requirements_context=requirements_context,
+        issue_verification=issue_verification,
         request=request,
         response=response,
         status=status,
@@ -1731,6 +1821,11 @@ def check_repository(
         "subject_head": receipt.get("subject_head"),
         "subject_head_tree": receipt.get("subject_head_tree"),
         "subject_clean": receipt.get("subject_clean"),
+        **(
+            {"issue_verification": receipt["issue_verification"]}
+            if "issue_verification" in receipt
+            else {}
+        ),
     }
 
 
@@ -1831,6 +1926,7 @@ def evaluate_receipt_expectations(
     inputs = payload.get("inputs")
     context = inputs.get("requirements_context") if isinstance(inputs, Mapping) else None
     context = context if isinstance(context, Mapping) else {}
+    issue_verification = payload.get("issue_verification")
     expectations: dict[str, str] = {}
     reasons: list[str] = []
 
@@ -1841,7 +1937,12 @@ def evaluate_receipt_expectations(
 
     if expect_status is not None:
         status = outcome.get("status") if isinstance(outcome, Mapping) else None
-        record("expect-status", "STATUS_MISMATCH", status == expect_status)
+        issue_ok = (
+            not isinstance(issue_verification, Mapping)
+            or expect_status != "VERIFIED"
+            or issue_verification.get("status") == "VERIFIED"
+        )
+        record("expect-status", "STATUS_MISMATCH", status == expect_status and issue_ok)
     if expect_subject_head is not None:
         record(
             "expect-subject-head",
@@ -1869,6 +1970,24 @@ def evaluate_receipt_expectations(
             and isinstance(number, int)
             and not isinstance(number, bool)
             and number == expect_issue,
+        )
+        verified_number = (
+            issue_verification.get("issue_number")
+            if isinstance(issue_verification, Mapping)
+            else None
+        )
+        record(
+            "expect-issue-verification",
+            "ISSUE_VERIFICATION_MISMATCH",
+            isinstance(issue_verification, Mapping)
+            and issue_verification.get("status") == "VERIFIED"
+            and isinstance(verified_number, int)
+            and not isinstance(verified_number, bool)
+            and verified_number == expect_issue
+            and (
+                expect_github_repository is None
+                or issue_verification.get("github_repository") == expect_github_repository
+            ),
         )
     if expect_github_repository is not None:
         record(
@@ -1950,6 +2069,12 @@ def validate_verification_receipt_payload(
             or not isinstance(source.get("config_drift"), bool)
         ):
             reasons.append("MALFORMED_RECEIPT")
+
+    if "issue_verification" in payload and not _valid_issue_verification(
+        payload["issue_verification"],
+        payload["outcome"].get("status") if isinstance(payload.get("outcome"), dict) else None,
+    ):
+        reasons.append("MALFORMED_RECEIPT")
 
     config_hash = canonical_hash(config) if isinstance(config, dict) else None
     if config_hash is None or payload.get("config_hash") != config_hash:

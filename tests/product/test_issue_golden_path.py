@@ -6,6 +6,7 @@ import subprocess
 import sys
 import urllib.error
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -85,6 +86,8 @@ def test_issue_init_and_check_bind_requirements_to_issue(issue_repo: Path) -> No
 
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     context = receipt["inputs"]["requirements_context"]
+    assert receipt["issue_verification"]["status"] == "VERIFIED"
+    assert receipt["issue_verification"]["evidence_universe"] == "BOUND"
     assert context["binding_hash"] == binding["binding_hash"]
     expected = canonical_hash(
         {"config_hash": receipt["config_hash"], "context": context}
@@ -111,6 +114,8 @@ def test_issue_check_downgrades_green_repository_evidence_without_issue_sufficie
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     assert receipt["outcome"]["status"] == "VERIFIED"
     assert receipt["inputs"]["requirements_context"]["evidence_sufficiency"]["status"] == "UNBOUND"
+    assert receipt["issue_verification"]["status"] == "UNVERIFIABLE"
+    assert result["issue_verification"] == receipt["issue_verification"]
     assert validate_verification_receipt(result["receipt_path"], repo=issue_repo) == {
         "valid": True,
         "reason_codes": [],
@@ -491,3 +496,139 @@ def test_evidence_universe_marker_comment_with_bad_value_malformed() -> None:
 
 def test_evidence_universe_marker_absent_returns_none() -> None:
     assert issue_gp._issue_evidence_universe_marker({"body": "no marker here"}) is None
+
+
+def _bound_reader(repo: Path):
+    identity = issue_gp._verification_contract_identity(repo)["config_hash"]
+
+    def reader(github_repo: str, number: int) -> dict[str, object]:
+        return _issue(
+            body=f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->"
+        )
+
+    return reader
+
+
+def _receipt_check(
+    capsys: pytest.CaptureFixture[str], receipt: Path, repo: Path | None, *flags: str
+) -> tuple[int, dict[str, Any]]:
+    from product.clients import cli
+
+    argv = ["receipt-check", "--receipt", str(receipt), *flags]
+    if repo is not None:
+        argv += ["--repo", str(repo)]
+    code = cli.main(argv)
+    return code, json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("flags", [("--expect-issue", "85"), ("--expect-status", "VERIFIED")])
+def test_unbound_issue_receipt_carries_unverifiable_verdict_and_fails_gate(
+    issue_repo: Path, capsys: pytest.CaptureFixture[str], flags: tuple[str, ...]
+) -> None:
+    reader = lambda repo, number: _issue()  # noqa: E731
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["outcome"]["status"] == "VERIFIED"
+    verdict = receipt["issue_verification"]
+    assert verdict["status"] == result["status"] == "UNVERIFIABLE"
+    assert verdict["evidence_universe"] == "UNBOUND"
+    assert verdict["issue_number"] == 85
+    assert verdict["reason_codes"] == [issue_gp.ISSUE_EVIDENCE_UNBOUND_REASON]
+    assert validate_verification_receipt(result["receipt_path"], repo=issue_repo)["valid"]
+
+    code, output = _receipt_check(capsys, result["receipt_path"], issue_repo, *flags)
+    assert code == 2
+    assert output["reason_codes"] == [
+        "ISSUE_VERIFICATION_MISMATCH" if flags[0] == "--expect-issue" else "STATUS_MISMATCH"
+    ]
+
+
+def test_stale_issue_receipt_carries_stale_verdict_and_fails_gate(
+    issue_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reader = _bound_reader(issue_repo)
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    config = issue_repo / ".nexus-core" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace("timeout_seconds = 300", "timeout_seconds = 301"),
+        encoding="utf-8",
+    )
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(issue_repo, issue_number=85, issue_reader=reader)
+    assert raised.value.reason_code == issue_gp.ISSUE_EVIDENCE_STALE_REASON
+    receipt_path = raised.value.receipt_path
+    assert receipt_path is not None
+    verdict = json.loads(receipt_path.read_text(encoding="utf-8"))["issue_verification"]
+    assert verdict["status"] == "UNVERIFIABLE"
+    assert verdict["evidence_universe"] == "STALE"
+    assert verdict["reason_codes"] == [issue_gp.ISSUE_EVIDENCE_STALE_REASON]
+
+    code, output = _receipt_check(capsys, receipt_path, issue_repo, "--expect-issue", "85")
+    assert (code, output["reason_codes"]) == (2, ["ISSUE_VERIFICATION_MISMATCH"])
+    code, output = _receipt_check(capsys, receipt_path, issue_repo, "--expect-status", "VERIFIED")
+    assert (code, output["reason_codes"]) == (2, ["STATUS_MISMATCH"])
+
+
+def test_bound_issue_receipt_verified_passes_all_expectations(
+    issue_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reader = _bound_reader(issue_repo)
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+
+    verdict = json.loads(result["receipt_path"].read_text(encoding="utf-8"))["issue_verification"]
+    assert verdict["status"] == result["status"] == "VERIFIED"
+    assert verdict["evidence_universe"] == "BOUND"
+    assert verdict["claim_ceiling"] == "ISSUE_VERIFIED_NOT_RELEASED"
+    code, output = _receipt_check(
+        capsys,
+        result["receipt_path"],
+        issue_repo,
+        "--expect-issue",
+        "85",
+        "--expect-github-repository",
+        "example/project",
+        "--expect-status",
+        "VERIFIED",
+    )
+    assert (code, output["valid"]) == (0, True)
+    code, output = _receipt_check(
+        capsys, result["receipt_path"], issue_repo, "--expect-issue", "86"
+    )
+    assert (code, output["reason_codes"]) == (2, ["ISSUE_BINDING_MISMATCH", "ISSUE_VERIFICATION_MISMATCH"])
+
+
+def test_tampered_issue_verification_is_rejected_by_validator(issue_repo: Path) -> None:
+    from product.clients.local_golden_path import (
+        _receipt_hash,
+        validate_verification_receipt_payload,
+    )
+
+    reader = lambda repo, number: _issue()  # noqa: E731
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+    payload = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    payload["issue_verification"]["status"] = "VERIFIED"
+    payload["receipt_hash"] = _receipt_hash(payload)
+    assert validate_verification_receipt_payload(payload, repo=issue_repo)["valid"] is False
+
+
+def test_nexus_runtime_false_green_receipt_fails_issue_expectations(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from product.clients.local_golden_path import evaluate_receipt_expectations
+
+    fixture = Path(__file__).parent / "fixtures" / "receipt_issue_unbound_false_green.json"
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    assert payload["outcome"]["status"] == "VERIFIED"
+    assert "issue_verification" not in payload
+    assert payload["inputs"]["requirements_context"]["evidence_sufficiency"]["status"] == "UNBOUND"
+
+    evaluation = evaluate_receipt_expectations(payload, expect_issue=88, expect_status="VERIFIED")
+    assert evaluation["passed"] is False
+    assert "ISSUE_VERIFICATION_MISMATCH" in evaluation["reason_codes"]
+    code, output = _receipt_check(capsys, fixture, None, "--expect-issue", "88", "--expect-status", "VERIFIED")
+    assert code == 2
+    assert "ISSUE_VERIFICATION_MISMATCH" in output["reason_codes"]

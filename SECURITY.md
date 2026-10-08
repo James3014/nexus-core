@@ -62,6 +62,7 @@ A receipt's SHA-256 field makes that receipt **tamper-evident when revalidated**
 - **No Execution Containment**: It does not prove the verifier or repository was sandboxed or unable to perform side effects outside Nexus's observed evidence. Detached-clone and container isolation reduce, but do not eliminate, this exposure (kernel or container-runtime escapes, and network access under `bridge`, are out of scope).
 - **No Deployment or Release Authority**: A receipt is evidence; it does not authorize git merge, branch promotion, release, or production deployment.
 - **No Execution Safety**: It does not guarantee that the repository code is safe to execute or install.
+- **Repository `VERIFIED` Is Not Issue `VERIFIED`**: `outcome.status` reflects the repository check only. For Issue-bound receipts the Issue-level verdict lives in `issue_verification`; since Issue #134 `receipt-check --expect-issue` and `--expect-status VERIFIED` require it to be `VERIFIED`, so an unbound or stale evidence universe can no longer pass the gate. Receipts without `issue_verification` never satisfy `--expect-issue`.
 
 ---
 

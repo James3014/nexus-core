@@ -16,6 +16,9 @@ from typing import Any, Callable, Mapping
 from product.clients.local_golden_path import (
     CONFIG_DIRECTORY,
     CONFIG_FILENAME,
+    ISSUE_CEILING_UNBOUND,
+    ISSUE_EVIDENCE_STALE_REASON,
+    ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401
     LocalCheckError,
     _load_effective_config,
     check_repository,
@@ -28,8 +31,6 @@ ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v2"
 ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
 ISSUE_EVIDENCE_MARKER_PREFIX = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: "
 ISSUE_EVIDENCE_MARKER_SUFFIX = " -->"
-ISSUE_EVIDENCE_UNBOUND_REASON = "ISSUE_EVIDENCE_UNIVERSE_UNBOUND"
-ISSUE_EVIDENCE_STALE_REASON = "ISSUE_EVIDENCE_UNIVERSE_STALE"
 ISSUE_RATE_LIMIT_RETRIES = 2
 ISSUE_RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
 ISSUE_RATE_LIMIT_FALLBACK_WAIT_SECONDS = 1.0
@@ -429,6 +430,7 @@ def check_issue(
         else None
     )
     sufficiency_status = "UNBOUND"
+    stale_detail: str | None = None
     if sufficiency is not None:
         if declared_config_identity != sufficiency["config_hash"]:
             raise LocalCheckError(
@@ -437,11 +439,10 @@ def check_issue(
             )
         current_verification_contract = _verification_contract_identity(repo)
         if sufficiency["config_hash"] != current_verification_contract["config_hash"]:
-            raise LocalCheckError(
-                ISSUE_EVIDENCE_STALE_REASON,
-                "verification contract changed since Issue evidence sufficiency was bound",
-            )
-        sufficiency_status = "BOUND"
+            sufficiency_status = "STALE"
+            stale_detail = "verification contract changed since Issue evidence sufficiency was bound"
+        else:
+            sufficiency_status = "BOUND"
 
     context = {
         "schema": ISSUE_CONTEXT_SCHEMA,
@@ -450,7 +451,7 @@ def check_issue(
         "issue_contract_hash": binding["issue_contract_hash"],
         "binding_hash": binding["binding_hash"],
         "evidence_sufficiency": {
-            "status": sufficiency_status,
+            "status": "BOUND" if sufficiency_status == "STALE" else sufficiency_status,
             "config_hash": sufficiency["config_hash"] if sufficiency is not None else None,
         },
     }
@@ -458,29 +459,34 @@ def check_issue(
         repo,
         requirements_context=context,
         require_trusted_config=require_trusted_config,
+        issue_verification={
+            "issue_number": issue_number,
+            "github_repository": github_repo,
+            "issue_contract_hash": binding["issue_contract_hash"],
+            "evidence_universe": sufficiency_status,
+            "claim_ceiling": (
+                "ISSUE_VERIFIED_NOT_RELEASED"
+                if sufficiency_status == "BOUND"
+                else ISSUE_CEILING_UNBOUND
+            ),
+        },
     )
-    common = {
+    if stale_detail is not None:
+        raise LocalCheckError(
+            ISSUE_EVIDENCE_STALE_REASON,
+            stale_detail,
+            receipt_path=result["receipt_path"],
+        )
+    verdict = result["issue_verification"]
+    return {
+        **result,
         "github_repository": github_repo,
         "issue_number": issue_number,
         "issue_contract_hash": binding["issue_contract_hash"],
         "binding_hash": binding["binding_hash"],
         "issue_evidence_sufficiency_status": sufficiency_status,
         "repository_evidence_status": result["status"],
-    }
-    if result["status"] == "VERIFIED" and sufficiency_status != "BOUND":
-        return {
-            **result,
-            **common,
-            "status": "UNVERIFIABLE",
-            "reason_codes": [ISSUE_EVIDENCE_UNBOUND_REASON],
-            "claim_ceiling": "REPOSITORY_EVIDENCE_VERIFIED_ISSUE_REQUIREMENTS_UNBOUND",
-        }
-    return {
-        **result,
-        **common,
-        "claim_ceiling": (
-            "ISSUE_VERIFIED_NOT_RELEASED"
-            if result["status"] == "VERIFIED"
-            else "ISSUE_NOT_VERIFIED"
-        ),
+        "status": verdict["status"],
+        "reason_codes": verdict["reason_codes"],
+        "claim_ceiling": verdict["claim_ceiling"],
     }
