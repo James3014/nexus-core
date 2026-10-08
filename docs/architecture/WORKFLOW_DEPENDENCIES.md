@@ -12,9 +12,9 @@ Nexus Core verification and release workflows require that every external GitHub
 | `.github/workflows/ci.yml` | `astral-sh/setup-uv` | `d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86` | `v5.4.1` | Install uv binary |
 | `.github/workflows/publish.yml` | `actions/checkout` | `11d5960a326750d5838078e36cf38b85af677262` | `v4` | Checkout tagged source |
 | `.github/workflows/publish.yml` | `astral-sh/setup-uv` | `d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86` | `v5` | Install pinned uv binary |
-| `.github/workflows/repository-intelligence.yml` | `James3014/repository-intelligence-engine` | `cb081c20549ce5105e557794d01055bff6728f6c` | `v0.1.1` | Collect PR intelligence |
+| `.github/workflows/repository-intelligence.yml` | `James3014/repository-intelligence-engine` | `88285acf570688befbc8e36eb73f46987171bd4e` | `main` 2026-10-08 (v0.1.3 candidate, Issue #60) | Collect PR intelligence |
 | `.github/workflows/repository-intelligence.yml` | `actions/upload-artifact` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | `v4.6.1` | Upload intelligence report |
-| `.github/workflows/repository-intelligence.yml` | `James3014/repository-intelligence-engine/terminal` | `7d7a0e375f0b7be7b57d96653a4064fd379231eb` | `main` | Observe terminal checks |
+| `.github/workflows/repository-intelligence.yml` | `James3014/repository-intelligence-engine/terminal` | `88285acf570688befbc8e36eb73f46987171bd4e` | `main` 2026-10-08 (v0.1.3 candidate, Issue #60) | Observe terminal checks |
 | `.github/workflows/repository-intelligence.yml` | `actions/upload-artifact` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | `v4.6.1` | Upload terminal evidence |
 
 ## Enforcement & Anti-Regression Guard
