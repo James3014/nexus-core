@@ -29,6 +29,6 @@ jobs:
     steps:
       # Pin to a full 40-hex commit sha of James3014/nexus-core, and use the
       # same sha for nexus-certify-ref.
-      - uses: James3014/nexus-core/.github/actions/issue-gate@0000000000000000000000000000000000000000
+      - uses: James3014/nexus-core/.github/actions/issue-gate@663cd72c0879907bbf029b5d25a37abbdae36118
         with:
-          nexus-certify-ref: "0000000000000000000000000000000000000000"
+          nexus-certify-ref: "663cd72c0879907bbf029b5d25a37abbdae36118"
