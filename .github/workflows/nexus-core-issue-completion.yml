@@ -11,6 +11,11 @@ name: Nexus Core issue completion
 # - The runner never executes candidate code: the tool is installed from the
 #   trusted base checkout, and the verifier runs inside the configured
 #   container isolation (see .nexus-core/config.toml).
+# - Receipt authority: the required check passes only when a receipt signed by
+#   this repository's main-branch workflow identity (Sigstore keyless) describes
+#   exactly this head, this base config and this Issue, and says VERIFIED. The
+#   'run' job produces and signs it; the separate 'verify' job (the required
+#   check) consumes it and never trusts the exit code of 'run' alone.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
@@ -25,13 +30,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  nexus-core-issue-completion:
-    name: Nexus Core issue completion
+  run:
+    name: Nexus Core issue run
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
+    outputs:
+      artifact-name: ${{ steps.gate.outputs.artifact-name }}
+      issue-number: ${{ steps.gate.outputs.issue-number }}
     steps:
       - name: Checkout trusted base (gate action and tool source only)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
@@ -41,7 +54,40 @@ jobs:
           persist-credentials: false
 
       - name: Issue gate
+        id: gate
         uses: ./trusted/.github/actions/issue-gate
         with:
+          nexus-certify-source: path
+          nexus-certify-path: ${{ github.workspace }}/trusted
+
+  verify:
+    name: Nexus Core issue completion
+    needs: run
+    if: >-
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout trusted base (verify action and tool source only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Verify signed receipt
+        uses: ./trusted/.github/actions/receipt-verify
+        with:
+          artifact-name: ${{ needs.run.outputs.artifact-name }}
+          expected-identity: https://github.com/James3014/nexus-core/.github/workflows/nexus-core-issue-completion.yml@refs/heads/main
+          github-repository: ${{ github.repository }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          issue-number: ${{ needs.run.outputs.issue-number }}
           nexus-certify-source: path
           nexus-certify-path: ${{ github.workspace }}/trusted

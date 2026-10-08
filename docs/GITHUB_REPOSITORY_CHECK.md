@@ -11,38 +11,90 @@ contract passed inside the configured isolation against this exact tree. It is n
 approval, Candidate acceptance, merge authority, release authority, semantic proof
 that the Issue is complete, or a production claim.
 
+## Two jobs: run and verify
+
+The gate is two jobs, so that the required status check never rests on a bare
+exit code:
+
+- **`run`** (`Nexus Core issue run`) runs `issue-gate`. After `issue-check` it
+  signs the newest receipt, success or failure, with Sigstore keyless signing
+  (`sigstore sign`, OIDC workflow identity) and uploads the receipt and its
+  `<receipt>.sigstore.json` bundle as one artifact. This job must grant
+  `id-token: write`. Outputs: `artifact-name`, `issue-number`, and the action
+  outputs `receipt-file`, `bundle-file`, `receipt-sha256`.
+- **`verify`** (`Nexus Core issue completion`, `needs: run`, `if: always()`) is
+  the required check. It runs `receipt-verify` with only `contents: read` and
+  `actions: read`: it downloads the artifact, requires exactly one receipt and
+  one bundle, runs `sigstore verify github`, resolves the expected head tree with
+  a shallow fetch of the PR head sha, and runs `nexus-certify receipt-check` with
+  every expectation.
+
+The required status now means: **a receipt signed by this repository's
+main-branch workflow identity describes exactly this head, this base config, this
+Issue, and says VERIFIED.**
+
+The signing identity is the workflow file on the default branch:
+
+```text
+https://github.com/<owner>/<repo>/.github/workflows/<workflow-file>.yml@refs/heads/main
+```
+
+For Nexus Core itself this is
+`https://github.com/James3014/nexus-core/.github/workflows/nexus-core-issue-completion.yml@refs/heads/main`.
+Because the workflow runs under `pull_request_target`, the certificate identity
+is the base-branch workflow, not the PR branch.
+
 ## Consumer workflow
 
 Copy [`examples/github-repository-check.yml`](examples/github-repository-check.yml)
-to `.github/workflows/` and pin both the action and `nexus-certify-ref` to a full
+to `.github/workflows/`, set `expected-identity` to your own workflow file on
+`refs/heads/main`, and pin both actions and `nexus-certify-ref` to the same full
 40-hex nexus-core commit sha:
 
 ```yaml
-on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, edited]
-permissions:
-  contents: read
-  issues: read
-  pull-requests: read
 jobs:
-  nexus-core-issue-completion:
-    name: Nexus Core issue completion
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.repo.fork == false
-    runs-on: ubuntu-latest
+  run:
+    name: Nexus Core issue run
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
+    outputs:
+      artifact-name: ${{ steps.gate.outputs.artifact-name }}
+      issue-number: ${{ steps.gate.outputs.issue-number }}
     steps:
-      - uses: James3014/nexus-core/.github/actions/issue-gate@<40-hex-sha>
+      - id: gate
+        uses: James3014/nexus-core/.github/actions/issue-gate@<40-hex-sha>
         with:
+          nexus-certify-ref: "<40-hex-sha>"
+  verify:
+    name: Nexus Core issue completion
+    needs: run
+    if: always()
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: James3014/nexus-core/.github/actions/receipt-verify@<40-hex-sha>
+        with:
+          artifact-name: ${{ needs.run.outputs.artifact-name }}
+          expected-identity: https://github.com/<owner>/<repo>/.github/workflows/<file>.yml@refs/heads/main
+          github-repository: ${{ github.repository }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          issue-number: ${{ needs.run.outputs.issue-number }}
           nexus-certify-ref: "<40-hex-sha>"
 ```
 
-The PR body must contain exactly one `<!-- NEXUS_CORE_ISSUE: <number> -->` marker,
-or you pass `issue-number` explicitly. Otherwise the gate fails closed. Other
-inputs: `python-version` (default `3.11`) and `candidate-path` (default
-`candidate`). Nexus Core's own repository uses `nexus-certify-source: path` to
-install the tool from the trusted base checkout instead of a pinned ref.
+(The example file also carries the `pull_request_target` trigger and the fork
+guard on both jobs; both are required.) The PR body must contain exactly one
+`<!-- NEXUS_CORE_ISSUE: <number> -->` marker, or you pass `issue-number`
+explicitly. Otherwise the gate fails closed. Other inputs: `python-version`
+(default `3.11`), `candidate-path` (default `candidate`), and for
+`receipt-verify`, `sigstore-version` (default: the pinned release). Nexus Core's
+own repository uses `nexus-certify-source: path` to install the tool from the
+trusted base checkout instead of a pinned ref.
 
 ## What runs where
 
@@ -61,8 +113,11 @@ install the tool from the trusted base checkout instead of a pinned ref.
    `uv build`, or tests) runs in a detached clone with an allowlisted environment,
    inside the container configured by `[isolation]`. The runner never runs
    candidate `uv sync`, `uv build`, `pip install`, or scripts.
-5. **Artifacts.** `candidate/.nexus-core/receipts/` is uploaded even on failure,
-   and a failing run prints a diagnostic of the latest receipt.
+5. **Signing and artifacts.** The newest receipt is signed (even on failure) and
+   `candidate/.nexus-core/receipts/` is uploaded with the bundle; a failing run
+   prints a diagnostic of the latest receipt.
+6. **Verify job.** A separate job with no candidate code checks the signature
+   and the receipt expectations (see above).
 
 ## Runner support
 
@@ -100,8 +155,41 @@ gate, the action pin, or `.nexus-core/config.toml` is verified under generation 
 and takes effect as generation N+1 after an ordinary reviewed merge. There is no
 byte-compare "protect inputs" step and no manual ruleset bypass.
 
-Keep the job name `Nexus Core issue completion` stable if it is a required status
-check.
+Keep the `verify` job name `Nexus Core issue completion` stable if it is a
+required status check.
+
+## Verify a receipt yourself
+
+Anyone can check a CI receipt without trusting the runner. Download the
+`nexus-core-receipts-<head-sha>` artifact (it holds `<receipt>.json` and
+`<receipt>.json.sigstore.json`), then:
+
+```bash
+uvx --from "sigstore==4.5.0" sigstore verify github \
+  --cert-identity "https://github.com/James3014/nexus-core/.github/workflows/nexus-core-issue-completion.yml@refs/heads/main" \
+  --repository James3014/nexus-core \
+  --bundle <receipt>.json.sigstore.json \
+  <receipt>.json
+
+TREE=$(git rev-parse '<head-sha>^{tree}')
+nexus-certify receipt-check --receipt <receipt>.json \
+  --expect-status VERIFIED \
+  --expect-subject-head <head-sha> \
+  --expect-target-tree "$TREE" \
+  --expect-config-commit <base-sha> \
+  --expect-issue <N> \
+  --expect-github-repository James3014/nexus-core \
+  --require-clean-subject \
+  --require-trusted-config
+```
+
+Flipping one byte of the receipt makes `sigstore verify` fail. A mismatch in
+`receipt-check` exits 2 with `STATUS_MISMATCH`, `SUBJECT_HEAD_MISMATCH`,
+`TARGET_TREE_MISMATCH`, `CONFIG_SOURCE_MISMATCH`, `ISSUE_BINDING_MISMATCH`,
+`SUBJECT_NOT_CLEAN` or `CONFIG_UNTRUSTED`. The signature proves which workflow
+identity produced the bytes (and logs it in the public Rekor transparency log);
+it does not prove the verifier command is sufficient or that the Issue is
+semantically complete.
 
 ## Legacy request-file mode
 

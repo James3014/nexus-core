@@ -15,6 +15,7 @@ from product.clients.local_golden_path import (
     LocalCheckError,
     check_repository,
     doctor_repository,
+    evaluate_receipt_expectations,
     init_repository,
     validate_verification_receipt,
 )
@@ -1555,3 +1556,303 @@ def test_mount_probe_right_nonce_proceeds_to_verifier(
     assert receipt["evidence_artifacts"][0]["execution_subject"]["isolation"]["mount_probe"] == (
         "PASS"
     )
+
+
+# --- Issue #120 A: subject binding and receipt-check expectations ---------------
+
+HEX_A = "a" * 40
+HEX_B = "b" * 40
+
+
+def _committed_change_receipt(repo: Path) -> dict[str, Any]:
+    _init(repo)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "trusted config")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "commit", "-am", "change")
+    result = check_repository(repo)
+    return json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+
+
+def _only_receipt(repo: Path) -> Path:
+    return next((repo / ".nexus-core" / "receipts").glob("*.json"))
+
+
+def test_success_receipt_carries_subject_fields_clean_for_committed_change(external_repo: Path):
+    _init(external_repo)
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(external_repo, "commit", "-am", "change")
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+
+    head = _git(external_repo, "rev-parse", "HEAD")
+    tree = _git(external_repo, "rev-parse", "HEAD^{tree}")
+    assert receipt["subject_head"] == f"git-commit:{head}"
+    assert receipt["subject_head_tree"] == f"git-tree:{tree}"
+    assert receipt["subject_clean"] is True
+    assert receipt["target_tree"] == f"git-tree:{tree}"
+    assert result["subject_head"] == receipt["subject_head"]
+    assert result["subject_clean"] is True
+    assert validate_verification_receipt(result["receipt_path"], repo=external_repo)["valid"]
+
+
+def test_success_receipt_subject_not_clean_with_uncommitted_change(external_repo: Path):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+
+    assert receipt["subject_head"] == f"git-commit:{_git(external_repo, 'rev-parse', 'HEAD')}"
+    assert receipt["subject_clean"] is False
+    assert result["subject_clean"] is False
+
+
+def test_failure_receipt_carries_subject_fields(external_repo: Path):
+    _init(external_repo)
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)  # no changes -> fail-closed receipt
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+
+    assert receipt["outcome"]["status"] == "FAILED_CLOSED"
+    assert receipt["subject_head"] == f"git-commit:{_git(external_repo, 'rev-parse', 'HEAD')}"
+    assert receipt["subject_head_tree"] == (
+        f"git-tree:{_git(external_repo, 'rev-parse', 'HEAD^{tree}')}"
+    )
+    assert receipt["subject_clean"] in (True, False, None)
+    if receipt["target_tree"] is None:
+        assert receipt["subject_clean"] is None
+
+
+def test_receipt_without_subject_fields_still_validates(external_repo: Path):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    for key in ("subject_head", "subject_head_tree", "subject_clean"):
+        del receipt[key]
+    path = external_repo / "old-receipt.json"
+    _write_receipt(path, receipt)
+
+    assert validate_verification_receipt(path, repo=external_repo) == {
+        "reason_codes": [],
+        "valid": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("subject_head", "git-commit:xyz"),
+        ("subject_head", f"git-tree:{HEX_A}"),
+        ("subject_head_tree", HEX_A),
+        ("subject_clean", "yes"),
+    ],
+)
+def test_malformed_subject_fields_are_rejected(external_repo: Path, field: str, value: Any):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    receipt[field] = value
+    path = external_repo / "bad-receipt.json"
+    _write_receipt(path, receipt)
+
+    payload = validate_verification_receipt(path, repo=external_repo)
+    assert payload["valid"] is False
+    assert "MALFORMED_RECEIPT" in payload["reason_codes"]
+
+
+def _synthetic_payload() -> dict[str, Any]:
+    return {
+        "outcome": {"status": "VERIFIED"},
+        "subject_head": f"git-commit:{HEX_A}",
+        "target_tree": f"git-tree:{HEX_B}",
+        "subject_clean": True,
+        "config_source": {"kind": "base-ref", "commit": HEX_A, "config_drift": False},
+        "inputs": {
+            "requirements_context": {
+                "schema": "nexus.core.issue-binding-context.v2",
+                "issue_number": 120,
+                "github_repository": "owner/name",
+            }
+        },
+    }
+
+
+def test_evaluate_receipt_expectations_all_pass():
+    result = evaluate_receipt_expectations(
+        _synthetic_payload(),
+        expect_status="VERIFIED",
+        expect_subject_head=HEX_A,
+        expect_target_tree=HEX_B,
+        expect_config_commit=HEX_A,
+        expect_issue=120,
+        expect_github_repository="owner/name",
+        require_clean_subject=True,
+        require_trusted_config=True,
+    )
+    assert result["passed"] is True
+    assert result["reason_codes"] == []
+    assert len(result["expectations"]) == 8
+    assert set(result["expectations"].values()) == {"PASS"}
+
+
+def test_evaluate_receipt_expectations_none_requested_is_vacuous():
+    assert evaluate_receipt_expectations({}) == {
+        "passed": True,
+        "expectations": {},
+        "reason_codes": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "mutate", "code"),
+    [
+        ({"expect_status": "FAILED_VERIFICATION"}, None, "STATUS_MISMATCH"),
+        ({"expect_subject_head": HEX_B}, None, "SUBJECT_HEAD_MISMATCH"),
+        ({"expect_subject_head": HEX_A}, "drop_subject_head", "SUBJECT_HEAD_MISMATCH"),
+        ({"expect_target_tree": HEX_A}, None, "TARGET_TREE_MISMATCH"),
+        ({"expect_config_commit": HEX_B}, None, "CONFIG_SOURCE_MISMATCH"),
+        ({"expect_config_commit": HEX_A}, "worktree_config", "CONFIG_SOURCE_MISMATCH"),
+        ({"expect_issue": 121}, None, "ISSUE_BINDING_MISMATCH"),
+        ({"expect_issue": 120}, "old_context_schema", "ISSUE_BINDING_MISMATCH"),
+        ({"expect_github_repository": "other/repo"}, None, "ISSUE_BINDING_MISMATCH"),
+        ({"require_clean_subject": True}, "dirty", "SUBJECT_NOT_CLEAN"),
+        ({"require_clean_subject": True}, "drop_clean", "SUBJECT_NOT_CLEAN"),
+        ({"require_trusted_config": True}, "worktree_config", "CONFIG_UNTRUSTED"),
+    ],
+)
+def test_evaluate_receipt_expectations_negative(
+    kwargs: dict[str, Any], mutate: str | None, code: str
+):
+    payload = _synthetic_payload()
+    if mutate == "drop_subject_head":
+        del payload["subject_head"]
+    elif mutate == "worktree_config":
+        payload["config_source"] = {"kind": "worktree", "config_drift": False}
+    elif mutate == "old_context_schema":
+        payload["inputs"]["requirements_context"]["schema"] = "nexus.core.issue-binding-context.v1"
+    elif mutate == "dirty":
+        payload["subject_clean"] = False
+    elif mutate == "drop_clean":
+        del payload["subject_clean"]
+
+    result = evaluate_receipt_expectations(payload, **kwargs)
+
+    assert result["passed"] is False
+    assert result["reason_codes"] == [code]
+    assert "FAIL" in result["expectations"].values()
+
+
+def _run_receipt_check(
+    receipt_path: Path, repo: Path, *extra: str, capsys: pytest.CaptureFixture[str]
+) -> tuple[int, dict[str, Any], str]:
+    code = cli_main(["receipt-check", "--receipt", str(receipt_path), "--repo", str(repo), *extra])
+    captured = capsys.readouterr()
+    return code, json.loads(captured.out), captured.err
+
+
+def test_receipt_check_cli_expectations_pass_on_real_receipt(
+    external_repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    receipt = _committed_change_receipt(external_repo)
+    path = _only_receipt(external_repo)
+    head = receipt["subject_head"].removeprefix("git-commit:")
+    tree = receipt["target_tree"].removeprefix("git-tree:")
+    base = receipt["config_source"]["commit"]
+
+    code, payload, err = _run_receipt_check(
+        path,
+        external_repo,
+        "--expect-status",
+        "VERIFIED",
+        "--expect-subject-head",
+        head,
+        "--expect-target-tree",
+        tree,
+        "--expect-config-commit",
+        base,
+        "--require-clean-subject",
+        "--require-trusted-config",
+        capsys=capsys,
+    )
+
+    assert code == 0, (payload, err)
+    assert payload["valid"] is True
+    assert set(payload["expectations"].values()) == {"PASS"}
+    assert len(payload["expectations"]) == 6
+    assert err == ""
+
+
+@pytest.mark.parametrize(
+    ("flag", "value", "code"),
+    [
+        ("--expect-status", "FAILED_VERIFICATION", "STATUS_MISMATCH"),
+        ("--expect-subject-head", HEX_A, "SUBJECT_HEAD_MISMATCH"),
+        ("--expect-target-tree", HEX_A, "TARGET_TREE_MISMATCH"),
+        ("--expect-config-commit", HEX_A, "CONFIG_SOURCE_MISMATCH"),
+        ("--expect-issue", "7", "ISSUE_BINDING_MISMATCH"),
+        ("--expect-github-repository", "owner/name", "ISSUE_BINDING_MISMATCH"),
+    ],
+)
+def test_receipt_check_cli_expectation_mismatch_exits_2(
+    external_repo: Path,
+    capsys: pytest.CaptureFixture[str],
+    flag: str,
+    value: str,
+    code: str,
+):
+    _committed_change_receipt(external_repo)
+    path = _only_receipt(external_repo)
+
+    exit_code, payload, err = _run_receipt_check(path, external_repo, flag, value, capsys=capsys)
+
+    assert exit_code == 2
+    assert payload["valid"] is False
+    assert code in payload["reason_codes"]
+    assert payload["expectations"][flag.removeprefix("--")] == "FAIL"
+    assert code in err
+
+
+def test_receipt_check_cli_require_clean_subject_fails_for_dirty_worktree(
+    external_repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+
+    code, payload, err = _run_receipt_check(
+        result["receipt_path"], external_repo, "--require-clean-subject", capsys=capsys
+    )
+
+    assert code == 2
+    assert "SUBJECT_NOT_CLEAN" in payload["reason_codes"]
+    assert payload["expectations"] == {"require-clean-subject": "FAIL"}
+    assert "SUBJECT_NOT_CLEAN" in err
+
+
+def test_receipt_check_cli_tampered_receipt_with_passing_expectations_still_fails(
+    external_repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    receipt = _committed_change_receipt(external_repo)
+    path = _only_receipt(external_repo)
+    receipt["subject_head"] = f"git-commit:{HEX_A}"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    code, payload, _err = _run_receipt_check(
+        path, external_repo, "--expect-subject-head", HEX_A, capsys=capsys
+    )
+
+    assert code == 1
+    assert payload["valid"] is False
+    assert payload["expectations"] == {"expect-subject-head": "PASS"}
+    assert "RECEIPT_HASH_MISMATCH" in payload["reason_codes"]
+
+
+@pytest.mark.parametrize("bad", ["abc", "A" * 40, "g" * 40, "a" * 39])
+def test_receipt_check_cli_rejects_malformed_hex_argument(bad: str):
+    with pytest.raises(SystemExit) as raised:
+        build_parser().parse_args(["receipt-check", "--receipt", "x", "--expect-target-tree", bad])
+    assert raised.value.code == 2
