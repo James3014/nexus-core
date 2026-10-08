@@ -361,7 +361,7 @@ def _print_config_source(result: dict) -> None:
     if source.get("kind") == "base-ref":
         print(f"config: trusted ({source['ref']}@{source['commit'][:12]})")
     else:
-        print("config: untrusted (not committed on base ref)")
+        print(f"config: untrusted (not committed on {result.get('base_ref', 'base ref')})")
 
 
 def cmd_check(args: argparse.Namespace) -> int:

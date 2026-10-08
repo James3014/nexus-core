@@ -63,6 +63,7 @@ _CONFIG_V2_KEYS = {
     "materials",
 }
 _CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation"}
+CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS = 900
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 _ISOLATION_KEYS = {"mode", "image", "network"}
@@ -937,6 +938,32 @@ def _run_in_new_session(
         return subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
 
 
+def _ensure_container_image(image: str) -> bool:
+    """Pull the image if absent, outside the verifier timeout. Returns whether it pulled."""
+
+    try:
+        present = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        if present.returncode == 0:
+            return False
+        pulled = subprocess.run(
+            ["docker", "pull", "--quiet", image],
+            capture_output=True,
+            check=False,
+            timeout=CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise LocalCheckError("ISOLATION_IMAGE_UNAVAILABLE", f"{image}: {exc}") from exc
+    if pulled.returncode != 0:
+        tail = pulled.stderr.decode("utf-8", errors="replace").strip()[-500:]
+        raise LocalCheckError("ISOLATION_IMAGE_UNAVAILABLE", f"{image}: {tail}")
+    return True
+
+
 def _run_verifier_isolated(
     repo: Path,
     snapshot: _GitSnapshot,
@@ -955,6 +982,8 @@ def _run_verifier_isolated(
     isolation = _isolation_settings(config)
     if isolation["mode"] == "container" and shutil.which("docker") is None:
         raise LocalCheckError("ISOLATION_UNAVAILABLE", "docker is not installed")
+    if isolation["mode"] == "container":
+        isolation["image_pulled"] = _ensure_container_image(isolation["image"])
 
     source_head = _git_stdout(repo, "rev-parse", "HEAD^{commit}")
     execution_subject = {
@@ -1630,6 +1659,7 @@ def check_repository(
         "transport_error": False,
         "receipt_path": receipt_path,
         "config_source": config_source,
+        "base_ref": config["base_ref"],
     }
 
 
