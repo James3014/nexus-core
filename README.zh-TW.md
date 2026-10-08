@@ -41,7 +41,7 @@ PyPI：https://pypi.org/project/nexus-certify/
 PyPI 上的版本是 `0.1.3`。`main` 分支已包含下文所述較新的受信任設定檔、隔離與簽章收據功能，之後會發布新版。在那之前，若需要這些功能，請從固定的 commit 安裝：
 
 ```bash
-python -m pip install "git+https://github.com/James3014/nexus-core.git@d26204c394adae5b0d344f1cf06fd80c55d1a8a7"
+python -m pip install "git+https://github.com/James3014/nexus-core.git@c293dc944fe99652ae8856d732a35b5191f52a5e"
 ```
 
 ## 5 分鐘開始（本機）
@@ -136,7 +136,7 @@ nexus-certify issue-check --issue 42 --require-trusted-config
 把 [`docs/examples/github-repository-check.yml`](docs/examples/github-repository-check.yml) 複製到 `.github/workflows/`。把 `expected-identity` 中的 `OWNER/REPO` 換成你的 repository，並讓 workflow 檔名保持一致。範例把兩個 action 都固定在這個 commit：
 
 ```text
-d26204c394adae5b0d344f1cf06fd80c55d1a8a7
+c293dc944fe99652ae8856d732a35b5191f52a5e
 ```
 
 一律固定到完整的 40 字元 commit，不要使用 tag 或分支。

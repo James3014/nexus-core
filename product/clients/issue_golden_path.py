@@ -234,7 +234,7 @@ def _issue_evidence_universe_marker(contract: Mapping[str, Any]) -> str | None:
     malformed = False
     for line in body.splitlines():
         stripped = line.strip()
-        if "NEXUS_CORE_EVIDENCE_UNIVERSE" not in stripped:
+        if not stripped.startswith("<!--") or "NEXUS_CORE_EVIDENCE_UNIVERSE" not in stripped:
             continue
         if not (
             stripped.startswith(ISSUE_EVIDENCE_MARKER_PREFIX)
