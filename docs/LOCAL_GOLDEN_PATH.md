@@ -225,6 +225,33 @@ Receipt validation recomputes the config, manifest, verifier artifact, envelope,
 and Core response, and can compare the preserved manifest with the referenced Git
 objects still present in the repository.
 
+## Receipt subject binding and `receipt-check` expectations
+
+Every receipt (success and failure) also records, inside the envelope hash,
+`subject_head` (`git-commit:<HEAD sha>`), `subject_head_tree`
+(`git-tree:<HEAD tree sha>`) when HEAD resolves, and `subject_clean`
+(`target_tree == subject_head_tree`). Older receipts without these fields still
+validate.
+
+`nexus-certify receipt-check <receipt>` can additionally fail closed (exit 2,
+reported under `expectations` in the JSON):
+
+| Flag | Reason code on mismatch |
+| --- | --- |
+| `--expect-status VERIFIED` | `STATUS_MISMATCH` |
+| `--expect-subject-head <40-hex>` | `SUBJECT_HEAD_MISMATCH` |
+| `--expect-target-tree <40-hex>` | `TARGET_TREE_MISMATCH` |
+| `--expect-config-commit <40-hex>` | `CONFIG_SOURCE_MISMATCH` (also requires `config_source.kind == "base-ref"`) |
+| `--expect-issue <N>` | `ISSUE_BINDING_MISMATCH` |
+| `--expect-github-repository owner/name` | `ISSUE_BINDING_MISMATCH` |
+| `--require-clean-subject` | `SUBJECT_NOT_CLEAN` |
+| `--require-trusted-config` | `CONFIG_UNTRUSTED` |
+
+Local receipts are unsigned and advisory: anyone with filesystem access can
+replace them. The CI-produced receipt, signed with Sigstore keyless signing by the
+workflow identity and checked by the `receipt-verify` action, is the authority.
+See [`GITHUB_REPOSITORY_CHECK.md`](GITHUB_REPOSITORY_CHECK.md).
+
 ## Published-artifact fresh-environment canary contract
 
 G4 may claim the fresh-environment canary only when all of these are observed in a

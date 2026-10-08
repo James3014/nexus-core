@@ -1,0 +1,201 @@
+name: Nexus Core receipt verify
+description: >-
+  Consumes the receipt and Sigstore bundle produced by the issue-gate action.
+  Verifies the keyless signature against the expected GitHub workflow identity,
+  then runs nexus-certify receipt-check with every expectation (VERIFIED status,
+  exact PR head, exact head tree, base-ref config commit, Issue binding, clean
+  subject, trusted config). Any failure is a non-zero exit. The calling job needs
+  only 'contents: read' and 'actions: read'; it never checks out candidate code.
+
+inputs:
+  artifact-name:
+    description: Name of the artifact uploaded by issue-gate (output 'artifact-name').
+    required: true
+  expected-identity:
+    description: >-
+      Full Sigstore certificate identity of the signing workflow, e.g.
+      https://github.com/OWNER/REPO/.github/workflows/<file>.yml@refs/heads/main
+    required: true
+  github-repository:
+    description: "'owner/name' of the repository that must have produced the signature."
+    required: true
+  head-sha:
+    description: 40-hex pull request head commit the receipt must describe.
+    required: true
+  base-sha:
+    description: 40-hex base commit whose config the receipt must have used.
+    required: true
+  issue-number:
+    description: Positive Issue number the receipt must be bound to.
+    required: true
+  nexus-certify-source:
+    description: "'ref' installs from a pinned nexus-core commit; 'path' installs from a trusted local checkout."
+    required: false
+    default: ref
+  nexus-certify-ref:
+    description: "40-hex nexus-core commit sha to install from (required when nexus-certify-source is 'ref')."
+    required: false
+    default: ""
+  nexus-certify-path:
+    description: "Trusted local source directory (used when nexus-certify-source is 'path')."
+    required: false
+    default: ""
+  python-version:
+    description: Python version installed by uv.
+    required: false
+    default: "3.11"
+  sigstore-version:
+    description: Exact sigstore release used for verification.
+    required: false
+    default: "4.5.0"
+
+outputs:
+  receipt-sha256:
+    description: SHA-256 of the verified receipt.
+    value: ${{ steps.verify.outputs.receipt-sha256 }}
+  verified:
+    description: "'true' only when signature and every receipt-check expectation passed."
+    value: ${{ steps.verify.outputs.verified }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        IN_ARTIFACT: ${{ inputs.artifact-name }}
+        IN_IDENTITY: ${{ inputs.expected-identity }}
+        IN_REPO: ${{ inputs.github-repository }}
+        IN_HEAD: ${{ inputs.head-sha }}
+        IN_BASE: ${{ inputs.base-sha }}
+        IN_ISSUE: ${{ inputs.issue-number }}
+        IN_SOURCE: ${{ inputs.nexus-certify-source }}
+        IN_REF: ${{ inputs.nexus-certify-ref }}
+        IN_PATH: ${{ inputs.nexus-certify-path }}
+        IN_PYTHON: ${{ inputs.python-version }}
+        IN_SIGSTORE: ${{ inputs.sigstore-version }}
+      run: |
+        set -euo pipefail
+        fail() { echo "NEXUS_CORE_VERIFY_INPUT_INVALID: $1" >&2; exit 1; }
+        [[ "$IN_ARTIFACT" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "artifact-name"
+        [[ "$IN_IDENTITY" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/[A-Za-z0-9_./-]+@refs/[A-Za-z0-9_./-]+$ ]] || fail "expected-identity"
+        [[ "$IN_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "github-repository must be owner/name"
+        [[ "$IN_HEAD" =~ ^[0-9a-f]{40}$ ]] || fail "head-sha must be 40-hex"
+        [[ "$IN_BASE" =~ ^[0-9a-f]{40}$ ]] || fail "base-sha must be 40-hex"
+        [[ "$IN_ISSUE" =~ ^[1-9][0-9]*$ ]] || fail "issue-number must be a positive integer"
+        [[ "$IN_PYTHON" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "python-version"
+        [[ "$IN_SIGSTORE" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "sigstore-version must be an exact release"
+        case "$IN_SOURCE" in
+          ref) [[ "$IN_REF" =~ ^[0-9a-f]{40}$ ]] || fail "nexus-certify-ref must be 40-hex" ;;
+          path) [ -n "$IN_PATH" ] || fail "nexus-certify-path must be set" ;;
+          *) fail "nexus-certify-source must be 'ref' or 'path'" ;;
+        esac
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.1
+
+    - name: Install pinned nexus-certify
+      shell: bash
+      env:
+        IN_SOURCE: ${{ inputs.nexus-certify-source }}
+        IN_REF: ${{ inputs.nexus-certify-ref }}
+        IN_PATH: ${{ inputs.nexus-certify-path }}
+        IN_PYTHON: ${{ inputs.python-version }}
+        UV_TOOL_DIR: ${{ runner.temp }}/nexus-core-tools
+        UV_TOOL_BIN_DIR: ${{ runner.temp }}/nexus-core-bin
+      run: |
+        set -euo pipefail
+        uv python install "$IN_PYTHON"
+        mkdir -p "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR"
+        if [ "$IN_SOURCE" = "ref" ]; then
+          uv tool install --force --python "$IN_PYTHON" "git+https://github.com/James3014/nexus-core.git@${IN_REF}"
+        else
+          uv tool install --force --python "$IN_PYTHON" "$IN_PATH"
+        fi
+        "$UV_TOOL_BIN_DIR/nexus-certify" --help >/dev/null
+        echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
+
+    - name: Download receipt artifact
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/nexus-core-receipt-artifact
+
+    - name: Locate exactly one receipt and bundle
+      id: locate
+      shell: bash
+      env:
+        ARTIFACT_DIR: ${{ runner.temp }}/nexus-core-receipt-artifact
+      run: |
+        set -euo pipefail
+        mapfile -t bundles < <(find "$ARTIFACT_DIR" -type f -name '*.sigstore.json' | sort)
+        mapfile -t receipts < <(find "$ARTIFACT_DIR" -type f -name '*.json' ! -name '*.sigstore.json' | sort)
+        if [ "${#bundles[@]}" -ne 1 ] || [ "${#receipts[@]}" -ne 1 ]; then
+          echo "NEXUS_CORE_VERIFY_ARTIFACT_INVALID: expected exactly one receipt and one bundle, found ${#receipts[@]} receipt(s) and ${#bundles[@]} bundle(s)" >&2
+          exit 1
+        fi
+        if [ "${bundles[0]}" != "${receipts[0]}.sigstore.json" ]; then
+          echo "NEXUS_CORE_VERIFY_ARTIFACT_INVALID: bundle does not belong to receipt" >&2
+          exit 1
+        fi
+        {
+          echo "receipt=${receipts[0]}"
+          echo "bundle=${bundles[0]}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Verify Sigstore signature and workflow identity
+      shell: bash
+      env:
+        RECEIPT: ${{ steps.locate.outputs.receipt }}
+        BUNDLE: ${{ steps.locate.outputs.bundle }}
+        IDENTITY: ${{ inputs.expected-identity }}
+        REPO: ${{ inputs.github-repository }}
+        SIGSTORE_VERSION: ${{ inputs.sigstore-version }}
+      run: |
+        set -euo pipefail
+        uvx --from "sigstore==${SIGSTORE_VERSION}" sigstore verify github \
+          --cert-identity "$IDENTITY" \
+          --repository "$REPO" \
+          --bundle "$BUNDLE" \
+          "$RECEIPT"
+
+    - name: Resolve expected head tree
+      id: tree
+      shell: bash
+      env:
+        REPO: ${{ inputs.github-repository }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        WORK: ${{ runner.temp }}/nexus-core-head-tree
+      run: |
+        set -euo pipefail
+        rm -rf "$WORK"
+        git init -q "$WORK"
+        git -C "$WORK" fetch -q --depth 1 "https://github.com/${REPO}" "$HEAD_SHA"
+        tree="$(git -C "$WORK" rev-parse 'FETCH_HEAD^{tree}')"
+        [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || { echo "NEXUS_CORE_VERIFY_TREE_UNRESOLVED" >&2; exit 1; }
+        echo "tree=$tree" >> "$GITHUB_OUTPUT"
+
+    - name: Check receipt against every expectation
+      id: verify
+      shell: bash
+      env:
+        RECEIPT: ${{ steps.locate.outputs.receipt }}
+        TREE: ${{ steps.tree.outputs.tree }}
+        REPO: ${{ inputs.github-repository }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        ISSUE: ${{ inputs.issue-number }}
+      run: |
+        set -euo pipefail
+        echo "verified=false" >> "$GITHUB_OUTPUT"
+        nexus-certify receipt-check "$RECEIPT" \
+          --expect-status VERIFIED \
+          --expect-subject-head "$HEAD_SHA" \
+          --expect-target-tree "$TREE" \
+          --expect-config-commit "$BASE_SHA" \
+          --expect-issue "$ISSUE" \
+          --expect-github-repository "$REPO" \
+          --require-clean-subject \
+          --require-trusted-config
+        echo "receipt-sha256=$(sha256sum "$RECEIPT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        echo "verified=true" >> "$GITHUB_OUTPUT"

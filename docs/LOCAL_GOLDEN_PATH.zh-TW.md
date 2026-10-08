@@ -206,6 +206,31 @@ envelope hash 會涵蓋 envelope hash 自己以外的所有欄位。
 
 receipt validation 會重新計算 config、manifest、verifier artifact、envelope 與 Core response；如果 referenced Git objects 仍存在，也可以把 receipt 中的 manifest 與 repository 的真實 Git objects 再次比較。
 
+## Receipt subject binding 與 `receipt-check` expectations
+
+每張 receipt（成功與失敗皆然）也會在 envelope hash 內記錄 `subject_head`
+（`git-commit:<HEAD sha>`）、HEAD 可解析時的 `subject_head_tree`
+（`git-tree:<HEAD tree sha>`），以及 `subject_clean`（`target_tree == subject_head_tree`）。
+缺少這些欄位的舊 receipt 仍可通過驗證。
+
+`nexus-certify receipt-check <receipt>` 可額外 fail closed（exit 2，並在 JSON 的
+`expectations` 中回報）：
+
+| Flag | 不符時的 reason code |
+| --- | --- |
+| `--expect-status VERIFIED` | `STATUS_MISMATCH` |
+| `--expect-subject-head <40-hex>` | `SUBJECT_HEAD_MISMATCH` |
+| `--expect-target-tree <40-hex>` | `TARGET_TREE_MISMATCH` |
+| `--expect-config-commit <40-hex>` | `CONFIG_SOURCE_MISMATCH`（同時要求 `config_source.kind == "base-ref"`） |
+| `--expect-issue <N>` | `ISSUE_BINDING_MISMATCH` |
+| `--expect-github-repository owner/name` | `ISSUE_BINDING_MISMATCH` |
+| `--require-clean-subject` | `SUBJECT_NOT_CLEAN` |
+| `--require-trusted-config` | `CONFIG_UNTRUSTED` |
+
+本機 receipt 未簽章，僅供參考（advisory）：任何擁有檔案系統權限的人都能取代它。
+以 workflow identity 透過 Sigstore keyless 簽章、並由 `receipt-verify` action 檢查的
+CI receipt 才是權威。詳見 [`GITHUB_REPOSITORY_CHECK.md`](GITHUB_REPOSITORY_CHECK.md)。
+
 ## Published-artifact fresh-environment canary contract
 
 只有在全新 temporary environment 中觀察到以下條件，G4 才能宣稱 fresh-environment canary 成立。環境中不得預先存在其他 Nexus sibling repository 或 Nexus service state。
