@@ -165,6 +165,10 @@ Verifier 執行前，Core 會先證明 bind mount 是真的：在沙箱父目錄
 `mount_probe = "PASS"` 以及 image 是否經過 pull。
 Receipt 會記錄 mode、image 與 network。`process` 模式無法限制呼叫者的 OS 權限。
 
+## 忽略殘留（ignored residue）政策
+
+殘留政策為 `sandbox-only`：原始 repository 中被忽略的檔案（`.venv`、`__pycache__`、`node_modules`、各種 cache）不會阻擋 `check`，因為 verifier 在由 repository objects 建立的隔離 detached clone 內執行，看不到這些檔案。verifier 在沙箱內修改 tracked／非忽略檔案仍會以 `VERIFIER_SUBJECT_MUTATED` 失敗；receipt 會記錄 `residue_policy = "sandbox-only"`；`doctor` 只以資訊性數量回報原始 repository 的忽略路徑，不視為失敗。
+
 ## Fail-closed negative controls
 
 遇到以下任何情況，`check` 都不會產生 `VERIFIED`：

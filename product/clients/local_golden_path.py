@@ -550,6 +550,11 @@ def doctor_repository(path: str | Path = ".") -> dict[str, Any]:
         reasons.append(exc.reason_code)
 
     try:
+        checks["ignored_residue"] = f"{len(_list_ignored_residue(repo))} paths (informational)"
+    except LocalCheckError:
+        checks["ignored_residue"] = "unknown (informational)"
+
+    try:
         _resolve_base_and_head(repo, config["base_ref"])
         checks["base_ref"] = "OK"
     except LocalCheckError as exc:
@@ -685,7 +690,16 @@ def _manifest_from_trees(repo: Path, source_tree: str, target_tree: str) -> dict
     }
 
 
+RESIDUE_POLICY = "sandbox-only"
+
+
 def _check_ignored_residue(repo: Path) -> None:
+    ignored_paths = _list_ignored_residue(repo)
+    if ignored_paths:
+        raise LocalCheckError("IGNORED_RESIDUE", ", ".join(ignored_paths))
+
+
+def _list_ignored_residue(repo: Path) -> list[str]:
     ignored = _run_git(
         repo,
         "ls-files",
@@ -710,15 +724,11 @@ def _check_ignored_residue(repo: Path) -> None:
             if path_str == CONFIG_DIRECTORY or path_str.startswith(f"{CONFIG_DIRECTORY}/"):
                 continue
             ignored_paths.append(path_str)
-
-    if ignored_paths:
-        raise LocalCheckError("IGNORED_RESIDUE", ", ".join(ignored_paths))
+    return ignored_paths
 
 
 def _snapshot(repo: Path, base_ref: str) -> _GitSnapshot:
     source_commit, head = _resolve_base_and_head(repo, base_ref)
-
-    _check_ignored_residue(repo)
 
     source_tree = _git_stdout(repo, "rev-parse", f"{source_commit}^{{tree}}")
     target_tree = _materialize_target_tree(repo, head)
@@ -1376,6 +1386,7 @@ def _base_receipt(
     receipt.update(_subject_fields(repo, snapshot))
     if config_source is not None:
         receipt["config_source"] = dict(config_source)
+        receipt["residue_policy"] = RESIDUE_POLICY
     if config_version in {None, CONFIG_VERSION}:
         receipt["verifier"] = dict(artifacts[0]) if artifacts else None
     else:
@@ -1650,21 +1661,6 @@ def check_repository(
                 artifacts=artifacts,
                 requirements_context=requirements_context,
             )
-
-    try:
-        _check_ignored_residue(repo)
-    except LocalCheckError as exc:
-        _raise_with_receipt(
-            repo,
-            exc.reason_code,
-            exc.detail,
-            config=config,
-            config_hash=config_hash,
-            config_source=config_source,
-            snapshot=snapshot,
-            artifacts=artifacts,
-            requirements_context=requirements_context,
-        )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
     if post_tree != snapshot.target_tree:
@@ -1943,6 +1939,8 @@ def validate_verification_receipt_payload(
     if "subject_clean" in payload and not (
         payload["subject_clean"] is None or isinstance(payload["subject_clean"], bool)
     ):
+        reasons.append("MALFORMED_RECEIPT")
+    if "residue_policy" in payload and payload["residue_policy"] != RESIDUE_POLICY:
         reasons.append("MALFORMED_RECEIPT")
     if "config_source" in payload:
         source = payload["config_source"]

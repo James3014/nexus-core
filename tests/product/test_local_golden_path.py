@@ -313,19 +313,17 @@ def test_check_fails_closed_when_there_are_no_changes(external_repo: Path):
         check_repository(external_repo)
 
 
-def test_check_fails_closed_on_ignored_out_of_scope_dist_residue(external_repo: Path):
+def test_check_allows_ignored_out_of_scope_dist_residue(external_repo: Path):
     _init(external_repo, patterns=("*.py",))
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
     (external_repo / "dist").mkdir()
     (external_repo / "dist" / ".gitignore").write_text("*\n", encoding="utf-8")
     (external_repo / "dist" / "secret.txt").write_text("secret\n", encoding="utf-8")
-    with pytest.raises(LocalCheckError) as raised:
-        check_repository(external_repo)
-    assert raised.value.reason_code == "IGNORED_RESIDUE"
-    assert "dist/secret.txt" in raised.value.detail or "dist/.gitignore" in raised.value.detail
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
 
 
-def test_check_fails_closed_on_ordinary_ignored_build_residue(external_repo: Path):
+def test_check_allows_ordinary_ignored_build_residue(external_repo: Path):
     _init(external_repo, patterns=("*.py",))
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
     (external_repo / ".gitignore").write_text("build/\n", encoding="utf-8")
@@ -333,10 +331,8 @@ def test_check_fails_closed_on_ordinary_ignored_build_residue(external_repo: Pat
     _git(external_repo, "commit", "-m", "add gitignore")
     (external_repo / "build").mkdir()
     (external_repo / "build" / "output.o").write_text("binary\n", encoding="utf-8")
-    with pytest.raises(LocalCheckError) as raised:
-        check_repository(external_repo)
-    assert raised.value.reason_code == "IGNORED_RESIDUE"
-    assert "build/output.o" in raised.value.detail
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
 
 
 def test_check_allows_nexus_core_config_and_receipts(external_repo: Path):
@@ -365,20 +361,18 @@ def test_check_preserves_tracked_nexus_core_config_in_target_tree(external_repo:
     assert config.read_text(encoding="utf-8").startswith("version = 1\n")
 
 
-def test_check_fails_closed_on_ignored_file_under_allowed_pattern(external_repo: Path):
+def test_check_allows_ignored_file_under_allowed_pattern(external_repo: Path):
     _init(external_repo, patterns=("*.py",))
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
     (external_repo / ".gitignore").write_text("app_ignored.py\n", encoding="utf-8")
     _git(external_repo, "add", ".gitignore")
     _git(external_repo, "commit", "-m", "add gitignore")
     (external_repo / "app_ignored.py").write_text("VALUE = 0\n", encoding="utf-8")
-    with pytest.raises(LocalCheckError) as raised:
-        check_repository(external_repo)
-    assert raised.value.reason_code == "IGNORED_RESIDUE"
-    assert "app_ignored.py" in raised.value.detail
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
 
 
-def test_ignored_residue_rejection_preserves_worktree_state(external_repo: Path):
+def test_ignored_residue_check_preserves_worktree_state(external_repo: Path):
     _init(external_repo, patterns=("*.py",))
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
     (external_repo / "staged.py").write_text("VALUE = 5\n", encoding="utf-8")
@@ -392,15 +386,59 @@ def test_ignored_residue_rejection_preserves_worktree_state(external_repo: Path)
 
     (external_repo / "ignored.py").write_text("ignored\n", encoding="utf-8")
 
-    with pytest.raises(LocalCheckError) as raised:
-        check_repository(external_repo)
-    assert raised.value.reason_code == "IGNORED_RESIDUE"
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
 
     head_after = _git(external_repo, "rev-parse", "HEAD")
     status_after = _git(external_repo, "status", "--porcelain")
 
     assert head_after == head_before
     assert status_after == status_before
+
+
+def test_check_verifies_checkout_with_venv_and_pycache(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / ".gitignore").write_text(".venv/\n__pycache__/\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    (external_repo / ".venv" / "bin").mkdir(parents=True)
+    (external_repo / ".venv" / "bin" / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+    (external_repo / "__pycache__").mkdir()
+    (external_repo / "__pycache__" / "x.pyc").write_bytes(b"\0")
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["residue_policy"] == "sandbox-only"
+    assert validate_verification_receipt(result["receipt_path"])["valid"] is True
+
+
+def test_doctor_reports_ignored_residue_informationally(external_repo: Path):
+    _init(external_repo, patterns=("*.py",))
+    (external_repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    _git(external_repo, "add", ".gitignore")
+    _git(external_repo, "commit", "-m", "add gitignore")
+    (external_repo / "__pycache__").mkdir()
+    (external_repo / "__pycache__" / "x.pyc").write_bytes(b"\0")
+
+    report = doctor_repository(external_repo)
+
+    assert report["checks"]["ignored_residue"] == "1 paths (informational)"
+    assert "IGNORED_RESIDUE" not in report["reason_codes"]
+
+
+def test_receipt_rejects_unknown_residue_policy(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
+    _init(external_repo)
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    receipt["residue_policy"] = "none"
+    path = result["receipt_path"].with_name("bad-policy.json")
+    _write_receipt(path, receipt)
+
+    assert "MALFORMED_RECEIPT" in validate_verification_receipt(path)["reason_codes"]
 
 
 def test_receipt_rejects_tampered_manifest_and_result(external_repo: Path, tmp_path: Path):
@@ -584,7 +622,7 @@ def test_check_allows_verifier_created_ignored_residue_in_isolated_subject(
     assert receipt["verifier"]["execution_subject"]["target_tree"] == receipt["target_tree"]
 
 
-def test_check_fails_closed_when_verifier_escapes_and_creates_ignored_residue(
+def test_check_ignores_verifier_escape_writing_ignored_file_in_original(
     external_repo: Path,
 ):
     (external_repo / "app.py").write_text("VALUE = 5\n", encoding="utf-8")
@@ -605,14 +643,10 @@ def test_check_fails_closed_when_verifier_escapes_and_creates_ignored_residue(
         verifier_command=(sys.executable, "mutate.py"),
     )
 
-    with pytest.raises(LocalCheckError) as raised:
-        check_repository(external_repo)
+    result = check_repository(external_repo)
 
-    assert raised.value.reason_code == "IGNORED_RESIDUE"
-    assert "dist/.gitignore" in raised.value.detail
-    assert raised.value.receipt_path is not None
-    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
-    assert receipt["verifier"] is not None
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     assert receipt["verifier"]["status"] == "PASS"
 
 
