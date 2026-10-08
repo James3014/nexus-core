@@ -41,7 +41,7 @@ PyPI: https://pypi.org/project/nexus-certify/
 PyPI has `0.1.3`. The `main` branch contains the newer trusted-config, isolation and signed-receipt features described below. A release will follow. Until then, install from a pinned commit if you need them:
 
 ```bash
-python -m pip install "git+https://github.com/James3014/nexus-core.git@d26204c394adae5b0d344f1cf06fd80c55d1a8a7"
+python -m pip install "git+https://github.com/James3014/nexus-core.git@c293dc944fe99652ae8856d732a35b5191f52a5e"
 ```
 
 ## Start in 5 minutes (local)
@@ -136,7 +136,7 @@ nexus-certify issue-check --issue 42 --require-trusted-config
 Copy [`docs/examples/github-repository-check.yml`](docs/examples/github-repository-check.yml) to `.github/workflows/`. Replace `OWNER/REPO` in `expected-identity` with your repository and keep the workflow file name in sync. The example pins both actions to this commit:
 
 ```text
-d26204c394adae5b0d344f1cf06fd80c55d1a8a7
+c293dc944fe99652ae8856d732a35b5191f52a5e
 ```
 
 Always pin to a full 40-character commit, never a tag or branch.

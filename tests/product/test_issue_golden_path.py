@@ -463,3 +463,31 @@ def test_issue_identity_uses_effective_base_ref_config_and_requires_trust(
     assert result["status"] == "VERIFIED"
     assert result["config_source"]["kind"] == "base-ref"
     assert result["config_source"]["config_drift"] is False
+
+
+_MARKER_HASH = "sha256:" + "a" * 64
+_MALFORMED = "ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED"
+
+
+def test_evidence_universe_marker_ignores_prose_mentions() -> None:
+    body = (
+        "The `NEXUS_CORE_EVIDENCE_UNIVERSE` marker binds evidence.\n"
+        f"<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {_MARKER_HASH} -->\n"
+    )
+    assert issue_gp._issue_evidence_universe_marker({"body": body}) == _MARKER_HASH
+
+
+def test_evidence_universe_marker_two_exact_markers_malformed() -> None:
+    line = f"<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {_MARKER_HASH} -->"
+    with pytest.raises(LocalCheckError, match=_MALFORMED):
+        issue_gp._issue_evidence_universe_marker({"body": f"{line}\n{line}"})
+
+
+def test_evidence_universe_marker_comment_with_bad_value_malformed() -> None:
+    body = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: nope -->"
+    with pytest.raises(LocalCheckError, match=_MALFORMED):
+        issue_gp._issue_evidence_universe_marker({"body": body})
+
+
+def test_evidence_universe_marker_absent_returns_none() -> None:
+    assert issue_gp._issue_evidence_universe_marker({"body": "no marker here"}) is None
