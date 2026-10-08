@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -22,6 +23,7 @@ from product.clients.local_golden_path import (
     LocalCheckError,
     check_repository,
     doctor_repository,
+    evaluate_receipt_expectations,
     init_repository,
     validate_verification_receipt,
 )
@@ -374,11 +376,45 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "VERIFIED" else 1
 
 
+def _hex40(value: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise argparse.ArgumentTypeError("expected 40 lowercase hex characters")
+    return value
+
+
 def cmd_receipt_check(args: argparse.Namespace) -> int:
     """Project canonical local receipt validation as machine-readable JSON."""
     result = validate_verification_receipt(args.receipt, repo=args.repo)
+    wanted = {
+        "expect_status": args.expect_status,
+        "expect_subject_head": args.expect_subject_head,
+        "expect_target_tree": args.expect_target_tree,
+        "expect_config_commit": args.expect_config_commit,
+        "expect_issue": args.expect_issue,
+        "expect_github_repository": args.expect_github_repository,
+        "require_clean_subject": args.require_clean_subject,
+        "require_trusted_config": args.require_trusted_config,
+    }
+    expectations_failed = False
+    if any(value not in (None, False) for value in wanted.values()):
+        try:
+            payload = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        evaluation = evaluate_receipt_expectations(payload, **wanted)
+        result["expectations"] = evaluation["expectations"]
+        result["reason_codes"] = sorted(
+            {*result.get("reason_codes", []), *evaluation["reason_codes"]}
+        )
+        if not evaluation["passed"]:
+            result["valid"] = False
+            expectations_failed = True
+        if result["reason_codes"]:
+            print("reasons: " + ", ".join(result["reason_codes"]), file=sys.stderr)
     print(json.dumps(result, sort_keys=True))
-    return 0 if result.get("valid") is True else 1
+    if result.get("valid") is True:
+        return 0
+    return 2 if expectations_failed else 1
 
 
 def cmd_evidence_check(args: argparse.Namespace) -> int:
@@ -572,6 +608,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_receipt_check.add_argument(
         "--repo", default=None, help="Optional Git repository for physical manifest readback"
     )
+    p_receipt_check.add_argument("--expect-status", default=None)
+    p_receipt_check.add_argument("--expect-subject-head", default=None, type=_hex40)
+    p_receipt_check.add_argument("--expect-target-tree", default=None, type=_hex40)
+    p_receipt_check.add_argument("--expect-config-commit", default=None, type=_hex40)
+    p_receipt_check.add_argument("--expect-issue", default=None, type=int)
+    p_receipt_check.add_argument("--expect-github-repository", default=None)
+    p_receipt_check.add_argument("--require-clean-subject", action="store_true")
+    p_receipt_check.add_argument("--require-trusted-config", action="store_true")
 
     p_evidence_check = subparsers.add_parser(
         "evidence-check", help="Apply canonical Core evidence applicability to a supplied PR subject"

@@ -66,6 +66,7 @@ _CONFIG_V2_KEYS = {
 _CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation"}
 CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS = 900
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_HEX40_RE = re.compile(r"[0-9a-f]{40}")
 _IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 _ISOLATION_KEYS = {"mode", "image", "network"}
 _REQUIREMENT_MODES = {"REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"}
@@ -1310,8 +1311,29 @@ def _write_receipt(repo: Path, receipt: dict[str, Any]) -> Path:
     return path
 
 
+def _subject_fields(repo: Path | None, snapshot: _GitSnapshot | None) -> dict[str, Any]:
+    """Bind the receipt to the exact HEAD commit/tree it was produced against."""
+
+    if repo is None:
+        return {}
+    head = _run_git(repo, "rev-parse", "--verify", "HEAD^{commit}")
+    if head.returncode != 0 or not _HEX40_RE.fullmatch(head.stdout.strip()):
+        return {}
+    head_sha = head.stdout.strip()
+    tree = _run_git(repo, "rev-parse", "--verify", f"{head_sha}^{{tree}}")
+    if tree.returncode != 0 or not _HEX40_RE.fullmatch(tree.stdout.strip()):
+        return {}
+    tree_sha = tree.stdout.strip()
+    return {
+        "subject_head": f"git-commit:{head_sha}",
+        "subject_head_tree": f"git-tree:{tree_sha}",
+        "subject_clean": (snapshot.target_tree == tree_sha) if snapshot else None,
+    }
+
+
 def _base_receipt(
     *,
+    repo: Path | None = None,
     config: Mapping[str, Any] | None,
     config_hash: str | None,
     snapshot: _GitSnapshot | None,
@@ -1351,6 +1373,7 @@ def _base_receipt(
             "transport_error": False,
         },
     }
+    receipt.update(_subject_fields(repo, snapshot))
     if config_source is not None:
         receipt["config_source"] = dict(config_source)
     if config_version in {None, CONFIG_VERSION}:
@@ -1407,6 +1430,7 @@ def _raise_with_receipt(
     config_source: Mapping[str, Any] | None = None,
 ) -> None:
     receipt = _base_receipt(
+        repo=repo,
         config=config,
         config_hash=config_hash,
         snapshot=snapshot,
@@ -1667,6 +1691,7 @@ def check_repository(
     if http_status != 200:
         reason = response.get("error", {}).get("code", "CORE_REQUEST_REJECTED")
         receipt = _base_receipt(
+            repo=repo,
             config=config,
             config_hash=config_hash,
             config_source=config_source,
@@ -1684,6 +1709,7 @@ def check_repository(
     status = response["verification"]["status"]
     reasons = response["verification"]["reason_codes"]
     receipt = _base_receipt(
+        repo=repo,
         config=config,
         config_hash=config_hash,
         config_source=config_source,
@@ -1706,6 +1732,9 @@ def check_repository(
         "receipt_path": receipt_path,
         "config_source": config_source,
         "base_ref": config["base_ref"],
+        "subject_head": receipt.get("subject_head"),
+        "subject_head_tree": receipt.get("subject_head_tree"),
+        "subject_clean": receipt.get("subject_clean"),
     }
 
 
@@ -1776,6 +1805,96 @@ def _validate_artifact_payload(
     return reasons
 
 
+def _valid_subject_ref(value: Any, prefix: str) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith(prefix)
+        and _HEX40_RE.fullmatch(value[len(prefix) :]) is not None
+    )
+
+
+def evaluate_receipt_expectations(
+    payload: Mapping[str, Any],
+    *,
+    expect_status: str | None = None,
+    expect_subject_head: str | None = None,
+    expect_target_tree: str | None = None,
+    expect_config_commit: str | None = None,
+    expect_issue: int | None = None,
+    expect_github_repository: str | None = None,
+    require_clean_subject: bool = False,
+    require_trusted_config: bool = False,
+) -> dict[str, Any]:
+    """Fail-closed consumer expectations over a receipt payload (pure)."""
+
+    if not isinstance(payload, Mapping):
+        payload = {}
+    outcome = payload.get("outcome")
+    source = payload.get("config_source")
+    source = source if isinstance(source, Mapping) else {}
+    inputs = payload.get("inputs")
+    context = inputs.get("requirements_context") if isinstance(inputs, Mapping) else None
+    context = context if isinstance(context, Mapping) else {}
+    expectations: dict[str, str] = {}
+    reasons: list[str] = []
+
+    def record(flag: str, code: str, ok: bool) -> None:
+        expectations[flag] = "PASS" if ok else "FAIL"
+        if not ok and code not in reasons:
+            reasons.append(code)
+
+    if expect_status is not None:
+        status = outcome.get("status") if isinstance(outcome, Mapping) else None
+        record("expect-status", "STATUS_MISMATCH", status == expect_status)
+    if expect_subject_head is not None:
+        record(
+            "expect-subject-head",
+            "SUBJECT_HEAD_MISMATCH",
+            payload.get("subject_head") == f"git-commit:{expect_subject_head}",
+        )
+    if expect_target_tree is not None:
+        record(
+            "expect-target-tree",
+            "TARGET_TREE_MISMATCH",
+            payload.get("target_tree") == f"git-tree:{expect_target_tree}",
+        )
+    if expect_config_commit is not None:
+        record(
+            "expect-config-commit",
+            "CONFIG_SOURCE_MISMATCH",
+            source.get("kind") == "base-ref" and source.get("commit") == expect_config_commit,
+        )
+    if expect_issue is not None:
+        number = context.get("issue_number")
+        record(
+            "expect-issue",
+            "ISSUE_BINDING_MISMATCH",
+            context.get("schema") == "nexus.core.issue-binding-context.v2"
+            and isinstance(number, int)
+            and not isinstance(number, bool)
+            and number == expect_issue,
+        )
+    if expect_github_repository is not None:
+        record(
+            "expect-github-repository",
+            "ISSUE_BINDING_MISMATCH",
+            context.get("github_repository") == expect_github_repository,
+        )
+    if require_clean_subject:
+        record(
+            "require-clean-subject",
+            "SUBJECT_NOT_CLEAN",
+            payload.get("subject_clean") is True,
+        )
+    if require_trusted_config:
+        record("require-trusted-config", "CONFIG_UNTRUSTED", source.get("kind") == "base-ref")
+    return {
+        "passed": not reasons,
+        "expectations": expectations,
+        "reason_codes": reasons,
+    }
+
+
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
@@ -1815,6 +1934,16 @@ def validate_verification_receipt_payload(
         reasons.append("UNSUPPORTED_RECEIPT")
     if payload.get("receipt_hash") != _receipt_hash(payload):
         reasons.append("RECEIPT_HASH_MISMATCH")
+    if "subject_head" in payload and not _valid_subject_ref(payload["subject_head"], "git-commit:"):
+        reasons.append("MALFORMED_RECEIPT")
+    if "subject_head_tree" in payload and not _valid_subject_ref(
+        payload["subject_head_tree"], "git-tree:"
+    ):
+        reasons.append("MALFORMED_RECEIPT")
+    if "subject_clean" in payload and not (
+        payload["subject_clean"] is None or isinstance(payload["subject_clean"], bool)
+    ):
+        reasons.append("MALFORMED_RECEIPT")
     if "config_source" in payload:
         source = payload["config_source"]
         if (
@@ -2009,6 +2138,7 @@ __all__ = [
     "LocalCheckError",
     "check_repository",
     "doctor_repository",
+    "evaluate_receipt_expectations",
     "init_repository",
     "validate_verification_receipt",
     "validate_verification_receipt_payload",
