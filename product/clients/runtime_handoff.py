@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
+import sys
 import time
 import tomllib
 import urllib.parse
@@ -221,27 +223,84 @@ def _load_handoff_config(repo: Path) -> dict[str, Any]:
     return _validate_handoff_config(value)
 
 
+def _parse_proc_net_tcp_listen_inodes(text: str, port: int) -> set[int]:
+    """Socket inodes of LISTEN rows (state 0A) bound to ``port`` in /proc/net/tcp[6] text."""
+    inodes: set[int] = set()
+    for line in text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 10 or fields[3] != "0A":
+            continue
+        try:
+            local_port = int(fields[1].rsplit(":", 1)[1], 16)
+            inode = int(fields[9])
+        except (IndexError, ValueError):
+            continue
+        if local_port == port and inode != 0:
+            inodes.add(inode)
+    return inodes
+
+
+def _find_pid_for_port_procfs(port: int) -> int | None:
+    """Linux fallback for hosts without lsof: map listening inodes to the lowest owning PID."""
+    inodes: set[int] = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            inodes |= _parse_proc_net_tcp_listen_inodes(Path(table).read_text(), port)
+        except OSError:
+            continue
+    if not inodes:
+        return None
+    targets = {f"socket:[{inode}]" for inode in inodes}
+    try:
+        pids = sorted(int(name) for name in os.listdir("/proc") if name.isdigit())
+    except OSError:
+        return None
+    for pid in pids:
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            entries = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if os.readlink(f"{fd_dir}/{entry}") in targets:
+                    return pid
+            except OSError:
+                continue
+    return None
+
+
 def _find_pid_for_port(port: int) -> int | None:
     """Return the unique local PID that owns a listening TCP port."""
-    try:
-        result = subprocess.run(
-            ["lsof", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            pids = sorted({int(value.strip()) for value in result.stdout.splitlines() if value.strip()})
-            if len(pids) == 1:
-                return pids[0]
-    except (subprocess.SubprocessError, ValueError, OSError):
-        pass
+    if shutil.which("lsof") is not None:
+        try:
+            result = subprocess.run(
+                ["lsof", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = sorted(
+                    {int(value.strip()) for value in result.stdout.splitlines() if value.strip()}
+                )
+                if len(pids) == 1:
+                    return pids[0]
+            return None
+        except subprocess.TimeoutExpired:
+            return None
+        except (subprocess.SubprocessError, ValueError):
+            return None
+        except OSError:
+            pass  # lsof failed to launch; fall through to procfs on Linux
+    if sys.platform.startswith("linux"):
+        return _find_pid_for_port_procfs(port)
     return None
 
 
 def _get_process_start_time(pid: int) -> str | None:
-    """Retrieve process start timestamp using ps."""
+    """Retrieve process start timestamp using ps, or /proc starttime ticks on Linux."""
     try:
         result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "lstart="],
@@ -254,11 +313,19 @@ def _get_process_start_time(pid: int) -> str | None:
             return result.stdout.strip()
     except (subprocess.SubprocessError, OSError):
         pass
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            # comm may contain spaces/parens; fields resume after the last ")".
+            starttime = stat.rsplit(")", 1)[1].split()[19]
+            return f"procfs-starttime-ticks:{int(starttime)}"
+        except (OSError, IndexError, ValueError):
+            pass
     return None
 
 
 def _get_process_executable(pid: int) -> str | None:
-    """Retrieve process command / executable using ps."""
+    """Retrieve process command / executable using ps, or /proc on Linux."""
     try:
         result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "comm="],
@@ -271,6 +338,16 @@ def _get_process_executable(pid: int) -> str | None:
             return result.stdout.strip()
     except (subprocess.SubprocessError, OSError):
         pass
+    if sys.platform.startswith("linux"):
+        try:
+            return os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            pass
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            return comm or None
+        except OSError:
+            pass
     return None
 
 
