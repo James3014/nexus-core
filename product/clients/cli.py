@@ -33,22 +33,7 @@ from product.clients.local_golden_path import (
     init_repository,
     validate_verification_receipt,
 )
-from product.clients.nexus_verify import evaluate_code_change_evidence_subject
-from product.clients.runtime_handoff import (
-    check_handoff,
-    handoff_status,
-    init_handoff,
-)
 from product.protocol.generic_verification import canonical_hash
-from product.runtime.auth import AuthSecurityError, read_bearer_token
-from product.runtime.candidate_acquisition import (
-    make_candidate_acquisition_input_error,
-    run_candidate_acquisition,
-)
-from product.runtime.schemas import (
-    validate_certification_request,
-    validate_receipt_verify_request,
-)
 
 DEFAULT_URL = "http://127.0.0.1:8767"
 HEADER_READ_TIMEOUT_SECONDS = 10.0
@@ -67,6 +52,19 @@ class CertifyArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         sys.stderr.write(f"usage error: {message}\n")
         sys.exit(2)
+
+
+_RUNTIME_HINT = "this command requires: pip install 'nexus-certify[runtime]'"
+
+
+def _require_runtime() -> None:
+    """Fail with exit 2 and an install hint when the optional runtime extra is absent."""
+    try:
+        import aiohttp  # noqa: F401
+    except ModuleNotFoundError as exc:
+        if exc.name is not None and exc.name.split(".")[0] != "aiohttp":
+            raise
+        raise CertifyCLIError(_RUNTIME_HINT, exit_code=2) from exc
 
 
 def _make_http_request(
@@ -114,6 +112,8 @@ def _map_http_status_to_exit_code(status_code: int, payload: dict[str, Any]) -> 
 
 
 def _get_token(token_file: str | None) -> str:
+    from product.runtime.auth import AuthSecurityError, read_bearer_token
+
     try:
         return read_bearer_token(token_file)
     except (AuthSecurityError, ValueError, OSError) as exc:
@@ -121,6 +121,9 @@ def _get_token(token_file: str | None) -> str:
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
+    _require_runtime()
+    from product.runtime.schemas import validate_certification_request
+
     req_path = Path(args.request)
     if not req_path.is_file():
         raise CertifyCLIError(f"request file not found: {args.request}", exit_code=2)
@@ -196,6 +199,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    _require_runtime()
     token = _get_token(args.token_file)
     service_url = args.url.rstrip("/")
     headers = {
@@ -221,6 +225,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_receipt(args: argparse.Namespace) -> int:
+    _require_runtime()
     token = _get_token(args.token_file)
     service_url = args.url.rstrip("/")
     headers = {
@@ -244,6 +249,9 @@ def cmd_receipt(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    _require_runtime()
+    from product.runtime.schemas import validate_receipt_verify_request
+
     receipt_path = Path(args.receipt)
     if not receipt_path.is_file():
         raise CertifyCLIError(f"receipt file not found: {args.receipt}", exit_code=2)
@@ -298,6 +306,12 @@ def cmd_acquire(args: argparse.Namespace) -> int:
     delegates to the runtime facade, emits exactly one JSON result on stdout,
     and returns a non-zero exit code on any error.
     """
+    _require_runtime()
+    from product.runtime.candidate_acquisition import (
+        make_candidate_acquisition_input_error,
+        run_candidate_acquisition,
+    )
+
 
     def emit_input_error(reason_code: str, detail: str) -> int:
         result = make_candidate_acquisition_input_error(reason_code, detail)
@@ -426,6 +440,9 @@ def cmd_receipt_check(args: argparse.Namespace) -> int:
 
 def cmd_evidence_check(args: argparse.Namespace) -> int:
     """Evaluate one supplied exact PR subject through the canonical Core reducer."""
+    _require_runtime()
+    from product.clients.nexus_verify import evaluate_code_change_evidence_subject
+
     try:
         receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -518,6 +535,8 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
 
 
 def cmd_handoff_init(args: argparse.Namespace) -> int:
+    from product.clients.runtime_handoff import init_handoff
+
     services = []
     for service in args.service or []:
         if "=" in service:
@@ -545,6 +564,8 @@ def cmd_handoff_init(args: argparse.Namespace) -> int:
 
 
 def cmd_handoff_check(args: argparse.Namespace) -> int:
+    from product.clients.runtime_handoff import check_handoff
+
     result = check_handoff(args.repo)
     print(f"handoff verification: {result['status']} (not RELEASED)")
     print(f"claim ceiling: {result['claim_ceiling']}")
@@ -556,6 +577,8 @@ def cmd_handoff_check(args: argparse.Namespace) -> int:
 
 
 def cmd_handoff_status(args: argparse.Namespace) -> int:
+    from product.clients.runtime_handoff import handoff_status
+
     result = handoff_status(args.repo)
     print(
         f"handoff status: {result['status']} "

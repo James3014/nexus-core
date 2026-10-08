@@ -56,7 +56,7 @@ jobs:
         run: |
           python -m venv .smoke_venv
           .smoke_venv/bin/pip install dist/nexus_certify-*.whl
-          test "$(.smoke_venv/bin/python -c "import importlib.metadata as m; print(m.version('nexus-certify'))")" = "0.1.3"
+          test "$(.smoke_venv/bin/python -c "import importlib.metadata as m; print(m.version('nexus-certify'))")" = "0.2.0"
           .smoke_venv/bin/nexus-certify --help
           .smoke_venv/bin/nexus-certify issue-init --help
           .smoke_venv/bin/nexus-certify issue-check --help
