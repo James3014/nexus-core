@@ -34,6 +34,8 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
+Golden Path 指令（`init`、`doctor`、`check`、`receipt-check`、`issue-init`、`issue-check`、`markers`）不需要任何第三方套件。HTTP 服務、MCP 與舊式 request 指令需要選用的 extra：`pip install 'nexus-certify[runtime]'`。
+
 PyPI：https://pypi.org/project/nexus-certify/
 
 PyPI 上的版本是 `0.1.3`。`main` 分支已包含下文所述較新的受信任設定檔、隔離與簽章收據功能，之後會發布新版。在那之前，若需要這些功能，請從固定的 commit 安裝：

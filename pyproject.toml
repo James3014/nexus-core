@@ -1,15 +1,15 @@
 [project]
 name = "nexus-certify"
-version = "0.1.3"
+version = "0.2.0"
 description = "Verify code changes with Git-bound evidence and reproducible receipts"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-dependencies = [
-    "aiohttp>=3.9.0",
-    "PyGithub>=2.1.0",
-]
+dependencies = []
+
+[project.optional-dependencies]
+runtime = ["aiohttp>=3.9.0"]
 
 [project.urls]
 Homepage = "https://github.com/James3014/nexus-core"
@@ -26,6 +26,7 @@ dev = [
     "pytest-timeout>=2.3",
     "ruff>=0.15",
     "pyright>=1.1.370",
+    "aiohttp>=3.9.0",
     "httpx>=0.25.0",
     "requests>=2.31.0",
 ]
@@ -37,6 +38,7 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["product*"]
+exclude = ["product.benchmark*"]
 
 [tool.setuptools.package-data]
 "product.execution.profiles" = [

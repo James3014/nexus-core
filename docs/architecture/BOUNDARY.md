@@ -33,6 +33,7 @@
    `product.kernel` handles pure certification logic and must never depend on remote acquisition (`product.acquisition`) or runtime transport (`product.runtime`).
 5. **Benchmark Isolation**:
    `product.benchmark` is an instrumentation harness; no production component outside `product.benchmark` may import it.
+   `product.benchmark` is source-only: it is excluded from the published wheel (`packages.find exclude`) and never ships to installed users.
 
 ## Executable Conformance Enforcement
 Architecture boundaries are deterministically enforced directly from Python AST imports by:

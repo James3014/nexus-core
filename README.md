@@ -34,6 +34,8 @@ python -m pip install nexus-certify
 nexus-certify --help
 ```
 
+The Golden Path commands (`init`, `doctor`, `check`, `receipt-check`, `issue-init`, `issue-check`, `markers`) need no third-party packages. The HTTP service, MCP and legacy request commands need the optional extra: `pip install 'nexus-certify[runtime]'`.
+
 PyPI: https://pypi.org/project/nexus-certify/
 
 PyPI has `0.1.3`. The `main` branch contains the newer trusted-config, isolation and signed-receipt features described below. A release will follow. Until then, install from a pinned commit if you need them:
