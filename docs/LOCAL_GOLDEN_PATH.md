@@ -151,24 +151,34 @@ version = 2
 base_ref = "origin/main"
 allowed_patterns = ["src/**", "tests/**"]
 deletion_policy = "FORBID"
-env_passthrough = ["MY_TEST_FLAG"]   # names only; recorded in the receipt
+universe_generation = 1
+materials = []
+env_passthrough = ["MY_TEST_FLAG"]   # names only; ^[A-Z_][A-Z0-9_]*$, unique; recorded in the receipt
 
 [[verifiers]]
 id = "tests"
 command = ["uv", "run", "pytest", "-q"]
 timeout_seconds = 300
+logical_subject_id = "app/tests"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
 
 [isolation]
-mode = "container"          # "process" (default) | "container"
-image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<digest>"  # digest pin required
-network = "bridge"          # "none" | "bridge" (default "bridge")
+mode = "container"          # exactly "process" (default) | "container"
+image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<64 hex>"  # must end with @sha256:<64 hex>
+network = "bridge"          # exactly "bridge" (default) | "none"
 ```
 
 Container mode runs the verifier via `docker run --rm --network <network>
---user <uid>:<gid> -v <sandbox>:/work -w /work` with only the allowlisted
-environment and the sandbox as the sole mount. The image must be pinned by digest;
-a missing `docker` binary fails closed with `ISOLATION_UNAVAILABLE`, and a
-non-digest image with `INVALID_CONFIG`. The receipt records mode, image and
+--user <uid>:<gid>` with the sandbox parent directory as the only mount
+(`/sandbox`), working directory `/sandbox/repo`, `HOME=/sandbox/home`,
+`TMPDIR=/sandbox/tmp`, and only the allowlisted environment. The image must end
+with `@sha256:<64 hex>`; a missing `docker` binary fails closed with
+`ISOLATION_UNAVAILABLE`, and a non-digest image or an invalid `[isolation]`/
+`env_passthrough` value with `INVALID_CONFIG`. The image is pulled before the
+verifier timeout starts, and a pull failure is `ISOLATION_IMAGE_UNAVAILABLE`.
+The receipt records mode, image and
 network. `process` mode does not contain the OS capabilities of the invoking user.
 
 ## Fail-closed negative controls

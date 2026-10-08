@@ -131,23 +131,32 @@ version = 2
 base_ref = "origin/main"
 allowed_patterns = ["src/**", "tests/**"]
 deletion_policy = "FORBID"
-env_passthrough = ["MY_TEST_FLAG"]   # names only; recorded in the receipt
+universe_generation = 1
+materials = []
+env_passthrough = ["MY_TEST_FLAG"]   # names only; ^[A-Z_][A-Z0-9_]*$, unique; recorded in the receipt
 
 [[verifiers]]
 id = "tests"
 command = ["uv", "run", "pytest", "-q"]
 timeout_seconds = 300
+logical_subject_id = "app/tests"
+evidence_kind = "test-result"
+requirement_mode = "REQUIRED"
+applicability = "APPLICABLE"
 
 [isolation]
-mode = "container"          # "process" (default) | "container"
-image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<digest>"  # digest pin required
-network = "bridge"          # "none" | "bridge" (default "bridge")
+mode = "container"          # exactly "process" (default) | "container"
+image = "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:<64 hex>"  # must end with @sha256:<64 hex>
+network = "bridge"          # exactly "bridge" (default) | "none"
 ```
 
-Container 模式以 `docker run --rm --network <network> --user <uid>:<gid>
--v <sandbox>:/work -w /work` 執行 verifier，只傳入 allowlist 環境變數，
-sandbox 是唯一的 mount。Image 必須以 digest 固定；找不到 `docker` 時以
-`ISOLATION_UNAVAILABLE` fail closed，非 digest image 則為 `INVALID_CONFIG`。
+Container 模式以 `docker run --rm --network <network> --user <uid>:<gid>`
+執行 verifier，唯一的 mount 是 sandbox 的上層目錄（`/sandbox`），工作目錄為
+`/sandbox/repo`，`HOME=/sandbox/home`、`TMPDIR=/sandbox/tmp`，且只傳入 allowlist
+環境變數。Image 必須以 `@sha256:<64 hex>` 結尾；找不到 `docker` 時以
+`ISOLATION_UNAVAILABLE` fail closed，非 digest image 或無效的 `[isolation]`／
+`env_passthrough` 值則為 `INVALID_CONFIG`。Image 會在 verifier timeout 開始計時之前
+先 pull，pull 失敗為 `ISOLATION_IMAGE_UNAVAILABLE`。
 Receipt 會記錄 mode、image 與 network。`process` 模式無法限制呼叫者的 OS 權限。
 
 ## Fail-closed negative controls
