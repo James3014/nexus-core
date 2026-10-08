@@ -178,6 +178,14 @@ with `@sha256:<64 hex>`; a missing `docker` binary fails closed with
 `ISOLATION_UNAVAILABLE`, and a non-digest image or an invalid `[isolation]`/
 `env_passthrough` value with `INVALID_CONFIG`. The image is pulled before the
 verifier timeout starts, and a pull failure is `ISOLATION_IMAGE_UNAVAILABLE`.
+Before the verifier runs, Core proves the bind mount is real: it writes a random
+nonce into the sandbox parent and reads it back through `docker run ... cat`;
+a mismatch or failure is `ISOLATION_MOUNT_UNAVAILABLE` (typically a Docker VM
+that does not share the sandbox path). The sandbox parent lives under
+`NEXUS_CERTIFY_SANDBOX_ROOT` when set; on macOS it defaults to
+`~/.cache/nexus-certify/sandbox` (Docker Desktop shares `/Users`, colima shares
+`$HOME`), elsewhere to the system temporary directory. The receipt records
+`mount_probe = "PASS"` and whether the image was pulled.
 The receipt records mode, image and
 network. `process` mode does not contain the OS capabilities of the invoking user.
 
@@ -194,6 +202,7 @@ network. `process` mode does not contain the OS capabilities of the invoking use
 - unavailable verifier, launch failure, timeout, or non-zero verifier exit;
 - target state changing while the verifier runs;
 - malformed, cross-bound, stale, mismatched, or tampered canonical input;
+- `ISOLATION_IMAGE_UNAVAILABLE` (container image could not be pulled) or `ISOLATION_MOUNT_UNAVAILABLE` (sandbox not visible inside the container);
 - `CONFIG_UNTRUSTED` (with `--require-trusted-config`, no config committed on the base ref), `CONFIG_BASE_REF_MISMATCH` (base-ref config and worktree config name different base refs), or `ISOLATION_UNAVAILABLE` (container mode requested but `docker` is unavailable);
 - any canonical Core result other than `VERIFIED`.
 

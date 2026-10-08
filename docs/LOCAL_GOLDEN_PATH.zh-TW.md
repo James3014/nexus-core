@@ -157,6 +157,12 @@ Container 模式以 `docker run --rm --network <network> --user <uid>:<gid>`
 `ISOLATION_UNAVAILABLE` fail closed，非 digest image 或無效的 `[isolation]`／
 `env_passthrough` 值則為 `INVALID_CONFIG`。Image 會在 verifier timeout 開始計時之前
 先 pull，pull 失敗為 `ISOLATION_IMAGE_UNAVAILABLE`。
+Verifier 執行前，Core 會先證明 bind mount 是真的：在沙箱父目錄寫入隨機 nonce，
+再透過 `docker run ... cat` 讀回；不一致或失敗即為 `ISOLATION_MOUNT_UNAVAILABLE`
+（通常是 Docker VM 沒有分享該路徑）。沙箱父目錄位於 `NEXUS_CERTIFY_SANDBOX_ROOT`
+（若有設定）；macOS 預設為 `~/.cache/nexus-certify/sandbox`（Docker Desktop 分享
+`/Users`，colima 分享 `$HOME`），其他平台預設為系統暫存目錄。Receipt 會記錄
+`mount_probe = "PASS"` 以及 image 是否經過 pull。
 Receipt 會記錄 mode、image 與 network。`process` 模式無法限制呼叫者的 OS 權限。
 
 ## Fail-closed negative controls
@@ -173,6 +179,7 @@ Receipt 會記錄 mode、image 與 network。`process` 模式無法限制呼叫�
 - verifier 不存在、launch 失敗、timeout 或回傳非零 exit code；
 - verifier 執行期間 target state 發生改變；
 - canonical input malformed、cross-bound、stale、mismatched 或遭竄改；
+- `ISOLATION_IMAGE_UNAVAILABLE`（container image 無法 pull）或 `ISOLATION_MOUNT_UNAVAILABLE`（容器內看不到沙箱）；
 - `CONFIG_UNTRUSTED`（使用 `--require-trusted-config` 但 base ref 上沒有已提交的 config）、`CONFIG_BASE_REF_MISMATCH`（base-ref config 與 worktree config 的 base ref 不一致），或 `ISOLATION_UNAVAILABLE`（要求 container 模式但 `docker` 不可用）；
 - canonical Core 回傳任何非 `VERIFIED` 結果。
 

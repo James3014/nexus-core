@@ -1281,11 +1281,6 @@ def test_container_mode_runs_verifier_with_only_sandbox_visible(
     external_repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "secret-token-123")
-    if "NEXUS_CERTIFY_SANDBOX_ROOT" not in __import__("os").environ:
-        # /tmp is not shared by every Docker VM (e.g. colima); $HOME usually is.
-        shared = Path.home() / ".cache" / "nexus-certify-test-sandbox"
-        shared.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("NEXUS_CERTIFY_SANDBOX_ROOT", str(shared))
     (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
     top = f'[isolation]\nmode = "container"\nimage = "{ALPINE_IMAGE}"\nnetwork = "none"'
     _v2_config(

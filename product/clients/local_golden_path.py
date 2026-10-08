@@ -1024,10 +1024,14 @@ def _run_verifier_isolated(
     }
     sandbox_root = os.environ.get("NEXUS_CERTIFY_SANDBOX_ROOT")
     if isolation["mode"] == "container":
-        # NEXUS_CERTIFY_SANDBOX_ROOT: host directory for container sandboxes; must be
-        # shared with Docker (macOS defaults to /tmp because /var/folders is not shared).
+        # NEXUS_CERTIFY_SANDBOX_ROOT: host directory for container sandboxes; it must
+        # be shared with the Docker VM. macOS defaults to ~/.cache/nexus-certify/sandbox
+        # because $TMPDIR (/var/folders) and /tmp are not shared by every VM
+        # (Docker Desktop shares /Users; colima shares $HOME).
         if not sandbox_root and sys.platform == "darwin":
-            sandbox_root = "/tmp"
+            default_root = Path.home() / ".cache" / "nexus-certify" / "sandbox"
+            default_root.mkdir(parents=True, exist_ok=True)
+            sandbox_root = str(default_root)
     else:
         sandbox_root = None
     parent = Path(tempfile.mkdtemp(prefix="nexus-core-verifier-", dir=sandbox_root or None))
