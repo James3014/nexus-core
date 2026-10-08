@@ -428,3 +428,38 @@ def test_issue_check_binds_v2_evidence_universe_and_issue_contract(issue_repo: P
     ]
     assert receipt["inputs"]["requirements_context"]["binding_hash"] == binding["binding_hash"]
     assert receipt["core_response"]["verification"]["coverage"]["entries"][0]["category"] == "COVERED"
+
+
+def test_issue_identity_uses_effective_base_ref_config_and_requires_trust(
+    issue_repo: Path,
+) -> None:
+    worktree_identity = issue_gp._verification_contract_identity(issue_repo)["config_hash"]
+    _git(issue_repo, "stash", "push", "-u", "-m", "issue116-test", "--", "app.py")
+    _git(issue_repo, "add", ".nexus-core/config.toml")
+    _git(issue_repo, "commit", "-m", "trusted config")
+    _git(issue_repo, "stash", "pop")
+    config = issue_repo / ".nexus-core" / "config.toml"
+    committed_identity = issue_gp._verification_contract_identity(issue_repo)["config_hash"]
+    assert committed_identity == worktree_identity
+    # Drift the worktree config: identity must still be the committed (effective) one.
+    config.write_text(
+        config.read_text(encoding="utf-8").replace('["app.py"]', '["**"]'), encoding="utf-8"
+    )
+    assert issue_gp._verification_contract_identity(issue_repo)["config_hash"] == committed_identity
+
+    def reader(repo: str, number: int) -> dict[str, object]:
+        return _issue(
+            body=f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {committed_identity} -->"
+        )
+
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader, force=True)
+    with pytest.raises(LocalCheckError) as raised:  # drifted config is itself a forbidden change
+        check_issue(issue_repo, issue_number=85, issue_reader=reader)
+    assert raised.value.reason_code == "FORBIDDEN_PATH"
+    _git(issue_repo, "checkout", "--", ".nexus-core/config.toml")
+    result = check_issue(
+        issue_repo, issue_number=85, issue_reader=reader, require_trusted_config=True
+    )
+    assert result["status"] == "VERIFIED"
+    assert result["config_source"]["kind"] == "base-ref"
+    assert result["config_source"]["config_drift"] is False

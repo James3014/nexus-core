@@ -579,7 +579,7 @@ def test_check_allows_verifier_created_ignored_residue_in_isolated_subject(
     assert result["status"] == "VERIFIED"
     assert not (external_repo / "dist").exists()
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
-    assert receipt["verifier"]["execution_subject"]["mode"] == "isolated_shared_clone"
+    assert receipt["verifier"]["execution_subject"]["mode"] == "isolated_detached_clone"
     assert receipt["verifier"]["execution_subject"]["target_tree"] == receipt["target_tree"]
 
 
@@ -1062,3 +1062,354 @@ required_material_ids = ["missing-material"]
 
     assert raised.value.reason_code == "INVALID_CONFIG"
     assert "required_material_ids" in raised.value.detail
+
+
+# --- Issue #116 A: verifier isolation -------------------------------------------------
+
+
+def _v2_config(
+    repo: Path,
+    command: list[str],
+    *,
+    top: str = "",
+    timeout: int = 30,
+    patterns: str = '["*.py"]',
+    base_ref: str = "main",
+) -> Path:
+    config = repo / ".nexus-core" / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "\n".join(
+            [
+                "version = 2",
+                f'base_ref = "{base_ref}"',
+                f"allowed_patterns = {patterns}",
+                'deletion_policy = "FORBID"',
+                "universe_generation = 1",
+                "materials = []",
+                top,
+                "[[verifiers]]",
+                'id = "v"',
+                f"command = {json.dumps(command)}",
+                f"timeout_seconds = {timeout}",
+                'logical_subject_id = "required/v"',
+                'evidence_kind = "test-result"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config
+
+
+def test_sandbox_has_no_origin_and_cannot_reach_original_repository(external_repo: Path):
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    git_config_before = (external_repo / ".git" / "config").read_text(encoding="utf-8")
+    _v2_config(external_repo, ["git", "remote", "get-url", "origin"])
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "FAILED_VERIFICATION"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    artifact = receipt["evidence_artifacts"][0]
+    assert artifact["status"] == "FAIL"
+    assert artifact["exit_code"] != 0
+    assert artifact["execution_subject"]["mode"] == "isolated_detached_clone"
+    assert artifact["execution_subject"]["isolation"] == {"mode": "process"}
+    assert (external_repo / ".git" / "config").read_text(encoding="utf-8") == git_config_before
+    assert not (external_repo / ".nexus-core" / "planted").exists()
+
+
+def test_verifier_secret_env_is_not_inherited_but_passthrough_is_explicit(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "secret-token-123")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _v2_config(external_repo, ["sh", "-c", 'test -z "$GITHUB_TOKEN"'])
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["evidence_artifacts"][0]["execution_subject"]["env_passthrough"] == []
+
+    _v2_config(
+        external_repo,
+        ["sh", "-c", 'test "$GITHUB_TOKEN" = secret-token-123'],
+        top='env_passthrough = ["GITHUB_TOKEN"]',
+    )
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["inputs"]["config"]["env_passthrough"] == ["GITHUB_TOKEN"]
+    assert receipt["evidence_artifacts"][0]["execution_subject"]["env_passthrough"] == [
+        "GITHUB_TOKEN"
+    ]
+    assert validate_verification_receipt(result["receipt_path"], repo=external_repo)["valid"]
+
+
+def test_verifier_environment_is_allowlist_with_sandbox_home(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    script = (
+        "import os\n"
+        "assert 'AWS_SECRET_ACCESS_KEY' not in os.environ\n"
+        "assert os.environ['HOME'].endswith('/home') and os.environ['TMPDIR'].endswith('/tmp')\n"
+        "assert os.path.isdir(os.environ['HOME']) and os.path.isdir(os.environ['TMPDIR'])\n"
+        "assert os.environ['PYTHONDONTWRITEBYTECODE'] == '1'\n"
+    )
+    _v2_config(external_repo, [sys.executable, "-c", script])
+    assert check_repository(external_repo)["status"] == "VERIFIED"
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        'env_passthrough = ["lower"]',
+        'env_passthrough = ["A", "A"]',
+        "env_passthrough = [1]",
+        '[isolation]\nmode = "container"',
+        '[isolation]\nmode = "container"\nimage = "alpine:3.20"',
+        '[isolation]\nmode = "vm"',
+        '[isolation]\nnetwork = "host"',
+        "[isolation]\nbogus = 1",
+    ],
+)
+def test_invalid_isolation_and_passthrough_config_fails_closed(external_repo: Path, snippet: str):
+    _v2_config(external_repo, ["true"], top=snippet)
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "INVALID_CONFIG"
+
+
+def test_v1_config_rejects_isolation_table(external_repo: Path):
+    _init(external_repo)
+    config = external_repo / ".nexus-core" / "config.toml"
+    config.write_text(config.read_text() + '\n[isolation]\nmode = "process"\n', encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "INVALID_CONFIG"
+
+
+def test_verifier_timeout_kills_backgrounded_grandchildren(external_repo: Path):
+    import time
+
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _v2_config(external_repo, ["sh", "-c", "sleep 31.7 & sleep 31.7"], timeout=2)
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "VERIFIER_TIMEOUT"
+    time.sleep(0.5)
+    survivors = subprocess.run(["pgrep", "-f", "sleep 31.7"], capture_output=True, text=True)
+    assert survivors.stdout.strip() == ""
+
+
+def test_backgrounded_grandchild_is_reaped_after_normal_exit(external_repo: Path):
+    import time
+
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _v2_config(external_repo, ["sh", "-c", "sleep 32.9 >/dev/null 2>&1 &"])
+    assert check_repository(external_repo)["status"] == "VERIFIED"
+    time.sleep(0.5)
+    survivors = subprocess.run(["pgrep", "-f", "sleep 32.9"], capture_output=True, text=True)
+    assert survivors.stdout.strip() == ""
+
+
+_FAKE_DIGEST = "sha256:" + "a" * 64
+
+
+def test_container_argv_builder_is_pure_and_exact(tmp_path: Path):
+    from product.clients.local_golden_path import _container_argv
+
+    repo = tmp_path / "sbx" / "repo"
+    argv = _container_argv(
+        f"img@{_FAKE_DIGEST}",
+        "none",
+        repo,
+        {"HOME": "/sandbox/home", "TMPDIR": "/sandbox/tmp"},
+        ["sh", "-c", "true"],
+        1000,
+        1001,
+    )
+    assert argv == [
+        "docker", "run", "--rm", "--network", "none", "--user", "1000:1001",
+        "-v", f"{tmp_path / 'sbx'}:/sandbox", "-w", "/sandbox/repo",
+        "-e", "HOME=/sandbox/home", "-e", "TMPDIR=/sandbox/tmp",
+        f"img@{_FAKE_DIGEST}", "sh", "-c", "true",
+    ]  # fmt: skip
+
+
+def test_container_mode_without_docker_fails_closed(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import shutil as _shutil
+
+    real_which = _shutil.which
+    monkeypatch.setattr(
+        "product.clients.local_golden_path.shutil.which",
+        lambda name, *a, **k: None if name == "docker" else real_which(name, *a, **k),
+    )
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _v2_config(
+        external_repo,
+        ["sh", "-c", "true"],
+        top=f'[isolation]\nmode = "container"\nimage = "alpine:3.20@{_FAKE_DIGEST}"',
+    )
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "ISOLATION_UNAVAILABLE"
+    assert raised.value.receipt_path is not None
+
+
+ALPINE_IMAGE = (
+    "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+)
+
+
+def _docker_usable() -> bool:
+    import shutil as _shutil
+
+    if _shutil.which("docker") is None:
+        return False
+    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _docker_usable(), reason="docker unavailable")
+def test_container_mode_runs_verifier_with_only_sandbox_visible(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("GITHUB_TOKEN", "secret-token-123")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    top = f'[isolation]\nmode = "container"\nimage = "{ALPINE_IMAGE}"\nnetwork = "none"'
+    _v2_config(
+        external_repo,
+        ["sh", "-c", 'test ! -e /Users && test -z "$GITHUB_TOKEN" && ls /sandbox/repo'],
+        top=top,
+        timeout=120,
+    )
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["evidence_artifacts"][0]["execution_subject"]["isolation"] == {
+        "mode": "container",
+        "image": ALPINE_IMAGE,
+        "network": "none",
+    }
+
+    _v2_config(external_repo, ["sh", "-c", "exit 3"], top=top, timeout=120)
+    assert check_repository(external_repo)["status"] == "FAILED_VERIFICATION"
+
+
+# --- Issue #116 B: trusted config source ---------------------------------------------
+
+
+def _commit_config_on_main(repo: Path, patterns: str, base_ref: str = "main") -> None:
+    _v2_config(repo, [sys.executable, "-c", "pass"], patterns=patterns, base_ref=base_ref)
+    _git(repo, "add", ".nexus-core/config.toml")
+    _git(repo, "commit", "-m", "trusted config")
+
+
+def _widen(repo: Path) -> None:
+    _v2_config(repo, [sys.executable, "-c", "pass"], patterns='["**"]')
+
+
+@pytest.mark.parametrize("commit_widened", [False, True])
+def test_widened_worktree_config_cannot_override_base_ref_config(
+    external_repo: Path, commit_widened: bool
+):
+    _commit_config_on_main(external_repo, '["*.py"]')
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "docs").mkdir()
+    (external_repo / "docs" / "note.md").write_text("hi\n", encoding="utf-8")
+    _widen(external_repo)
+    if commit_widened:
+        _git(external_repo, "add", "-A")
+        _git(external_repo, "commit", "-m", "widen")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "FORBIDDEN_PATH"
+    assert raised.value.receipt_path is not None
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    source = receipt["config_source"]
+    assert source["kind"] == "base-ref"
+    assert source["ref"] == "main"
+    assert source["commit"] == _git(external_repo, "rev-parse", "main")
+    assert source["blob"] == _git(external_repo, "rev-parse", "main:.nexus-core/config.toml")
+    assert source["config_drift"] is True
+    assert source["worktree_config_hash"] != receipt["config_hash"]
+
+
+def test_trusted_config_success_receipt_records_source_and_validates(external_repo: Path):
+    from product.clients.local_golden_path import (
+        _receipt_hash,
+        validate_verification_receipt_payload,
+    )
+
+    _commit_config_on_main(external_repo, '["*.py"]')
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    result = check_repository(external_repo, require_trusted_config=True)
+
+    assert result["status"] == "VERIFIED"
+    assert result["config_source"]["kind"] == "base-ref"
+    assert result["config_source"]["config_drift"] is False
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["config_source"] == result["config_source"]
+    assert validate_verification_receipt(result["receipt_path"], repo=external_repo)["valid"]
+    tampered = dict(receipt)
+    tampered["config_source"] = {**receipt["config_source"], "config_drift": True}
+    assert not validate_verification_receipt_payload(tampered)["valid"]
+    legacy = {k: v for k, v in receipt.items() if k != "config_source"}
+    legacy["receipt_hash"] = _receipt_hash(legacy)
+    assert validate_verification_receipt_payload(legacy)["valid"]
+
+
+def test_untracked_config_is_worktree_source_and_can_be_rejected(external_repo: Path):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+    assert result["config_source"]["kind"] == "worktree"
+    assert result["config_source"]["ref"] is None
+    assert result["config_source"]["config_drift"] is False
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo, require_trusted_config=True)
+    assert raised.value.reason_code == "CONFIG_UNTRUSTED"
+    assert raised.value.receipt_path is not None
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["config_source"]["kind"] == "worktree"
+
+
+def test_base_ref_config_with_different_base_ref_is_rejected(external_repo: Path):
+    _commit_config_on_main(external_repo, '["*.py"]', base_ref="other")
+    _git(external_repo, "branch", "other")
+    _v2_config(external_repo, [sys.executable, "-c", "pass"])  # worktree base_ref = main
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "CONFIG_BASE_REF_MISMATCH"
+
+
+def test_cli_check_prints_config_trust_and_honors_env(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert cli_main(["check", "--repo", str(external_repo)]) == 0
+    assert "config: untrusted (not committed on base ref)" in capsys.readouterr().out
+    monkeypatch.setenv("NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG", "1")
+    assert cli_main(["check", "--repo", str(external_repo)]) != 0
+    capsys.readouterr()
+    monkeypatch.delenv("NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG")
+    assert cli_main(["check", "--repo", str(external_repo), "--require-trusted-config"]) != 0
+    capsys.readouterr()
+    assert doctor_repository(external_repo)["checks"]["config_source"] == "UNTRACKED"
+    _git(external_repo, "add", "-A")
+    _git(external_repo, "commit", "-m", "cfg")
+    assert doctor_repository(external_repo)["checks"]["config_source"] == "TRUSTED"
