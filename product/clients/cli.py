@@ -18,9 +18,15 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from product.clients.issue_golden_path import check_issue, init_issue_binding
+from product.clients.issue_golden_path import (
+    ISSUE_EVIDENCE_MARKER_PREFIX,
+    ISSUE_EVIDENCE_MARKER_SUFFIX,
+    check_issue,
+    init_issue_binding,
+)
 from product.clients.local_golden_path import (
     LocalCheckError,
+    _load_effective_config,
     check_repository,
     doctor_repository,
     evaluate_receipt_expectations,
@@ -33,6 +39,7 @@ from product.clients.runtime_handoff import (
     handoff_status,
     init_handoff,
 )
+from product.protocol.generic_verification import canonical_hash
 from product.runtime.auth import AuthSecurityError, read_bearer_token
 from product.runtime.candidate_acquisition import (
     make_candidate_acquisition_input_error,
@@ -450,6 +457,48 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
         force=args.force,
     )
     print(f"issue binding initialized: {path}")
+    try:
+        binding = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        binding = {}
+    if binding.get("evidence_sufficiency") is None:
+        print(
+            "hint: the Issue has no NEXUS_CORE_EVIDENCE_UNIVERSE marker; run "
+            "'nexus-certify markers' and paste the line into the Issue body, "
+            "then re-run issue-init --force"
+        )
+    return 0
+
+
+def cmd_markers(args: argparse.Namespace) -> int:
+    """Print the exact Issue-body and PR-body markers the gate expects."""
+    config, source, _worktree = _load_effective_config(Path(args.repo))
+    config_hash = canonical_hash(config)
+    issue_marker = f"{ISSUE_EVIDENCE_MARKER_PREFIX}{config_hash}{ISSUE_EVIDENCE_MARKER_SUFFIX}"
+    pr_marker = f"<!-- NEXUS_CORE_ISSUE: {args.issue} -->" if args.issue is not None else None
+    if source.get("kind") != "base-ref":
+        print(
+            f"warning: config is not committed on {config['base_ref']}; "
+            "the hash will change once it is",
+            file=sys.stderr,
+        )
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "config_hash": config_hash,
+                    "config_source": source,
+                    "issue_marker": issue_marker,
+                    "pr_marker": pr_marker,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    print(f"Issue body: {issue_marker}")
+    if pr_marker is not None:
+        print(f"PR body:    {pr_marker}")
     return 0
 
 
@@ -654,6 +703,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_issue_check.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
 
+    p_markers = subparsers.add_parser(
+        "markers", help="Print the Issue-body and PR-body markers the gate expects (read-only)"
+    )
+    p_markers.add_argument("--repo", default=".", help="Git repository (default: current)")
+    p_markers.add_argument(
+        "--issue", type=int, default=None, help="Also print the PR-body marker for this Issue"
+    )
+    p_markers.add_argument("--json", action="store_true", help="Emit JSON")
+
     # Machine-readable candidate acquisition (issue-1312).
     p_acquire = subparsers.add_parser(
         "acquire",
@@ -739,6 +797,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_issue_init(args)
         elif args.command == "issue-check":
             return cmd_issue_check(args)
+        elif args.command == "markers":
+            return cmd_markers(args)
         elif args.command == "acquire":
             return cmd_acquire(args)
         elif args.command == "handoff-init":
