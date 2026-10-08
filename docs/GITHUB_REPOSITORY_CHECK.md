@@ -1,5 +1,14 @@
 # GitHub Repository Gate
 
+## Checklist for a new repository
+
+1. Run `nexus-certify init`, add a version 2 `[isolation]` section with a digest-pinned container `image`, and merge `.nexus-core/config.toml` into the base branch.
+2. Run `nexus-certify markers` and paste the `NEXUS_CORE_EVIDENCE_UNIVERSE` line into the Issue body.
+3. Copy [`examples/github-repository-check.yml`](examples/github-repository-check.yml) to `.github/workflows/`, set `expected-identity` to that workflow file on `refs/heads/main`, and pin both actions and `nexus-certify-ref` to one full 40-hex commit.
+4. Merge the workflow into the base branch (the gate runs from the base ref).
+5. Require the status check `Nexus Core issue completion` in the branch protection or ruleset, and set fork pull request workflows to require approval.
+6. Open a pull request whose body contains `<!-- NEXUS_CORE_ISSUE: <number> -->` (run `nexus-certify markers --issue <number>`), and confirm both jobs go green.
+
 Nexus Core provides a reusable composite action, `.github/actions/issue-gate`,
 that gates a pull request on an Issue-bound `nexus-certify issue-check`. It runs
 the verifier configured in the base ref's `.nexus-core/config.toml`, derives facts
