@@ -1281,28 +1281,35 @@ def test_container_mode_runs_verifier_with_only_sandbox_visible(
     external_repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("GITHUB_TOKEN", "secret-token-123")
+    if "NEXUS_CERTIFY_SANDBOX_ROOT" not in __import__("os").environ:
+        # /tmp is not shared by every Docker VM (e.g. colima); $HOME usually is.
+        shared = Path.home() / ".cache" / "nexus-certify-test-sandbox"
+        shared.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("NEXUS_CERTIFY_SANDBOX_ROOT", str(shared))
     (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
     top = f'[isolation]\nmode = "container"\nimage = "{ALPINE_IMAGE}"\nnetwork = "none"'
     _v2_config(
         external_repo,
-        ["sh", "-c", 'test ! -e /Users && test -z "$GITHUB_TOKEN" && ls /sandbox/repo'],
+        [
+            "sh",
+            "-c",
+            'test ! -e /Users && test -z "$GITHUB_TOKEN" && test -f /sandbox/repo/test_app.py'
+            " && test -d /sandbox/home && test -d /sandbox/tmp && cat /sandbox/repo/app.py",
+        ],
         top=top,
         timeout=120,
     )
     result = check_repository(external_repo)
     assert result["status"] == "VERIFIED"
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
-    assert receipt["evidence_artifacts"][0]["execution_subject"]["isolation"] == {
-        "mode": "container",
-        "image": ALPINE_IMAGE,
-        "network": "none",
-        "image_pulled": receipt["evidence_artifacts"][0]["execution_subject"]["isolation"][
-            "image_pulled"
-        ],
-    }
-    assert isinstance(
-        receipt["evidence_artifacts"][0]["execution_subject"]["isolation"]["image_pulled"], bool
-    )
+    artifact = receipt["evidence_artifacts"][0]
+    assert artifact["stdout"] == "VALUE = 2\n"
+    isolation = artifact["execution_subject"]["isolation"]
+    assert isolation["mount_probe"] == "PASS"
+    assert isinstance(isolation["image_pulled"], bool)
+    assert isolation["mode"] == "container"
+    assert isolation["image"] == ALPINE_IMAGE
+    assert isolation["network"] == "none"
 
     _v2_config(external_repo, ["sh", "-c", "exit 3"], top=top, timeout=120)
     assert check_repository(external_repo)["status"] == "FAILED_VERIFICATION"
@@ -1484,3 +1491,72 @@ def test_container_image_present_skips_pull_and_absent_pulls(
         "image inspect",
         "pull --quiet",
     ]
+
+
+def _probe_docker(root: Path, mode: str) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    calls = root / "docker-calls.txt"
+    shim = root / "docker"
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1 $2" = "image inspect" ]; then echo "inspect" >> ' + str(calls) + "; exit 0; fi\n"
+        'case "$*" in\n'
+        "  *.nexus-mount-probe*)\n"
+        '    echo "probe" >> ' + str(calls) + "\n"
+        '    src=""; prev=""\n'
+        '    for a in "$@"; do if [ "$prev" = "-v" ]; then src="${a%%:*}"; fi; prev="$a"; done\n'
+        + (
+            '    cat "$src/.nexus-mount-probe";;\n'
+            if mode == "right"
+            else "    echo wrong-nonce;;\n"
+        )
+        + '  *) echo "verifier" >> '
+        + str(calls)
+        + "; exit 0;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    return root
+
+
+def _probe_cfg(repo: Path) -> None:
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _v2_config(
+        repo,
+        ["sh", "-c", "true"],
+        top=f'[isolation]\nmode = "container"\nimage = "alpine:3.20@{_FAKE_DIGEST}"',
+    )
+
+
+def test_mount_probe_wrong_nonce_fails_closed_with_receipt(
+    external_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bin_dir = _probe_docker(tmp_path / "wrong", "wrong")
+    _prepend_path(monkeypatch, bin_dir)
+    _probe_cfg(external_repo)
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+    assert raised.value.reason_code == "ISOLATION_MOUNT_UNAVAILABLE"
+    assert "NEXUS_CERTIFY_SANDBOX_ROOT" in raised.value.detail
+    assert raised.value.receipt_path is not None
+    assert (bin_dir / "docker-calls.txt").read_text().splitlines() == ["inspect", "probe"]
+
+
+def test_mount_probe_right_nonce_proceeds_to_verifier(
+    external_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    bin_dir = _probe_docker(tmp_path / "right", "right")
+    _prepend_path(monkeypatch, bin_dir)
+    _probe_cfg(external_repo)
+    result = check_repository(external_repo)
+    assert result["status"] == "VERIFIED"
+    assert (bin_dir / "docker-calls.txt").read_text().splitlines() == [
+        "inspect",
+        "probe",
+        "verifier",
+    ]
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["evidence_artifacts"][0]["execution_subject"]["isolation"]["mount_probe"] == (
+        "PASS"
+    )

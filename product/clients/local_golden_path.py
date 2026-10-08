@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import tomllib
 import uuid
@@ -964,6 +965,34 @@ def _ensure_container_image(image: str) -> bool:
     return True
 
 
+def _probe_container_mount(parent: Path, image: str) -> None:
+    nonce = uuid.uuid4().hex
+    probe = parent / ".nexus-mount-probe"
+    detail = (
+        f"{parent} is not visible inside the container "
+        "(check Docker file sharing / NEXUS_CERTIFY_SANDBOX_ROOT)"
+    )
+    probe.write_text(nonce, encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--network", "none",
+                "--user", f"{os.getuid()}:{os.getgid()}",
+                "-v", f"{parent}:/sandbox",
+                image, "cat", "/sandbox/.nexus-mount-probe",
+            ],  # fmt: skip
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise LocalCheckError("ISOLATION_MOUNT_UNAVAILABLE", f"{detail}: {exc}") from exc
+    finally:
+        probe.unlink(missing_ok=True)
+    if result.returncode != 0 or result.stdout.decode("utf-8", errors="replace").strip() != nonce:
+        raise LocalCheckError("ISOLATION_MOUNT_UNAVAILABLE", detail)
+
+
 def _run_verifier_isolated(
     repo: Path,
     snapshot: _GitSnapshot,
@@ -993,7 +1022,17 @@ def _run_verifier_isolated(
         "isolation": isolation,
         "env_passthrough": _passthrough_names(config),
     }
-    parent = Path(tempfile.mkdtemp(prefix="nexus-core-verifier-"))
+    sandbox_root = os.environ.get("NEXUS_CERTIFY_SANDBOX_ROOT")
+    if isolation["mode"] == "container":
+        # NEXUS_CERTIFY_SANDBOX_ROOT: host directory for container sandboxes; must be
+        # shared with Docker (macOS defaults to /tmp because /var/folders is not shared).
+        if not sandbox_root and sys.platform == "darwin":
+            sandbox_root = "/tmp"
+    else:
+        sandbox_root = None
+    parent = Path(tempfile.mkdtemp(prefix="nexus-core-verifier-", dir=sandbox_root or None))
+    if isolation["mode"] == "container":
+        parent = parent.resolve()
     verifier_repo = parent / "repo"
     executed: subprocess.CompletedProcess[bytes] | None = None
     execution_error: subprocess.TimeoutExpired | OSError | None = None
@@ -1054,6 +1093,9 @@ def _run_verifier_isolated(
         sandbox_tmp = parent / "tmp"
         sandbox_home.mkdir()
         sandbox_tmp.mkdir()
+        if isolation["mode"] == "container":
+            _probe_container_mount(parent, isolation["image"])
+            isolation["mount_probe"] = "PASS"
         try:
             if isolation["mode"] == "container":
                 env = _verifier_environment(
