@@ -1917,3 +1917,182 @@ def test_receipt_check_cli_rejects_malformed_hex_argument(bad: str):
     with pytest.raises(SystemExit) as raised:
         build_parser().parse_args(["receipt-check", "--receipt", "x", "--expect-target-tree", bad])
     assert raised.value.code == 2
+
+
+# --- Issue-authorized material identity transitions -------------------------------------
+
+_OLD_ID = "git-commit:" + "a" * 40
+_NEW_ID = "git-commit:" + "b" * 40
+
+
+def _transition_config(expected: str, *, timeout: int = 30) -> str:
+    observe = "print('git-commit:' + open('ident.txt').read().strip())"
+    return "\n".join(
+        [
+            "version = 2",
+            'base_ref = "main"',
+            'allowed_patterns = ["*.py", "ident.txt", ".nexus-core/config.toml"]',
+            'deletion_policy = "FORBID"',
+            "universe_generation = 1",
+            "[[materials]]",
+            'id = "runtime"',
+            f"observe_command = [{json.dumps(sys.executable)}, \"-c\", {json.dumps(observe)}]",
+            f"timeout_seconds = {timeout}",
+            'logical_subject_id = "dependency/runtime"',
+            'evidence_kind = "resolved-dependency"',
+            'requirement_mode = "REQUIRED"',
+            'applicability = "APPLICABLE"',
+            f"expected_identity = {json.dumps(expected)}",
+            "[[verifiers]]",
+            'id = "suite"',
+            f"command = [{json.dumps(sys.executable)}, \"-c\", \"raise SystemExit(0)\"]",
+            "timeout_seconds = 30",
+            'logical_subject_id = "runtime/suite"',
+            'evidence_kind = "test-result"',
+            'requirement_mode = "REQUIRED"',
+            'applicability = "APPLICABLE"',
+            'required_material_ids = ["runtime"]',
+            "",
+        ]
+    )
+
+
+def _transition(
+    material_id: str = "runtime", old: str = _OLD_ID, new: str = _NEW_ID
+) -> dict[str, str]:
+    return {
+        "material_id": material_id,
+        "from_identity": old,
+        "to_identity": new,
+        "source": "issue-contract-marker",
+    }
+
+
+@pytest.fixture
+def pin_repo(external_repo: Path) -> Path:
+    """Trusted v2 config on main pins OLD; the candidate branch observes NEW."""
+
+    (external_repo / "ident.txt").write_text("a" * 40 + "\n", encoding="utf-8")
+    config = external_repo / ".nexus-core" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(_transition_config(_OLD_ID), encoding="utf-8")
+    _git(external_repo, "add", "ident.txt", ".nexus-core/config.toml")
+    _git(external_repo, "commit", "-m", "trusted pin")
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "ident.txt").write_text("b" * 40 + "\n", encoding="utf-8")
+    return external_repo
+
+
+def _set_worktree_config(repo: Path, text: str) -> None:
+    (repo / ".nexus-core" / "config.toml").write_text(text, encoding="utf-8")
+
+
+def test_pin_bump_without_transition_fails_as_before(pin_repo: Path):
+    _set_worktree_config(pin_repo, _transition_config(_NEW_ID))
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(pin_repo, require_trusted_config=True)
+
+    assert raised.value.reason_code == "UNVERIFIABLE"
+    assert "MISSING" in raised.value.detail
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    material = receipt["evidence_artifacts"][0]
+    assert material["status"] == "FAIL"
+    assert material["expected_identity"] == _OLD_ID
+    assert receipt["inputs"]["material_transitions"] == []
+
+
+def test_authorized_transition_verifies_with_new_effective_identity(pin_repo: Path):
+    _set_worktree_config(pin_repo, _transition_config(_NEW_ID))
+
+    result = check_repository(
+        pin_repo, require_trusted_config=True, material_transitions=[_transition()]
+    )
+
+    assert result["status"] == "VERIFIED"
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    material = receipt["evidence_artifacts"][0]
+    assert material["status"] == "PASS"
+    assert material["expected_identity"] == _NEW_ID
+    assert material["trusted_expected_identity"] == _OLD_ID
+    assert material["observed_identity"] == _NEW_ID
+    assert material["transition"] == {
+        "source": "issue-contract-marker",
+        "from": _OLD_ID,
+        "to": _NEW_ID,
+    }
+    assert receipt["inputs"]["material_transitions"] == [_transition()]
+    assert receipt["inputs"]["config"]["materials"][0]["expected_identity"] == _OLD_ID
+    assert receipt["config_source"]["config_drift"] is True
+
+
+@pytest.mark.parametrize(
+    "candidate_config",
+    [
+        _transition_config(_OLD_ID),  # transition authorized but config not updated
+        _transition_config(_NEW_ID, timeout=31),  # extra drift beyond the transition
+    ],
+    ids=["config-not-updated", "extra-drift"],
+)
+def test_transition_requires_exact_config_delta(pin_repo: Path, candidate_config: str):
+    _set_worktree_config(pin_repo, candidate_config)
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(
+            pin_repo, require_trusted_config=True, material_transitions=[_transition()]
+        )
+
+    assert raised.value.reason_code == "CONFIG_DRIFT_BEYOND_AUTHORIZED_TRANSITION"
+    assert raised.value.receipt_path is not None
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["outcome"]["reason_codes"] == ["CONFIG_DRIFT_BEYOND_AUTHORIZED_TRANSITION"]
+    assert receipt["evidence_artifacts"] == []
+
+
+@pytest.mark.parametrize(
+    ("transition", "reason"),
+    [
+        (_transition(old="git-commit:" + "c" * 40), "MATERIAL_TRANSITION_STALE"),
+        (_transition(material_id="nope"), "MATERIAL_TRANSITION_UNKNOWN_MATERIAL"),
+    ],
+)
+def test_transition_stale_or_unknown_fails_closed_before_verifiers(
+    pin_repo: Path, transition: dict[str, str], reason: str
+):
+    _set_worktree_config(pin_repo, _transition_config(_NEW_ID))
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(
+            pin_repo, require_trusted_config=True, material_transitions=[transition]
+        )
+
+    assert raised.value.reason_code == reason
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["evidence_artifacts"] == []
+
+
+def test_transition_with_untrusted_worktree_config_fails_closed(external_repo: Path):
+    (external_repo / "ident.txt").write_text("b" * 40 + "\n", encoding="utf-8")
+    config = external_repo / ".nexus-core" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(_transition_config(_NEW_ID), encoding="utf-8")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo, material_transitions=[_transition()])
+
+    assert raised.value.reason_code == "MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG"
+
+
+def test_transition_observed_identity_must_equal_target(pin_repo: Path):
+    (pin_repo / "ident.txt").write_text("c" * 40 + "\n", encoding="utf-8")
+    _set_worktree_config(pin_repo, _transition_config(_NEW_ID))
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(
+            pin_repo, require_trusted_config=True, material_transitions=[_transition()]
+        )
+
+    assert raised.value.reason_code == "UNVERIFIABLE"
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["evidence_artifacts"][0]["status"] == "FAIL"
+    assert receipt["evidence_artifacts"][0]["observed_identity"] == "git-commit:" + "c" * 40
