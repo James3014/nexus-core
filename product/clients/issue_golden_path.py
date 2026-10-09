@@ -15,14 +15,14 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from product.clients.local_golden_path import (
+    _MATERIAL_IDENTITY_RE,
     CONFIG_DIRECTORY,
     CONFIG_FILENAME,
     ISSUE_CEILING_UNBOUND,
     ISSUE_EVIDENCE_STALE_REASON,
     ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401
-    LocalCheckError,
     MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS,
-    _MATERIAL_IDENTITY_RE,
+    LocalCheckError,
     _load_effective_config,
     _raise_with_receipt,
     check_repository,
