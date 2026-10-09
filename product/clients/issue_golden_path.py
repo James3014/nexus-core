@@ -22,6 +22,7 @@ from product.clients.local_golden_path import (
     ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401
     LocalCheckError,
     _load_effective_config,
+    _raise_with_receipt,
     check_repository,
 )
 from product.protocol.generic_verification import canonical_hash
@@ -497,21 +498,39 @@ def check_issue(
             "config_hash": sufficiency["config_hash"] if sufficiency is not None else None,
         },
     }
+    issue_verification: dict[str, Any] = {
+        "issue_number": issue_number,
+        "github_repository": github_repo,
+        "issue_contract_hash": binding["issue_contract_hash"],
+        "evidence_universe": sufficiency_status,
+        "claim_ceiling": (
+            "ISSUE_VERIFIED_NOT_RELEASED"
+            if sufficiency_status == "BOUND"
+            else ISSUE_CEILING_UNBOUND
+        ),
+    }
+    try:
+        transitions = _issue_material_transitions(current)
+    except LocalCheckError as exc:
+        effective_config, config_source, _worktree = _load_effective_config(repo)
+        _raise_with_receipt(
+            repo,
+            exc.reason_code,
+            exc.detail,
+            config=effective_config,
+            config_hash=canonical_hash(effective_config),
+            config_source=config_source,
+            requirements_context=context,
+            issue_verification=issue_verification,
+        )
+    if transitions:
+        issue_verification["material_transitions"] = transitions
     result = check_repository(
         repo,
         requirements_context=context,
         require_trusted_config=require_trusted_config,
-        issue_verification={
-            "issue_number": issue_number,
-            "github_repository": github_repo,
-            "issue_contract_hash": binding["issue_contract_hash"],
-            "evidence_universe": sufficiency_status,
-            "claim_ceiling": (
-                "ISSUE_VERIFIED_NOT_RELEASED"
-                if sufficiency_status == "BOUND"
-                else ISSUE_CEILING_UNBOUND
-            ),
-        },
+        issue_verification=issue_verification,
+        material_transitions=transitions,
     )
     if stale_detail is not None:
         raise LocalCheckError(

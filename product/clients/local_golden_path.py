@@ -1471,7 +1471,7 @@ def derive_issue_verification(
         ceiling = ISSUE_CEILING_UNBOUND
     elif status != "VERIFIED":
         ceiling = ISSUE_CEILING_NOT_VERIFIED
-    return {
+    verdict = {
         "status": status,
         "claim_ceiling": ceiling,
         "reason_codes": reasons,
@@ -1480,11 +1480,22 @@ def derive_issue_verification(
         "github_repository": issue_input["github_repository"],
         "issue_contract_hash": issue_input["issue_contract_hash"],
     }
+    if issue_input.get("material_transitions"):
+        verdict["material_transitions"] = [dict(item) for item in issue_input["material_transitions"]]
+    return verdict
 
 
 def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != _ISSUE_VERIFICATION_KEYS:
+    if not isinstance(value, dict) or set(value) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS:
         return False
+    if "material_transitions" in value:
+        try:
+            if not value["material_transitions"] or _normalize_material_transitions(
+                value["material_transitions"]
+            ) != list(value["material_transitions"]):
+                return False
+        except LocalCheckError:
+            return False
     number = value["issue_number"]
     return (
         value["status"] in _ISSUE_VERIFICATION_STATUSES
