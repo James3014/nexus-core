@@ -8,6 +8,7 @@ verification, receipt, policy, execution-routing, or certification authority.
 from __future__ import annotations
 
 import base64
+import copy
 import fnmatch
 import hashlib
 import json
@@ -408,12 +409,133 @@ def _validate_config(value: Any) -> dict[str, Any]:
     return value
 
 
-def _v2_producers(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+MATERIAL_TRANSITION_SOURCE = "issue-contract-marker"
+_MATERIAL_TRANSITION_KEYS = {"material_id", "from_identity", "to_identity", "source"}
+MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+_MATERIAL_IDENTITY_RE = re.compile(r"[a-z][a-z0-9-]*:[A-Za-z0-9._/+-]{1,200}")
+
+
+def _valid_transition_authorization(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == {"login", "author_association"}
+        and isinstance(value["login"], str)
+        and bool(value["login"].strip())
+        and isinstance(value["author_association"], str)
+    )
+
+
+def _transition_authorized(item: Mapping[str, Any]) -> bool:
+    authorization = item.get("authorized_by")
+    if not isinstance(authorization, Mapping) or not _valid_transition_authorization(
+        authorization
+    ):
+        return False
+    return authorization["author_association"] in MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS
+
+
+def _normalize_material_transitions(value: Any) -> list[dict[str, Any]]:
+    """Validate the shape of Issue-authorized material transitions (pure)."""
+
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise LocalCheckError("ISSUE_MATERIAL_TRANSITION_MALFORMED", "transitions must be a list")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) - {"authorized_by"} != _MATERIAL_TRANSITION_KEYS:
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED", "transition has unexpected fields"
+            )
+        entry: dict[str, Any] = {key: item[key] for key in sorted(_MATERIAL_TRANSITION_KEYS)}
+        if "authorized_by" in item:
+            if not _valid_transition_authorization(item["authorized_by"]):
+                raise LocalCheckError(
+                    "ISSUE_MATERIAL_TRANSITION_MALFORMED", "authorized_by is malformed"
+                )
+            entry["authorized_by"] = dict(item["authorized_by"])
+        if entry["source"] != MATERIAL_TRANSITION_SOURCE or any(
+            not isinstance(entry[key], str)
+            or not entry[key]
+            or entry[key] != entry[key].strip()
+            or re.search(r"\s", entry[key])
+            for key in _MATERIAL_TRANSITION_KEYS
+        ):
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED", "transition fields must be normalized text"
+            )
+        if not all(
+            _MATERIAL_IDENTITY_RE.fullmatch(entry[key]) for key in ("from_identity", "to_identity")
+        ):
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                "identities must look like <scheme>:<value> without whitespace",
+            )
+        if entry["material_id"] in seen or entry["from_identity"] == entry["to_identity"]:
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                f"duplicate or no-op transition for {entry['material_id']}",
+            )
+        seen.add(entry["material_id"])
+        normalized.append(entry)
+    return normalized
+
+
+def _check_material_transitions(
+    config: Mapping[str, Any], transitions: Sequence[Mapping[str, str]]
+) -> None:
+    """Validate transitions against the trusted config (unknown material / stale from)."""
+
+    trusted = {item["id"]: item["expected_identity"] for item in config.get("materials", [])}
+    for transition in transitions:
+        material_id = transition["material_id"]
+        if material_id not in trusted:
+            raise LocalCheckError("MATERIAL_TRANSITION_UNKNOWN_MATERIAL", material_id)
+        if trusted[material_id] != transition["from_identity"]:
+            raise LocalCheckError(
+                "MATERIAL_TRANSITION_STALE",
+                f"{material_id}: from {transition['from_identity']!r} != trusted "
+                f"{trusted[material_id]!r}",
+            )
+
+
+def _config_with_material_transitions(
+    config: Mapping[str, Any], transitions: Sequence[Mapping[str, str]]
+) -> dict[str, Any]:
+    """Trusted config with exactly the authorized expected_identity substitutions."""
+
+    result = copy.deepcopy(dict(config))
+    targets = {item["material_id"]: item["to_identity"] for item in transitions}
+    for material in result.get("materials", []):
+        if material["id"] in targets:
+            material["expected_identity"] = targets[material["id"]]
+    return result
+
+
+def _v2_producers(
+    config: Mapping[str, Any], material_transitions: Sequence[Mapping[str, str]] = ()
+) -> list[dict[str, Any]]:
     producers: list[dict[str, Any]] = []
+    transitions = {item["material_id"]: item for item in material_transitions}
     for item in config.get("materials", []):
+        transition = transitions.get(item["id"])
         producers.append(
             {
                 **item,
+                "trusted_expected_identity": item["expected_identity"],
+                "expected_identity": (
+                    transition["to_identity"] if transition else item["expected_identity"]
+                ),
+                "transition": (
+                    {
+                        "source": transition["source"],
+                        "from": transition["from_identity"],
+                        "to": transition["to_identity"],
+                    }
+                    if transition
+                    else None
+                ),
                 "kind": "material",
                 "command": item["observe_command"],
                 "requirement_mode": item.get("requirement_mode", "REQUIRED"),
@@ -812,6 +934,10 @@ def _v2_artifact(
     if producer["kind"] == "material":
         observed_identity = stdout.decode("utf-8", errors="replace").strip()
         artifact["expected_identity"] = producer["expected_identity"]
+        artifact["trusted_expected_identity"] = producer.get(
+            "trusted_expected_identity", producer["expected_identity"]
+        )
+        artifact["transition"] = producer.get("transition")
         artifact["observed_identity"] = observed_identity
         artifact["status"] = (
             "PASS"
@@ -1382,7 +1508,7 @@ def derive_issue_verification(
         ceiling = ISSUE_CEILING_UNBOUND
     elif status != "VERIFIED":
         ceiling = ISSUE_CEILING_NOT_VERIFIED
-    return {
+    verdict = {
         "status": status,
         "claim_ceiling": ceiling,
         "reason_codes": reasons,
@@ -1391,11 +1517,22 @@ def derive_issue_verification(
         "github_repository": issue_input["github_repository"],
         "issue_contract_hash": issue_input["issue_contract_hash"],
     }
+    if issue_input.get("material_transitions"):
+        verdict["material_transitions"] = [dict(item) for item in issue_input["material_transitions"]]
+    return verdict
 
 
 def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != _ISSUE_VERIFICATION_KEYS:
+    if not isinstance(value, dict) or set(value) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS:
         return False
+    if "material_transitions" in value:
+        try:
+            if not value["material_transitions"] or _normalize_material_transitions(
+                value["material_transitions"]
+            ) != list(value["material_transitions"]):
+                return False
+        except LocalCheckError:
+            return False
     number = value["issue_number"]
     return (
         value["status"] in _ISSUE_VERIFICATION_STATUSES
@@ -1425,6 +1562,7 @@ def _base_receipt(
     requirements_context: Mapping[str, Any] | None = None,
     config_source: Mapping[str, Any] | None = None,
     issue_verification: Mapping[str, Any] | None = None,
+    material_transitions: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     config_version = config.get("version") if isinstance(config, Mapping) else None
     receipt: dict[str, Any] = {
@@ -1446,6 +1584,7 @@ def _base_receipt(
             "config": config,
             "requirements_context": dict(requirements_context) if requirements_context else None,
             "request": request,
+            "material_transitions": [dict(item) for item in material_transitions],
         },
         "core_response": response,
         "outcome": {
@@ -1515,6 +1654,7 @@ def _raise_with_receipt(
     requirements_context: Mapping[str, Any] | None = None,
     config_source: Mapping[str, Any] | None = None,
     issue_verification: Mapping[str, Any] | None = None,
+    material_transitions: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     receipt = _base_receipt(
         repo=repo,
@@ -1540,11 +1680,13 @@ def check_repository(
     requirements_context: Mapping[str, Any] | None = None,
     require_trusted_config: bool = False,
     issue_verification: Mapping[str, Any] | None = None,
+    material_transitions: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the local Golden Path and return the canonical Core verdict."""
 
     repo = _repo_root(path)
-    config, config_source, _worktree_config = _load_effective_config(repo)
+    config, config_source, worktree_config = _load_effective_config(repo)
+    transitions: list[dict[str, str]] = []
     config_hash = canonical_hash(config)
     requirements_hash = (
         config_hash
@@ -1562,6 +1704,44 @@ def check_repository(
             config_source=config_source,
             requirements_context=requirements_context,
             issue_verification=issue_verification,
+            material_transitions=transitions,
+        )
+
+    try:
+        transitions = _normalize_material_transitions(material_transitions)
+        if transitions:
+            if not all(_transition_authorized(item) for item in transitions):
+                raise LocalCheckError(
+                    "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR",
+                    "material transitions require an Issue author with OWNER, MEMBER or "
+                    "COLLABORATOR association",
+                )
+            if config_source["kind"] != "base-ref":
+                raise LocalCheckError(
+                    "MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG",
+                    "material transitions apply only to a committed base-ref config",
+                )
+            _check_material_transitions(config, transitions)
+            expected_worktree = _config_with_material_transitions(config, transitions)
+            if worktree_config is None or canonical_hash(worktree_config) != canonical_hash(
+                expected_worktree
+            ):
+                raise LocalCheckError(
+                    "CONFIG_DRIFT_BEYOND_AUTHORIZED_TRANSITION",
+                    "candidate config differs from trusted config beyond the authorized "
+                    "expected_identity substitutions",
+                )
+    except LocalCheckError as exc:
+        _raise_with_receipt(
+            repo,
+            exc.reason_code,
+            exc.detail,
+            config=config,
+            config_hash=config_hash,
+            config_source=config_source,
+            requirements_context=requirements_context,
+            issue_verification=issue_verification,
+            material_transitions=transitions,
         )
 
     if config["version"] == CONFIG_VERSION:
@@ -1577,7 +1757,7 @@ def check_repository(
             }
         ]
     else:
-        producers = _v2_producers(config)
+        producers = _v2_producers(config, transitions)
 
     for producer in producers:
         if producer["applicability"] != "APPLICABLE":
@@ -1599,6 +1779,7 @@ def check_repository(
                 config_source=config_source,
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
+                material_transitions=transitions,
             )
 
     try:
@@ -1613,6 +1794,7 @@ def check_repository(
             config_source=config_source,
             requirements_context=requirements_context,
             issue_verification=issue_verification,
+            material_transitions=transitions,
         )
 
     forbidden = [
@@ -1631,6 +1813,7 @@ def check_repository(
             snapshot=snapshot,
             requirements_context=requirements_context,
             issue_verification=issue_verification,
+            material_transitions=transitions,
         )
     deleted = [
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
@@ -1646,6 +1829,7 @@ def check_repository(
             snapshot=snapshot,
             requirements_context=requirements_context,
             issue_verification=issue_verification,
+            material_transitions=transitions,
         )
 
     artifacts: list[dict[str, Any]] = []
@@ -1687,6 +1871,7 @@ def check_repository(
                 artifacts=artifacts,
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
+                material_transitions=transitions,
             )
         except subprocess.TimeoutExpired as exc:
             _raise_with_receipt(
@@ -1700,6 +1885,7 @@ def check_repository(
                 artifacts=artifacts,
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
+                material_transitions=transitions,
             )
         except OSError as exc:
             _raise_with_receipt(
@@ -1713,6 +1899,7 @@ def check_repository(
                 artifacts=artifacts,
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
+                material_transitions=transitions,
             )
 
         if config["version"] == CONFIG_VERSION:
@@ -1747,6 +1934,7 @@ def check_repository(
                 artifacts=artifacts,
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
+                material_transitions=transitions,
             )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
@@ -1762,6 +1950,7 @@ def check_repository(
             artifacts=artifacts,
             requirements_context=requirements_context,
             issue_verification=issue_verification,
+            material_transitions=transitions,
         )
 
     request = _build_request(
@@ -1787,6 +1976,7 @@ def check_repository(
             reasons=[reason],
             requirements_context=requirements_context,
             issue_verification=issue_verification,
+            material_transitions=transitions,
         )
         path_out = _write_receipt(repo, receipt)
         raise LocalCheckError(reason, "canonical Core rejected request", receipt_path=path_out)
@@ -1802,6 +1992,7 @@ def check_repository(
         artifacts=artifacts,
         requirements_context=requirements_context,
         issue_verification=issue_verification,
+        material_transitions=transitions,
         request=request,
         response=response,
         status=status,
@@ -1884,6 +2075,9 @@ def _validate_artifact_payload(
             if (
                 artifact.get("expected_identity") != producer["expected_identity"]
                 or artifact.get("observed_identity") != observed
+                or artifact.get("trusted_expected_identity", artifact.get("expected_identity"))
+                != producer.get("trusted_expected_identity", producer["expected_identity"])
+                or artifact.get("transition") != producer.get("transition")
             ):
                 reasons.append("MATERIAL_IDENTITY_MISMATCH")
             expected_status = (
@@ -2080,6 +2274,34 @@ def validate_verification_receipt_payload(
     if config_hash is None or payload.get("config_hash") != config_hash:
         reasons.append("CONFIG_HASH_MISMATCH")
 
+    transitions: list[dict[str, Any]] = []
+    try:
+        transitions = _normalize_material_transitions(inputs.get("material_transitions", []))
+    except LocalCheckError:
+        reasons.append("MALFORMED_RECEIPT")
+    bound = payload.get("issue_verification")
+    bound_transitions = bound.get("material_transitions", []) if isinstance(bound, dict) else []
+    if transitions or bound_transitions:
+        if not isinstance(bound, dict) or bound_transitions != transitions:
+            reasons.append("MATERIAL_TRANSITION_UNBOUND")
+        for item in transitions:
+            if not _valid_transition_authorization(item.get("authorized_by")):
+                reasons.append("MATERIAL_TRANSITION_UNBOUND")
+            elif not _transition_authorized(item):
+                reasons.append("MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR")
+        source = payload.get("config_source")
+        if not isinstance(source, dict) or source.get("kind") != "base-ref":
+            reasons.append("MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG")
+        if isinstance(config, dict):
+            try:
+                _check_material_transitions(config, transitions)
+                if isinstance(source, dict) and source.get(
+                    "worktree_config_hash"
+                ) != canonical_hash(_config_with_material_transitions(config, transitions)):
+                    reasons.append("CONFIG_DRIFT_BEYOND_AUTHORIZED_TRANSITION")
+            except LocalCheckError as exc:
+                reasons.append(exc.reason_code)
+
     artifacts: list[dict[str, Any]] = []
     if config_version == CONFIG_VERSION:
         verifier = payload.get("verifier")
@@ -2089,7 +2311,7 @@ def validate_verification_receipt_payload(
     elif config_version == CONFIG_VERSION_MULTI_EVIDENCE and v2_config is not None:
         try:
             validated_config = _validate_config(dict(v2_config))
-            producers = _v2_producers(validated_config)
+            producers = _v2_producers(validated_config, transitions)
             producers_by_id = {producer["id"]: producer for producer in producers}
         except LocalCheckError:
             reasons.append("CONFIG_BINDING_MISMATCH")

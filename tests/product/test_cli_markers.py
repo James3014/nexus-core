@@ -125,3 +125,69 @@ def test_issue_init_no_hint_when_marker_present(repo, monkeypatch, capsys) -> No
     _patch_reader(monkeypatch, f"Change V\n\n{marker}\n")
     assert cli.main(["issue-init", "--repo", str(repo), "--issue", "85"]) == 0
     assert "hint:" not in capsys.readouterr().out
+
+
+_OLD = "git-commit:" + "a" * 40
+_NEW = "git-commit:" + "b" * 40
+
+
+@pytest.fixture
+def pin_repo(repo: Path) -> Path:
+    (repo / ".nexus-core" / "config.toml").write_text(
+        "\n".join(
+            [
+                "version = 2",
+                'base_ref = "main"',
+                'allowed_patterns = ["app.py"]',
+                'deletion_policy = "FORBID"',
+                "universe_generation = 1",
+                "verifiers = []",
+                "[[materials]]",
+                'id = "runtime"',
+                f'observe_command = [{json.dumps(sys.executable)}, "-c", "print(1)"]',
+                "timeout_seconds = 30",
+                'logical_subject_id = "dependency/runtime"',
+                'evidence_kind = "resolved-dependency"',
+                'requirement_mode = "REQUIRED"',
+                'applicability = "APPLICABLE"',
+                f'expected_identity = "{_OLD}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    _commit_config(repo)
+    return repo
+
+
+def test_markers_material_transition_prints_exact_line_from_trusted_config(
+    pin_repo, capsys
+) -> None:
+    from product.clients.issue_golden_path import _issue_material_transitions
+
+    argv = ["markers", "--repo", str(pin_repo), "--material-transition", f"runtime={_NEW}"]
+    assert cli.main(argv) == 0
+    out, err = capsys.readouterr()
+    line = f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {_OLD} -> {_NEW} -->"
+    assert "NEXUS_CORE_EVIDENCE_UNIVERSE: sha256:" in out
+    assert line in out
+    assert err == ""
+    assert _issue_material_transitions({"body": line})[0]["to_identity"] == _NEW
+
+
+def test_markers_material_transition_json_and_unknown_material(pin_repo, capsys) -> None:
+    argv = ["markers", "--repo", str(pin_repo), "--json", "--material-transition", f"runtime={_NEW}"]
+    assert cli.main(argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["material_transition_markers"] == [
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {_OLD} -> {_NEW} -->"
+    ]
+
+    argv = ["markers", "--repo", str(pin_repo), "--material-transition", f"nope={_NEW}"]
+    assert cli.main(argv) == 2
+    assert "MATERIAL_TRANSITION_UNKNOWN_MATERIAL" in capsys.readouterr().err
+
+
+def test_markers_without_transition_flag_is_unchanged(pin_repo, capsys) -> None:
+    assert cli.main(["markers", "--repo", str(pin_repo)]) == 0
+    assert "NEXUS_CORE_MATERIAL_TRANSITION" not in capsys.readouterr().out

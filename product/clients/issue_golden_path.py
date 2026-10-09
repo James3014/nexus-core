@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -14,13 +15,16 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from product.clients.local_golden_path import (
+    _MATERIAL_IDENTITY_RE,
     CONFIG_DIRECTORY,
     CONFIG_FILENAME,
     ISSUE_CEILING_UNBOUND,
     ISSUE_EVIDENCE_STALE_REASON,
     ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401
+    MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS,
     LocalCheckError,
     _load_effective_config,
+    _raise_with_receipt,
     check_repository,
 )
 from product.protocol.generic_verification import canonical_hash
@@ -31,6 +35,11 @@ ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v2"
 ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
 ISSUE_EVIDENCE_MARKER_PREFIX = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: "
 ISSUE_EVIDENCE_MARKER_SUFFIX = " -->"
+ISSUE_MATERIAL_TRANSITION_TOKEN = "NEXUS_CORE_MATERIAL_TRANSITION"
+ISSUE_MATERIAL_TRANSITION_SOURCE = "issue-contract-marker"
+_MATERIAL_TRANSITION_RE = re.compile(
+    r"<!-- NEXUS_CORE_MATERIAL_TRANSITION: (\S+) (\S+) -> (\S+) -->"
+)
 ISSUE_RATE_LIMIT_RETRIES = 2
 ISSUE_RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
 ISSUE_RATE_LIMIT_FALLBACK_WAIT_SECONDS = 1.0
@@ -191,13 +200,24 @@ def _issue_contract(github_repo: str, issue_number: int, raw: Mapping[str, Any])
         raise LocalCheckError("ISSUE_MALFORMED", f"{github_repo}#{issue_number}")
     if body is not None and not isinstance(body, str):
         raise LocalCheckError("ISSUE_MALFORMED", f"{github_repo}#{issue_number}")
-    return {
+    contract: dict[str, Any] = {
         "github_repository": github_repo,
         "issue_number": issue_number,
         "title": title,
         "body": body or "",
         "state": state,
     }
+    # Authorship is part of the frozen contract so a transition marker cannot be
+    # re-attributed. Keys are only added when the reader supplies them, which keeps
+    # contract hashes stable for readers that do not (such Issues cannot authorize).
+    association = raw.get("author_association")
+    if isinstance(association, str):
+        contract["author_association"] = association
+    user = raw.get("user")
+    login = user.get("login") if isinstance(user, Mapping) else None
+    if isinstance(login, str) and login:
+        contract["author_login"] = login
+    return contract
 
 
 def _path(repo: Path, issue_number: int) -> Path:
@@ -256,6 +276,47 @@ def _issue_evidence_universe_marker(contract: Mapping[str, Any]) -> str | None:
             "expected at most one exact NEXUS_CORE_EVIDENCE_UNIVERSE marker",
         )
     return matches[0] if matches else None
+
+
+def _issue_material_transitions(contract: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Parse exact NEXUS_CORE_MATERIAL_TRANSITION markers from the Issue contract."""
+
+    body = contract.get("body")
+    if not isinstance(body, str):
+        raise LocalCheckError("ISSUE_MALFORMED", "Issue body must be text")
+    transitions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("<!--") or ISSUE_MATERIAL_TRANSITION_TOKEN not in stripped:
+            continue
+        match = _MATERIAL_TRANSITION_RE.fullmatch(stripped)
+        if match is None:
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                "expected <!-- NEXUS_CORE_MATERIAL_TRANSITION: <id> <from> -> <to> -->",
+            )
+        material_id, from_identity, to_identity = match.groups()
+        if not all(_MATERIAL_IDENTITY_RE.fullmatch(v) for v in (from_identity, to_identity)):
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                "identities must look like <scheme>:<value> without whitespace",
+            )
+        if material_id in seen or from_identity == to_identity:
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                f"duplicate or no-op transition for material {material_id}",
+            )
+        seen.add(material_id)
+        transitions.append(
+            {
+                "material_id": material_id,
+                "from_identity": from_identity,
+                "to_identity": to_identity,
+                "source": ISSUE_MATERIAL_TRANSITION_SOURCE,
+            }
+        )
+    return transitions
 
 
 def _evidence_sufficiency_binding(
@@ -455,21 +516,55 @@ def check_issue(
             "config_hash": sufficiency["config_hash"] if sufficiency is not None else None,
         },
     }
+    issue_verification: dict[str, Any] = {
+        "issue_number": issue_number,
+        "github_repository": github_repo,
+        "issue_contract_hash": binding["issue_contract_hash"],
+        "evidence_universe": sufficiency_status,
+        "claim_ceiling": (
+            "ISSUE_VERIFIED_NOT_RELEASED"
+            if sufficiency_status == "BOUND"
+            else ISSUE_CEILING_UNBOUND
+        ),
+    }
+    try:
+        transitions = _issue_material_transitions(current)
+    except LocalCheckError as exc:
+        effective_config, config_source, _worktree = _load_effective_config(repo)
+        _raise_with_receipt(
+            repo,
+            exc.reason_code,
+            exc.detail,
+            config=effective_config,
+            config_hash=canonical_hash(effective_config),
+            config_source=config_source,
+            requirements_context=context,
+            issue_verification=issue_verification,
+        )
+    if transitions:
+        association = current.get("author_association")
+        login = current.get("author_login")
+        if association not in MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS or not login:
+            effective_config, config_source, _worktree = _load_effective_config(repo)
+            _raise_with_receipt(
+                repo,
+                "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR",
+                f"Issue author association {association!r} cannot authorize material transitions",
+                config=effective_config,
+                config_hash=canonical_hash(effective_config),
+                config_source=config_source,
+                requirements_context=context,
+                issue_verification=issue_verification,
+            )
+        authorized_by = {"login": login, "author_association": association}
+        transitions = [{**item, "authorized_by": dict(authorized_by)} for item in transitions]
+        issue_verification["material_transitions"] = transitions
     result = check_repository(
         repo,
         requirements_context=context,
         require_trusted_config=require_trusted_config,
-        issue_verification={
-            "issue_number": issue_number,
-            "github_repository": github_repo,
-            "issue_contract_hash": binding["issue_contract_hash"],
-            "evidence_universe": sufficiency_status,
-            "claim_ceiling": (
-                "ISSUE_VERIFIED_NOT_RELEASED"
-                if sufficiency_status == "BOUND"
-                else ISSUE_CEILING_UNBOUND
-            ),
-        },
+        issue_verification=issue_verification,
+        material_transitions=transitions,
     )
     if stale_detail is not None:
         raise LocalCheckError(

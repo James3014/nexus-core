@@ -27,6 +27,7 @@ from product.clients.issue_golden_path import (
 from product.clients.local_golden_path import (
     LocalCheckError,
     _load_effective_config,
+    _normalize_material_transitions,
     check_repository,
     doctor_repository,
     evaluate_receipt_expectations,
@@ -487,12 +488,49 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _material_transition_markers(config: dict[str, Any], specs: list[str]) -> list[str]:
+    """Render one transition marker per ``<material_id>=<to_identity>`` flag (pure)."""
+
+    trusted = {
+        item["id"]: item["expected_identity"] for item in config.get("materials", [])
+    }
+    markers: list[str] = []
+    transitions: list[dict[str, str]] = []
+    for spec in specs:
+        material_id, separator, to_identity = spec.partition("=")
+        if material_id not in trusted and separator:
+            raise LocalCheckError("MATERIAL_TRANSITION_UNKNOWN_MATERIAL", material_id)
+        transitions.append(
+            {
+                "material_id": material_id,
+                "from_identity": trusted.get(material_id, ""),
+                "to_identity": to_identity if separator else "",
+                "source": "issue-contract-marker",
+            }
+        )
+    # Reuse the receipt-side shape validation (normalized text, unique ids, no no-ops).
+    try:
+        normalized = _normalize_material_transitions(transitions)
+    except LocalCheckError as exc:
+        raise LocalCheckError(
+            exc.reason_code,
+            f"{exc.detail}; expected --material-transition <material_id>=<to_identity>",
+        ) from exc
+    for item in normalized:
+        markers.append(
+            f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: {item['material_id']} "
+            f"{item['from_identity']} -> {item['to_identity']} -->"
+        )
+    return markers
+
+
 def cmd_markers(args: argparse.Namespace) -> int:
     """Print the exact Issue-body and PR-body markers the gate expects."""
     config, source, _worktree = _load_effective_config(Path(args.repo))
     config_hash = canonical_hash(config)
     issue_marker = f"{ISSUE_EVIDENCE_MARKER_PREFIX}{config_hash}{ISSUE_EVIDENCE_MARKER_SUFFIX}"
     pr_marker = f"<!-- NEXUS_CORE_ISSUE: {args.issue} -->" if args.issue is not None else None
+    transition_markers = _material_transition_markers(config, args.material_transition or [])
     if source.get("kind") != "base-ref":
         print(
             f"warning: config is not committed on {config['base_ref']}; "
@@ -507,6 +545,7 @@ def cmd_markers(args: argparse.Namespace) -> int:
                     "config_source": source,
                     "issue_marker": issue_marker,
                     "pr_marker": pr_marker,
+                    "material_transition_markers": transition_markers,
                 },
                 indent=2,
                 sort_keys=True,
@@ -514,6 +553,8 @@ def cmd_markers(args: argparse.Namespace) -> int:
         )
         return 0
     print(f"Issue body: {issue_marker}")
+    for marker in transition_markers:
+        print(f"Issue body: {marker}")
     if pr_marker is not None:
         print(f"PR body:    {pr_marker}")
     return 0
@@ -732,6 +773,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_markers.add_argument("--repo", default=".", help="Git repository (default: current)")
     p_markers.add_argument(
         "--issue", type=int, default=None, help="Also print the PR-body marker for this Issue"
+    )
+    p_markers.add_argument(
+        "--material-transition",
+        action="append",
+        metavar="MATERIAL_ID=TO_IDENTITY",
+        help="Also print a NEXUS_CORE_MATERIAL_TRANSITION marker moving this material's "
+        "pinned identity from the trusted config value to TO_IDENTITY (repeatable)",
     )
     p_markers.add_argument("--json", action="store_true", help="Emit JSON")
 
