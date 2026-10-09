@@ -153,6 +153,10 @@ The image must be pinned by digest and only the sandbox parent directory is moun
 pull failure is `ISOLATION_IMAGE_UNAVAILABLE`. See [`LOCAL_GOLDEN_PATH.md`](LOCAL_GOLDEN_PATH.md)
 for the isolation modes and trusted config source.
 
+## Candidate acquisition
+
+The `run` job acquires the candidate with plain Git (`git init`, a token-on-the-command-line fetch of the exact head and base shas, `git checkout --detach`), not with `actions/checkout`. Nothing is written to `.git/config`, submodules and gitlinks are never initialised (repositories that carry gitlink entries without `.gitmodules` URLs need no extra step), and the base ref is force-updated to the event's base sha so a moved base does not reject a non-fast-forward.
+
 ## Why fork pull requests are excluded
 
 `pull_request_target` runs with the base repository's token and permissions. The

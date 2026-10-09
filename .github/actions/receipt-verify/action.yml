@@ -164,13 +164,19 @@ runs:
       shell: bash
       env:
         REPO: ${{ inputs.github-repository }}
+        SERVER: ${{ github.server_url }}
         HEAD_SHA: ${{ inputs.head-sha }}
         WORK: ${{ runner.temp }}/nexus-core-head-tree
+        FETCH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         rm -rf "$WORK"
         git init -q "$WORK"
-        git -C "$WORK" fetch -q --depth 1 "https://github.com/${REPO}" "$HEAD_SHA"
+        # Token on the command line only (never persisted); works for private repositories.
+        basic_auth="$(printf '%s' "x-access-token:$FETCH_TOKEN" | base64 | tr -d '\n')"
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader \
+          GIT_CONFIG_VALUE_0="Authorization: basic $basic_auth" \
+          git -C "$WORK" fetch -q --no-tags --depth 1 "$SERVER/${REPO}.git" "$HEAD_SHA"
         tree="$(git -C "$WORK" rev-parse 'FETCH_HEAD^{tree}')"
         [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || { echo "NEXUS_CORE_VERIFY_TREE_UNRESOLVED" >&2; exit 1; }
         echo "tree=$tree" >> "$GITHUB_OUTPUT"

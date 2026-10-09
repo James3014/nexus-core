@@ -145,25 +145,39 @@ runs:
         "$UV_TOOL_BIN_DIR/nexus-certify" --help >/dev/null
         echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
 
-    - name: Checkout candidate head
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-        path: ${{ inputs.candidate-path }}
-        fetch-depth: 0
-        persist-credentials: false
-
-    - name: Pin exact base ref
+    - name: Acquire candidate head with plain Git (no submodule handling)
       shell: bash
       env:
         CANDIDATE: ${{ inputs.candidate-path }}
+        REPO: ${{ github.repository }}
+        SERVER: ${{ github.server_url }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
+        FETCH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        # '+' forces the update so a moved base does not reject a non-fast-forward.
-        # If BASE_SHA is not an ancestor of head, Core reports BASE_REF_NOT_ANCESTOR.
-        git -C "$CANDIDATE" fetch --no-tags origin "+${BASE_SHA}:refs/remotes/origin/${BASE_REF}"
+        [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "NEXUS_CORE_GATE_HEAD_SHA_INVALID" >&2; exit 1; }
+        [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "NEXUS_CORE_GATE_BASE_SHA_INVALID" >&2; exit 1; }
+        [[ "$BASE_REF" =~ ^[A-Za-z0-9_./-]+$ ]] || { echo "NEXUS_CORE_GATE_BASE_REF_INVALID" >&2; exit 1; }
+        rm -rf "$CANDIDATE"
+        git init -q "$CANDIDATE"
+        git -C "$CANDIDATE" remote add origin "$SERVER/$REPO.git"
+        # The token is passed on the command line only; nothing is written to .git/config,
+        # so no credential survives in the candidate tree (same guarantee as
+        # actions/checkout persist-credentials: false). Full history is fetched so the
+        # base ref resolves as an ancestor; '+' forces the base ref so a moved base does
+        # not reject a non-fast-forward. Submodules/gitlinks are never initialised.
+        basic_auth="$(printf '%s' "x-access-token:$FETCH_TOKEN" | base64 | tr -d '\n')"
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader \
+          GIT_CONFIG_VALUE_0="Authorization: basic $basic_auth" \
+          git -C "$CANDIDATE" fetch --no-tags origin \
+            "+${HEAD_SHA}:refs/remotes/origin/nexus-core-candidate" \
+            "+${BASE_SHA}:refs/remotes/origin/${BASE_REF}"
+        git -C "$CANDIDATE" checkout -q --detach "$HEAD_SHA"
+        test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$HEAD_SHA"
+        test "$(git -C "$CANDIDATE" rev-parse "refs/remotes/origin/${BASE_REF}")" = "$BASE_SHA"
+        test -z "$(git -C "$CANDIDATE" config --get http.extraheader || true)"
 
     - name: Bind exact Issue contract
       shell: bash
