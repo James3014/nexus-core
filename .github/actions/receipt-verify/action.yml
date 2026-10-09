@@ -4,13 +4,25 @@ description: >-
   Verifies the keyless signature against the expected GitHub workflow identity,
   then runs nexus-certify receipt-check with every expectation (VERIFIED status,
   exact PR head, exact head tree, base-ref config commit, Issue binding, clean
-  subject, trusted config). Any failure is a non-zero exit. The calling job needs
+  subject, trusted config). Any failure is a non-zero exit. The artifact is resolved
+  to exactly one artifact of this workflow run uploaded by the producing attempt;
+  missing, ambiguous or mismatched identity fails closed. The calling job needs
   only 'contents: read' and 'actions: read'; it never checks out candidate code.
 
 inputs:
   artifact-name:
-    description: Name of the artifact uploaded by issue-gate (output 'artifact-name').
+    description: >-
+      Name of the artifact uploaded by issue-gate (output 'artifact-name'). Must be
+      nexus-core-receipts-<head-sha>-run<run-id>-attempt<n> for this head, this
+      workflow run and an attempt not after the current one; head-only names are
+      rejected because rerun attempts share them.
     required: true
+  artifact-id:
+    description: >-
+      Optional artifact id uploaded by issue-gate (output 'artifact-id'). When set,
+      the artifact resolved by name must have exactly this id.
+    required: false
+    default: ""
   expected-identity:
     description: >-
       Full Sigstore certificate identity of the signing workflow, e.g.
@@ -50,6 +62,9 @@ inputs:
     default: "4.5.0"
 
 outputs:
+  artifact-id:
+    description: Id of the exact producer artifact that was resolved and downloaded.
+    value: ${{ steps.artifact.outputs.artifact-id }}
   receipt-sha256:
     description: SHA-256 of the verified receipt.
     value: ${{ steps.verify.outputs.receipt-sha256 }}
@@ -61,9 +76,11 @@ runs:
   using: composite
   steps:
     - name: Validate inputs
+      id: validate
       shell: bash
       env:
         IN_ARTIFACT: ${{ inputs.artifact-name }}
+        IN_ARTIFACT_ID: ${{ inputs.artifact-id }}
         IN_IDENTITY: ${{ inputs.expected-identity }}
         IN_REPO: ${{ inputs.github-repository }}
         IN_HEAD: ${{ inputs.head-sha }}
@@ -74,10 +91,15 @@ runs:
         IN_PATH: ${{ inputs.nexus-certify-path }}
         IN_PYTHON: ${{ inputs.python-version }}
         IN_SIGSTORE: ${{ inputs.sigstore-version }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
         fail() { echo "NEXUS_CORE_VERIFY_INPUT_INVALID: $1" >&2; exit 1; }
         [[ "$IN_ARTIFACT" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "artifact-name"
+        [ -z "$IN_ARTIFACT_ID" ] || [[ "$IN_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || fail "artifact-id must be a positive integer"
+        [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "github.run_id"
+        [[ "$RUN_ATTEMPT" =~ ^[1-9][0-9]{0,5}$ ]] || fail "github.run_attempt"
         [[ "$IN_IDENTITY" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.github/workflows/[A-Za-z0-9_./-]+@refs/[A-Za-z0-9_./-]+$ ]] || fail "expected-identity"
         [[ "$IN_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "github-repository must be owner/name"
         [[ "$IN_HEAD" =~ ^[0-9a-f]{40}$ ]] || fail "head-sha must be 40-hex"
@@ -90,6 +112,93 @@ runs:
           path) [ -n "$IN_PATH" ] || fail "nexus-certify-path must be set" ;;
           *) fail "nexus-certify-source must be 'ref' or 'path'" ;;
         esac
+        # Bind the producing attempt: this head, this workflow run, attempt <= current.
+        # A verifier-only rerun keeps the producer's (earlier) attempt from needs outputs.
+        prefix="nexus-core-receipts-${IN_HEAD}-run${RUN_ID}-attempt"
+        producer_attempt="${IN_ARTIFACT#"$prefix"}"
+        if [ "$producer_attempt" = "$IN_ARTIFACT" ] \
+          || ! [[ "$producer_attempt" =~ ^[1-9][0-9]{0,5}$ ]] \
+          || [ "$producer_attempt" -gt "$RUN_ATTEMPT" ]; then
+          echo "NEXUS_CORE_VERIFY_ARTIFACT_IDENTITY_INVALID: artifact-name must be ${prefix}<n> with n <= ${RUN_ATTEMPT}" >&2
+          exit 1
+        fi
+
+    - name: Resolve exact producer artifact
+      id: artifact
+      shell: bash
+      env:
+        API_URL: ${{ github.api_url }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import os
+        import sys
+        import urllib.parse
+        import urllib.request
+
+        name = os.environ["ARTIFACT_NAME"]
+        run_id = int(os.environ["RUN_ID"])
+        expected_id = os.environ.get("ARTIFACT_ID", "")
+
+
+        def fail(code, detail):
+            sys.stderr.write(f"{code}: {detail}\n")
+            raise SystemExit(1)
+
+
+        query = urllib.parse.urlencode({"name": name, "per_page": 100})
+        url = f"{os.environ['API_URL']}/repos/{os.environ['REPO']}/actions/runs/{run_id}/artifacts?{query}"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.load(response)
+        except Exception as error:  # noqa: BLE001 - any lookup failure is fail-closed
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_LOOKUP_FAILED", type(error).__name__)
+
+        artifacts = payload.get("artifacts") if isinstance(payload, dict) else None
+        total = payload.get("total_count") if isinstance(payload, dict) else None
+        if (
+            not isinstance(artifacts, list)
+            or type(total) is not int
+            or total != len(artifacts)
+            or not all(isinstance(item, dict) for item in artifacts)
+        ):
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_LOOKUP_FAILED", "malformed or truncated artifact listing")
+        if any(item.get("name") != name for item in artifacts):
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_LOOKUP_FAILED", "listing contains another artifact name")
+        if not artifacts:
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_MISSING", f"no artifact {name} in workflow run {run_id}")
+        if len(artifacts) != 1:
+            ids = sorted(str(item.get("id")) for item in artifacts)
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_AMBIGUOUS", f"{len(artifacts)} artifacts named {name}: {ids}")
+        artifact = artifacts[0]
+        artifact_id = artifact.get("id")
+        workflow_run = artifact.get("workflow_run")
+        if type(artifact_id) is not int or artifact_id <= 0:
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_LOOKUP_FAILED", "artifact id is not a positive integer")
+        if not isinstance(workflow_run, dict) or type(workflow_run.get("id")) is not int or workflow_run["id"] != run_id:
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_LOOKUP_FAILED", "artifact does not belong to this workflow run")
+        if artifact.get("expired") is not False:
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_EXPIRED", f"artifact {artifact_id} is expired or unknown")
+        if expected_id and str(artifact_id) != expected_id:
+            fail("NEXUS_CORE_VERIFY_ARTIFACT_ID_MISMATCH", f"expected {expected_id}, resolved {artifact_id}")
+        print(f"NEXUS_CORE_VERIFY_ARTIFACT: {name} id={artifact_id}")
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write(f"artifact-name={name}\nartifact-id={artifact_id}\n")
+        PY
 
     - name: Set up uv
       uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.1
@@ -118,7 +227,8 @@ runs:
     - name: Download receipt artifact
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
-        name: ${{ inputs.artifact-name }}
+        # Unique within this run: resolved above to exactly one producer artifact.
+        name: ${{ steps.artifact.outputs.artifact-name }}
         path: ${{ runner.temp }}/nexus-core-receipt-artifact
 
     - name: Locate exactly one receipt and bundle
