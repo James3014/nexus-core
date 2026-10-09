@@ -84,6 +84,23 @@ This proves that the trusted verifier contract required the exact observed mater
 
 Core does not become a dependency resolver or package manager. The consumer chooses how to acquire the dependency and how to read back its exact identity; Core binds and reduces the resulting evidence.
 
+## Issue-authorized material transitions
+
+Under `--require-trusted-config` a material is compared with the `expected_identity` committed on the base ref, so a pull request that advances a pinned dependency would otherwise observe a new identity and fail. The Issue contract can pre-authorize that change with one marker per material (at most one per material id), written exactly as:
+
+```text
+<!-- NEXUS_CORE_MATERIAL_TRANSITION: <material_id> <from_identity> -> <to_identity> -->
+```
+
+Generate it with `nexus-certify markers --material-transition <material_id>=<to_identity>` (repeatable); `<from_identity>` is read from the trusted config. The marker is frozen with the rest of the Issue contract by `issue-init`, and `issue-check` applies it:
+
+- `<from_identity>` must equal the trusted `expected_identity` (`MATERIAL_TRANSITION_STALE` otherwise); an unknown id is `MATERIAL_TRANSITION_UNKNOWN_MATERIAL`; a malformed or duplicate marker is `ISSUE_MATERIAL_TRANSITION_MALFORMED`. Transitions need a committed base-ref config (`MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG`).
+- The effective expectation for that material becomes `<to_identity>`; it passes only if the observed identity equals it. Artifacts record `expected_identity` (effective), `trusted_expected_identity` and `transition`.
+- Exact-delta rule: the pull request's working-tree `config.toml` must equal the trusted config with exactly those `expected_identity` values replaced. Any other difference fails closed with `CONFIG_DRIFT_BEYOND_AUTHORIZED_TRANSITION`, so merging the pull request leaves the base-ref config consistent with the new pins.
+- All of these checks run before any verifier and leave a receipt. The receipt records `inputs.material_transitions` and `issue_verification.material_transitions`; `receipt-check` recomputes producers with the transitions applied and rejects a receipt that applies a transition without an Issue binding (`MATERIAL_TRANSITION_UNBOUND`).
+
+Without the marker, a pin bump fails exactly as before. The evidence-universe marker is unchanged and still hashes the trusted base-ref config.
+
 ## Applicability
 
 Version 2 reuses the existing evidence coverage model:

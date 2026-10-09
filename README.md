@@ -107,6 +107,18 @@ Issue body: <!-- NEXUS_CORE_EVIDENCE_UNIVERSE: sha256:<config hash> -->
 
 Paste that marker line into the Issue body. The command is read-only. It prints a warning on stderr if the config is not yet committed on the base branch, because the hash changes once it is.
 
+If the work advances a pinned `[[materials]]` identity (for example a dependency commit), also authorize that change in the Issue:
+
+```bash
+nexus-certify markers --material-transition nexus-runtime=git-commit:<new sha>
+```
+
+```text
+Issue body: <!-- NEXUS_CORE_MATERIAL_TRANSITION: nexus-runtime git-commit:<old sha> -> git-commit:<new sha> -->
+```
+
+`<old sha>` is read from the committed config. The pull request must then change `.nexus-core/config.toml` by exactly those `expected_identity` values and nothing else. See [Issue-authorized material transitions](docs/MULTI_EVIDENCE_GOLDEN_PATH.md#issue-authorized-material-transitions).
+
 ### 3. Open the pull request with a marker
 
 The pull request body must contain exactly one marker that names the Issue:

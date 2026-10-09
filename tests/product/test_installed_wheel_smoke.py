@@ -53,7 +53,7 @@ def test_installed_wheel_smoke_in_isolated_venv(tmp_path: Path):
         text=True,
         check=True,
     )
-    assert res_version.stdout.strip() == "0.2.0"
+    assert res_version.stdout.strip() == "0.3.0"
 
     res_cli = subprocess.run(
         [str(venv_certify), "--help"], capture_output=True, text=True, check=True
