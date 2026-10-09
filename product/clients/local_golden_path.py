@@ -2032,6 +2032,9 @@ def _validate_artifact_payload(
             if (
                 artifact.get("expected_identity") != producer["expected_identity"]
                 or artifact.get("observed_identity") != observed
+                or artifact.get("trusted_expected_identity", artifact.get("expected_identity"))
+                != producer.get("trusted_expected_identity", producer["expected_identity"])
+                or artifact.get("transition") != producer.get("transition")
             ):
                 reasons.append("MATERIAL_IDENTITY_MISMATCH")
             expected_status = (
@@ -2228,6 +2231,29 @@ def validate_verification_receipt_payload(
     if config_hash is None or payload.get("config_hash") != config_hash:
         reasons.append("CONFIG_HASH_MISMATCH")
 
+    transitions: list[dict[str, str]] = []
+    try:
+        transitions = _normalize_material_transitions(inputs.get("material_transitions", []))
+    except LocalCheckError:
+        reasons.append("MALFORMED_RECEIPT")
+    bound = payload.get("issue_verification")
+    bound_transitions = bound.get("material_transitions", []) if isinstance(bound, dict) else []
+    if transitions or bound_transitions:
+        if not isinstance(bound, dict) or bound_transitions != transitions:
+            reasons.append("MATERIAL_TRANSITION_UNBOUND")
+        source = payload.get("config_source")
+        if not isinstance(source, dict) or source.get("kind") != "base-ref":
+            reasons.append("MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG")
+        if isinstance(config, dict):
+            try:
+                _check_material_transitions(config, transitions)
+                if isinstance(source, dict) and source.get(
+                    "worktree_config_hash"
+                ) != canonical_hash(_config_with_material_transitions(config, transitions)):
+                    reasons.append("CONFIG_DRIFT_BEYOND_AUTHORIZED_TRANSITION")
+            except LocalCheckError as exc:
+                reasons.append(exc.reason_code)
+
     artifacts: list[dict[str, Any]] = []
     if config_version == CONFIG_VERSION:
         verifier = payload.get("verifier")
@@ -2237,7 +2263,7 @@ def validate_verification_receipt_payload(
     elif config_version == CONFIG_VERSION_MULTI_EVIDENCE and v2_config is not None:
         try:
             validated_config = _validate_config(dict(v2_config))
-            producers = _v2_producers(validated_config)
+            producers = _v2_producers(validated_config, transitions)
             producers_by_id = {producer["id"]: producer for producer in producers}
         except LocalCheckError:
             reasons.append("CONFIG_BINDING_MISMATCH")

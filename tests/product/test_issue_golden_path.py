@@ -811,3 +811,86 @@ def test_issue_malformed_transition_marker_fails_closed_with_receipt(
 
     assert raised.value.reason_code == "ISSUE_MATERIAL_TRANSITION_MALFORMED"
     assert raised.value.receipt_path is not None
+
+
+def _transition_receipt(repo: Path, identity: str) -> tuple[Path, dict[str, Any]]:
+    def reader(github_repo: str, number: int) -> dict[str, object]:
+        return _issue(
+            body=(
+                "Advance the runtime pin\n\n"
+                f"<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->\n"
+                f"{_transition_line()}\n"
+            )
+        )
+
+    init_issue_binding(repo, issue_number=85, issue_reader=reader)
+    result = check_issue(repo, issue_number=85, issue_reader=reader, require_trusted_config=True)
+    path = result["receipt_path"]
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def _rehash(receipt: dict[str, Any]) -> dict[str, Any]:
+    from product.clients.local_golden_path import _receipt_hash
+
+    receipt = dict(receipt)
+    receipt["receipt_hash"] = _receipt_hash(receipt)
+    return receipt
+
+
+def test_transition_receipt_is_recomputed_with_transitions_applied(
+    pin_issue_repo: tuple[Path, str],
+) -> None:
+    from product.clients.local_golden_path import validate_verification_receipt_payload
+
+    repo, identity = pin_issue_repo
+    path, receipt = _transition_receipt(repo, identity)
+
+    assert validate_verification_receipt(path, repo=repo) == {"valid": True, "reason_codes": []}
+
+    tampered = json.loads(json.dumps(receipt))
+    tampered["inputs"]["material_transitions"][0]["to_identity"] = "git-commit:" + "d" * 40
+    tampered["issue_verification"]["material_transitions"][0]["to_identity"] = (
+        "git-commit:" + "d" * 40
+    )
+    verdict = validate_verification_receipt_payload(_rehash(tampered))
+    assert verdict["valid"] is False
+
+    dropped = json.loads(json.dumps(receipt))
+    dropped["inputs"]["material_transitions"] = []
+    del dropped["issue_verification"]["material_transitions"]
+    verdict = validate_verification_receipt_payload(_rehash(dropped))
+    assert verdict["valid"] is False
+    assert "MATERIAL_IDENTITY_MISMATCH" in verdict["reason_codes"]
+
+
+def test_transition_receipt_without_issue_binding_is_rejected(
+    pin_issue_repo: tuple[Path, str],
+) -> None:
+    from product.clients.local_golden_path import validate_verification_receipt_payload
+
+    repo, identity = pin_issue_repo
+    _path, receipt = _transition_receipt(repo, identity)
+    unbound = json.loads(json.dumps(receipt))
+    del unbound["issue_verification"]
+
+    verdict = validate_verification_receipt_payload(_rehash(unbound))
+
+    assert verdict["valid"] is False
+    assert "MATERIAL_TRANSITION_UNBOUND" in verdict["reason_codes"]
+
+
+def test_legacy_receipt_without_material_transitions_key_stays_valid(
+    issue_repo: Path,
+) -> None:
+    from product.clients.local_golden_path import validate_verification_receipt_payload
+
+    def reader(github_repo: str, number: int) -> dict[str, object]:
+        return _issue()
+
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["inputs"]["material_transitions"] == []
+    del receipt["inputs"]["material_transitions"]
+
+    assert validate_verification_receipt_payload(_rehash(receipt))["valid"] is True
