@@ -427,10 +427,11 @@ def _valid_transition_authorization(value: Any) -> bool:
 
 def _transition_authorized(item: Mapping[str, Any]) -> bool:
     authorization = item.get("authorized_by")
-    return (
-        _valid_transition_authorization(authorization)
-        and authorization["author_association"] in MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS
-    )
+    if not isinstance(authorization, Mapping) or not _valid_transition_authorization(
+        authorization
+    ):
+        return False
+    return authorization["author_association"] in MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS
 
 
 def _normalize_material_transitions(value: Any) -> list[dict[str, Any]]:
