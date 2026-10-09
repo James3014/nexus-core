@@ -632,3 +632,50 @@ def test_nexus_runtime_false_green_receipt_fails_issue_expectations(
     code, output = _receipt_check(capsys, fixture, None, "--expect-issue", "88", "--expect-status", "VERIFIED")
     assert code == 2
     assert "ISSUE_VERIFICATION_MISMATCH" in output["reason_codes"]
+
+
+OLD_PIN = "git-commit:" + "a" * 40
+NEW_PIN = "git-commit:" + "b" * 40
+
+
+def _transition_line(material_id: str = "runtime", old: str = OLD_PIN, new: str = NEW_PIN) -> str:
+    return f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: {material_id} {old} -> {new} -->"
+
+
+def test_material_transition_marker_valid_single() -> None:
+    contract = {"body": f"Bump pin\n\n{_transition_line()}\n"}
+    assert issue_gp._issue_material_transitions(contract) == [
+        {
+            "material_id": "runtime",
+            "from_identity": OLD_PIN,
+            "to_identity": NEW_PIN,
+            "source": "issue-contract-marker",
+        }
+    ]
+
+
+def test_material_transition_marker_two_materials_and_absent() -> None:
+    body = "\n".join([_transition_line("runtime"), _transition_line("learning")])
+    parsed = issue_gp._issue_material_transitions({"body": body})
+    assert [item["material_id"] for item in parsed] == ["runtime", "learning"]
+    assert issue_gp._issue_material_transitions({"body": "no markers here"}) == []
+    prose = "mentions NEXUS_CORE_MATERIAL_TRANSITION in prose only"
+    assert issue_gp._issue_material_transitions({"body": prose}) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _transition_line("runtime") + "\n" + _transition_line("runtime", OLD_PIN, "x:y"),
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} => {NEW_PIN} -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime  {OLD_PIN} -> {NEW_PIN} -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> {NEW_PIN} extra -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: {OLD_PIN} -> {NEW_PIN} -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> {NEW_PIN}",
+    ],
+)
+def test_material_transition_marker_malformed_fails_closed(body: str) -> None:
+    with pytest.raises(LocalCheckError) as excinfo:
+        issue_gp._issue_material_transitions({"body": body})
+    assert excinfo.value.reason_code == "ISSUE_MATERIAL_TRANSITION_MALFORMED"

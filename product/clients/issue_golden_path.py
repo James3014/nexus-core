@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -31,6 +32,11 @@ ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v2"
 ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
 ISSUE_EVIDENCE_MARKER_PREFIX = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: "
 ISSUE_EVIDENCE_MARKER_SUFFIX = " -->"
+ISSUE_MATERIAL_TRANSITION_TOKEN = "NEXUS_CORE_MATERIAL_TRANSITION"
+ISSUE_MATERIAL_TRANSITION_SOURCE = "issue-contract-marker"
+_MATERIAL_TRANSITION_RE = re.compile(
+    r"<!-- NEXUS_CORE_MATERIAL_TRANSITION: (\S+) (\S+) -> (\S+) -->"
+)
 ISSUE_RATE_LIMIT_RETRIES = 2
 ISSUE_RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
 ISSUE_RATE_LIMIT_FALLBACK_WAIT_SECONDS = 1.0
@@ -256,6 +262,42 @@ def _issue_evidence_universe_marker(contract: Mapping[str, Any]) -> str | None:
             "expected at most one exact NEXUS_CORE_EVIDENCE_UNIVERSE marker",
         )
     return matches[0] if matches else None
+
+
+def _issue_material_transitions(contract: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Parse exact NEXUS_CORE_MATERIAL_TRANSITION markers from the Issue contract."""
+
+    body = contract.get("body")
+    if not isinstance(body, str):
+        raise LocalCheckError("ISSUE_MALFORMED", "Issue body must be text")
+    transitions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("<!--") or ISSUE_MATERIAL_TRANSITION_TOKEN not in stripped:
+            continue
+        match = _MATERIAL_TRANSITION_RE.fullmatch(stripped)
+        if match is None:
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                "expected <!-- NEXUS_CORE_MATERIAL_TRANSITION: <id> <from> -> <to> -->",
+            )
+        material_id, from_identity, to_identity = match.groups()
+        if material_id in seen or from_identity == to_identity:
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                f"duplicate or no-op transition for material {material_id}",
+            )
+        seen.add(material_id)
+        transitions.append(
+            {
+                "material_id": material_id,
+                "from_identity": from_identity,
+                "to_identity": to_identity,
+                "source": ISSUE_MATERIAL_TRANSITION_SOURCE,
+            }
+        )
+    return transitions
 
 
 def _evidence_sufficiency_binding(
