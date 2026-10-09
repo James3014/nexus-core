@@ -1965,7 +1965,21 @@ def _transition(
         "from_identity": old,
         "to_identity": new,
         "source": "issue-contract-marker",
+        "authorized_by": {"login": "maintainer", "author_association": "OWNER"},
     }
+
+
+def test_transition_without_authorized_author_is_rejected(pin_repo: Path):
+    _set_worktree_config(pin_repo, _transition_config(_NEW_ID))
+    unauthorized = {**_transition(), "authorized_by": {"login": "x", "author_association": "NONE"}}
+    unattributed = {k: v for k, v in _transition().items() if k != "authorized_by"}
+
+    for transition in (unauthorized, unattributed):
+        with pytest.raises(LocalCheckError) as raised:
+            check_repository(
+                pin_repo, require_trusted_config=True, material_transitions=[transition]
+            )
+        assert raised.value.reason_code == "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR"
 
 
 @pytest.fixture

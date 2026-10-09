@@ -52,12 +52,16 @@ def issue_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _issue(*, body: str = "Change VALUE", state: str = "open") -> dict[str, object]:
+def _issue(
+    *, body: str = "Change VALUE", state: str = "open", author_association: str = "OWNER"
+) -> dict[str, object]:
     return {
         "number": 85,
         "title": "Bound change",
         "body": body,
         "state": state,
+        "author_association": author_association,
+        "user": {"login": "maintainer"},
         "updated_at": "2026-10-05T00:00:00Z",
     }
 
@@ -671,6 +675,10 @@ def test_material_transition_marker_two_materials_and_absent() -> None:
         f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime  {OLD_PIN} -> {NEW_PIN} -->",
         f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> -->",
         f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> {NEW_PIN} extra -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> Bad:Scheme -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> nocolon -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> git-commit:{'a' * 201} -->",
+        f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> git-commit:a;b -->",
         f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: {OLD_PIN} -> {NEW_PIN} -->",
         f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: runtime {OLD_PIN} -> {NEW_PIN}",
     ],
@@ -755,6 +763,7 @@ def test_issue_marker_authorizes_pin_bump_end_to_end(pin_issue_repo: tuple[Path,
             "from_identity": OLD_PIN,
             "to_identity": NEW_PIN,
             "source": "issue-contract-marker",
+            "authorized_by": {"login": "maintainer", "author_association": "OWNER"},
         }
     ]
     assert receipt["issue_verification"]["material_transitions"] == receipt["inputs"][
@@ -894,3 +903,63 @@ def test_legacy_receipt_without_material_transitions_key_stays_valid(
     del receipt["inputs"]["material_transitions"]
 
     assert validate_verification_receipt_payload(_rehash(receipt))["valid"] is True
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN"])
+def test_transition_marker_from_unprivileged_author_fails_closed_with_receipt(
+    pin_issue_repo: tuple[Path, str], association: str
+) -> None:
+    repo, identity = pin_issue_repo
+
+    def reader(github_repo: str, number: int) -> dict[str, object]:
+        return _issue(
+            body=f"Bump\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->\n{_transition_line()}\n",
+            author_association=association,
+        )
+
+    init_issue_binding(repo, issue_number=85, issue_reader=reader)
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(repo, issue_number=85, issue_reader=reader, require_trusted_config=True)
+
+    assert raised.value.reason_code == "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR"
+    assert raised.value.receipt_path is not None
+
+
+def test_authorship_is_part_of_the_frozen_issue_contract(
+    pin_issue_repo: tuple[Path, str],
+) -> None:
+    repo, identity = pin_issue_repo
+    body = f"Bump\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->\n{_transition_line()}\n"
+
+    init_issue_binding(
+        repo, issue_number=85, issue_reader=lambda r, n: _issue(body=body, author_association="NONE")
+    )
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(
+            repo,
+            issue_number=85,
+            issue_reader=lambda r, n: _issue(body=body, author_association="OWNER"),
+            require_trusted_config=True,
+        )
+    assert raised.value.reason_code == "ISSUE_REBIND_REQUIRED"
+
+
+def test_transition_receipt_requires_authorized_by(pin_issue_repo: tuple[Path, str]) -> None:
+    from product.clients.local_golden_path import validate_verification_receipt_payload
+
+    repo, identity = pin_issue_repo
+    _path, receipt = _transition_receipt(repo, identity)
+    assert receipt["inputs"]["material_transitions"][0]["authorized_by"]["login"] == "maintainer"
+
+    stripped = json.loads(json.dumps(receipt))
+    del stripped["inputs"]["material_transitions"][0]["authorized_by"]
+    del stripped["issue_verification"]["material_transitions"][0]["authorized_by"]
+    verdict = validate_verification_receipt_payload(_rehash(stripped))
+    assert verdict["valid"] is False
+    assert "MATERIAL_TRANSITION_UNBOUND" in verdict["reason_codes"]
+
+    downgraded = json.loads(json.dumps(receipt))
+    for holder in (downgraded["inputs"], downgraded["issue_verification"]):
+        holder["material_transitions"][0]["authorized_by"]["author_association"] = "NONE"
+    verdict = validate_verification_receipt_payload(_rehash(downgraded))
+    assert "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR" in verdict["reason_codes"]

@@ -21,6 +21,8 @@ from product.clients.local_golden_path import (
     ISSUE_EVIDENCE_STALE_REASON,
     ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401
     LocalCheckError,
+    MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS,
+    _MATERIAL_IDENTITY_RE,
     _load_effective_config,
     _raise_with_receipt,
     check_repository,
@@ -198,13 +200,24 @@ def _issue_contract(github_repo: str, issue_number: int, raw: Mapping[str, Any])
         raise LocalCheckError("ISSUE_MALFORMED", f"{github_repo}#{issue_number}")
     if body is not None and not isinstance(body, str):
         raise LocalCheckError("ISSUE_MALFORMED", f"{github_repo}#{issue_number}")
-    return {
+    contract: dict[str, Any] = {
         "github_repository": github_repo,
         "issue_number": issue_number,
         "title": title,
         "body": body or "",
         "state": state,
     }
+    # Authorship is part of the frozen contract so a transition marker cannot be
+    # re-attributed. Keys are only added when the reader supplies them, which keeps
+    # contract hashes stable for readers that do not (such Issues cannot authorize).
+    association = raw.get("author_association")
+    if isinstance(association, str):
+        contract["author_association"] = association
+    user = raw.get("user")
+    login = user.get("login") if isinstance(user, Mapping) else None
+    if isinstance(login, str) and login:
+        contract["author_login"] = login
+    return contract
 
 
 def _path(repo: Path, issue_number: int) -> Path:
@@ -284,6 +297,11 @@ def _issue_material_transitions(contract: Mapping[str, Any]) -> list[dict[str, s
                 "expected <!-- NEXUS_CORE_MATERIAL_TRANSITION: <id> <from> -> <to> -->",
             )
         material_id, from_identity, to_identity = match.groups()
+        if not all(_MATERIAL_IDENTITY_RE.fullmatch(v) for v in (from_identity, to_identity)):
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                "identities must look like <scheme>:<value> without whitespace",
+            )
         if material_id in seen or from_identity == to_identity:
             raise LocalCheckError(
                 "ISSUE_MATERIAL_TRANSITION_MALFORMED",
@@ -524,6 +542,22 @@ def check_issue(
             issue_verification=issue_verification,
         )
     if transitions:
+        association = current.get("author_association")
+        login = current.get("author_login")
+        if association not in MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS or not login:
+            effective_config, config_source, _worktree = _load_effective_config(repo)
+            _raise_with_receipt(
+                repo,
+                "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR",
+                f"Issue author association {association!r} cannot authorize material transitions",
+                config=effective_config,
+                config_hash=canonical_hash(effective_config),
+                config_source=config_source,
+                requirements_context=context,
+                issue_verification=issue_verification,
+            )
+        authorized_by = {"login": login, "author_association": association}
+        transitions = [{**item, "authorized_by": dict(authorized_by)} for item in transitions]
         issue_verification["material_transitions"] = transitions
     result = check_repository(
         repo,

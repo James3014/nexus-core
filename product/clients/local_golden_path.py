@@ -411,29 +411,65 @@ def _validate_config(value: Any) -> dict[str, Any]:
 
 MATERIAL_TRANSITION_SOURCE = "issue-contract-marker"
 _MATERIAL_TRANSITION_KEYS = {"material_id", "from_identity", "to_identity", "source"}
+MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+_MATERIAL_IDENTITY_RE = re.compile(r"[a-z][a-z0-9-]*:[A-Za-z0-9._/+-]{1,200}")
 
 
-def _normalize_material_transitions(value: Any) -> list[dict[str, str]]:
+def _valid_transition_authorization(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and set(value) == {"login", "author_association"}
+        and isinstance(value["login"], str)
+        and bool(value["login"].strip())
+        and isinstance(value["author_association"], str)
+    )
+
+
+def _transition_authorized(item: Mapping[str, Any]) -> bool:
+    authorization = item.get("authorized_by")
+    return (
+        _valid_transition_authorization(authorization)
+        and authorization["author_association"] in MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS
+    )
+
+
+def _normalize_material_transitions(value: Any) -> list[dict[str, Any]]:
     """Validate the shape of Issue-authorized material transitions (pure)."""
 
     if value is None:
         return []
     if not isinstance(value, (list, tuple)):
         raise LocalCheckError("ISSUE_MATERIAL_TRANSITION_MALFORMED", "transitions must be a list")
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in value:
-        if not isinstance(item, Mapping) or set(item) != _MATERIAL_TRANSITION_KEYS:
+        if not isinstance(item, Mapping) or set(item) - {"authorized_by"} != _MATERIAL_TRANSITION_KEYS:
             raise LocalCheckError(
                 "ISSUE_MATERIAL_TRANSITION_MALFORMED", "transition has unexpected fields"
             )
-        entry = {key: item[key] for key in sorted(_MATERIAL_TRANSITION_KEYS)}
+        entry: dict[str, Any] = {key: item[key] for key in sorted(_MATERIAL_TRANSITION_KEYS)}
+        if "authorized_by" in item:
+            if not _valid_transition_authorization(item["authorized_by"]):
+                raise LocalCheckError(
+                    "ISSUE_MATERIAL_TRANSITION_MALFORMED", "authorized_by is malformed"
+                )
+            entry["authorized_by"] = dict(item["authorized_by"])
         if entry["source"] != MATERIAL_TRANSITION_SOURCE or any(
-            not isinstance(text, str) or not text or text != text.strip() or re.search(r"\s", text)
-            for text in entry.values()
+            not isinstance(entry[key], str)
+            or not entry[key]
+            or entry[key] != entry[key].strip()
+            or re.search(r"\s", entry[key])
+            for key in _MATERIAL_TRANSITION_KEYS
         ):
             raise LocalCheckError(
                 "ISSUE_MATERIAL_TRANSITION_MALFORMED", "transition fields must be normalized text"
+            )
+        if not all(
+            _MATERIAL_IDENTITY_RE.fullmatch(entry[key]) for key in ("from_identity", "to_identity")
+        ):
+            raise LocalCheckError(
+                "ISSUE_MATERIAL_TRANSITION_MALFORMED",
+                "identities must look like <scheme>:<value> without whitespace",
             )
         if entry["material_id"] in seen or entry["from_identity"] == entry["to_identity"]:
             raise LocalCheckError(
@@ -1673,6 +1709,12 @@ def check_repository(
     try:
         transitions = _normalize_material_transitions(material_transitions)
         if transitions:
+            if not all(_transition_authorized(item) for item in transitions):
+                raise LocalCheckError(
+                    "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR",
+                    "material transitions require an Issue author with OWNER, MEMBER or "
+                    "COLLABORATOR association",
+                )
             if config_source["kind"] != "base-ref":
                 raise LocalCheckError(
                     "MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG",
@@ -2231,7 +2273,7 @@ def validate_verification_receipt_payload(
     if config_hash is None or payload.get("config_hash") != config_hash:
         reasons.append("CONFIG_HASH_MISMATCH")
 
-    transitions: list[dict[str, str]] = []
+    transitions: list[dict[str, Any]] = []
     try:
         transitions = _normalize_material_transitions(inputs.get("material_transitions", []))
     except LocalCheckError:
@@ -2241,6 +2283,11 @@ def validate_verification_receipt_payload(
     if transitions or bound_transitions:
         if not isinstance(bound, dict) or bound_transitions != transitions:
             reasons.append("MATERIAL_TRANSITION_UNBOUND")
+        for item in transitions:
+            if not _valid_transition_authorization(item.get("authorized_by")):
+                reasons.append("MATERIAL_TRANSITION_UNBOUND")
+            elif not _transition_authorized(item):
+                reasons.append("MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR")
         source = payload.get("config_source")
         if not isinstance(source, dict) or source.get("kind") != "base-ref":
             reasons.append("MATERIAL_TRANSITION_REQUIRES_TRUSTED_CONFIG")
