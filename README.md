@@ -283,7 +283,7 @@ A receipt on disk can be replaced by anyone with file access. Receipts made in C
 https://github.com/OWNER/REPO/.github/workflows/<file>.yml@refs/heads/main
 ```
 
-To verify one by hand, download the `nexus-core-receipts-<head-sha>` artifact from the workflow run. It holds `<receipt>.json` and `<receipt>.json.sigstore.json`. Then:
+To verify one by hand, download the `nexus-core-receipts-<head-sha>-run<run-id>-attempt<run-attempt>` artifact of the producing attempt from the workflow run. It holds `<receipt>.json` and `<receipt>.json.sigstore.json`. Then:
 
 ```bash
 uvx --from "sigstore==4.5.0" sigstore verify github \

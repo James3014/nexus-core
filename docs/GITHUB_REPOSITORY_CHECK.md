@@ -29,11 +29,19 @@ exit code:
   signs the newest receipt, success or failure, with Sigstore keyless signing
   (`sigstore sign`, OIDC workflow identity) and uploads the receipt and its
   `<receipt>.sigstore.json` bundle as one artifact. This job must grant
-  `id-token: write`. Outputs: `artifact-name`, `issue-number`, and the action
-  outputs `receipt-file`, `bundle-file`, `receipt-sha256`.
+  `id-token: write`. Outputs: `artifact-name`, `artifact-id`, `issue-number`,
+  and the action outputs `receipt-file`, `bundle-file`, `receipt-sha256`. The
+  artifact name is `nexus-core-receipts-<head-sha>-run<run-id>-attempt<run-attempt>`:
+  a rerun keeps earlier attempts' artifacts in the same workflow run, so the name
+  binds the producing attempt.
 - **`verify`** (`Nexus Core issue completion`, `needs: run`, `if: always()`) is
   the required check. It runs `receipt-verify` with only `contents: read` and
-  `actions: read`: it downloads the artifact, requires exactly one receipt and
+  `actions: read`: it requires the artifact name to bind this head, this
+  workflow run and an attempt not after the current one (a verifier-only rerun
+  keeps the producer's attempt from `needs.run.outputs`), resolves it through the
+  GitHub API to exactly one unexpired artifact of this run (and to `artifact-id`
+  when given), failing closed on a missing, ambiguous or mismatched artifact,
+  downloads exactly that artifact by id, requires exactly one receipt and
   one bundle, runs `sigstore verify github`, resolves the expected head tree with
   a shallow fetch of the PR head sha, and runs `nexus-certify receipt-check` with
   every expectation.
@@ -78,6 +86,7 @@ jobs:
       id-token: write
     outputs:
       artifact-name: ${{ steps.gate.outputs.artifact-name }}
+      artifact-id: ${{ steps.gate.outputs.artifact-id }}
       issue-number: ${{ steps.gate.outputs.issue-number }}
     steps:
       - id: gate
@@ -95,6 +104,7 @@ jobs:
       - uses: James3014/nexus-core/.github/actions/receipt-verify@<40-hex-sha>
         with:
           artifact-name: ${{ needs.run.outputs.artifact-name }}
+          artifact-id: ${{ needs.run.outputs.artifact-id }}
           expected-identity: https://github.com/<owner>/<repo>/.github/workflows/<file>.yml@refs/heads/main
           github-repository: ${{ github.repository }}
           head-sha: ${{ github.event.pull_request.head.sha }}
@@ -184,7 +194,7 @@ required status check.
 ## Verify a receipt yourself
 
 Anyone can check a CI receipt without trusting the runner. Download the
-`nexus-core-receipts-<head-sha>` artifact (it holds `<receipt>.json` and
+`nexus-core-receipts-<head-sha>-run<run-id>-attempt<run-attempt>` artifact of the producing attempt (it holds `<receipt>.json` and
 `<receipt>.json.sigstore.json`), then:
 
 ```bash

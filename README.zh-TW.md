@@ -271,7 +271,7 @@ nexus-certify receipt-check --receipt .nexus-core/receipts/<receipt>.json
 https://github.com/OWNER/REPO/.github/workflows/<file>.yml@refs/heads/main
 ```
 
-若要手動驗證，請從 workflow 執行中下載 `nexus-core-receipts-<head-sha>` artifact。其中包含 `<receipt>.json` 與 `<receipt>.json.sigstore.json`。接著執行：
+若要手動驗證，請從 workflow 執行中下載產生該 receipt 之 attempt 的 `nexus-core-receipts-<head-sha>-run<run-id>-attempt<run-attempt>` artifact。其中包含 `<receipt>.json` 與 `<receipt>.json.sigstore.json`。接著執行：
 
 ```bash
 uvx --from "sigstore==4.5.0" sigstore verify github \

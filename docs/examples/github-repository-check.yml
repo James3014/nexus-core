@@ -39,6 +39,7 @@ jobs:
       id-token: write   # required for Sigstore keyless signing
     outputs:
       artifact-name: ${{ steps.gate.outputs.artifact-name }}
+      artifact-id: ${{ steps.gate.outputs.artifact-id }}
       issue-number: ${{ steps.gate.outputs.issue-number }}
     steps:
       - id: gate
@@ -59,6 +60,7 @@ jobs:
       - uses: James3014/nexus-core/.github/actions/receipt-verify@c293dc944fe99652ae8856d732a35b5191f52a5e  # pin: same sha
         with:
           artifact-name: ${{ needs.run.outputs.artifact-name }}
+          artifact-id: ${{ needs.run.outputs.artifact-id }}
           # This very workflow file, on the default branch.
           expected-identity: https://github.com/OWNER/REPO/.github/workflows/nexus-core-issue-completion.yml@refs/heads/main
           github-repository: ${{ github.repository }}
