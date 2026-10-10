@@ -304,12 +304,63 @@ def _retained_attempts(tmp_path: Path, api_url: str, state: ArtifactStore):
     return attempt1, attempt2
 
 
+# Selection semantics of the pinned actions/download-artifact (src/download-artifact.ts
+# and the bundled @actions/artifact getArtifactInternal / listArtifactsInternal):
+# - 'name': lists this run's artifacts with that name and, when several match, silently
+#   returns the highest id ("returning newest") - the Issue #142 mechanism;
+# - 'artifact-ids': lists this run's artifacts, keeps only the highest id per name
+#   (latest: true), then keeps the requested ids; none left is an error.
+DOWNLOAD_ARTIFACT = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+
+
+class DownloadFailed(Exception):
+    pass
+
+
+def _download_artifact(state: ArtifactStore, inputs: dict[str, str]) -> Artifact:
+    name, ids = inputs.get("name", ""), inputs.get("artifact-ids", "")
+    if name and ids:
+        raise DownloadFailed("Inputs 'name' and 'artifact-ids' cannot be used together")
+    run = [artifact for artifact in state.artifacts if artifact.run_id == RUN_ID]
+    if name:
+        matches = [artifact for artifact in run if artifact.name == name]
+        if not matches:
+            raise DownloadFailed(f"Artifact '{name}' not found")
+        return max(matches, key=lambda artifact: artifact.id)
+    if not ids:
+        raise DownloadFailed("test model: download of all artifacts is not expected")
+    wanted = {int(item) for item in ids.split(",") if item.strip()}
+    latest: dict[str, Artifact] = {}
+    for artifact in sorted(run, key=lambda artifact: artifact.id, reverse=True):
+        latest.setdefault(artifact.name, artifact)
+    found = [artifact for artifact in latest.values() if artifact.id in wanted]
+    if not found:
+        raise DownloadFailed("None of the provided artifact IDs were found")
+    assert len(found) == 1
+    return found[0]
+
+
 def _downloaded(state: ArtifactStore, resolved: StepResult) -> Artifact:
-    """What the download step fetches: it downloads by the resolved, unique name."""
-    candidates = state.by_name(resolved.outputs["artifact-name"])
-    assert len(candidates) == 1, "download-by-name would be ambiguous"
-    assert str(candidates[0].id) == resolved.outputs["artifact-id"]
-    return candidates[0]
+    """What receipt-verify's download step fetches, given the resolution step's outputs."""
+    download = _download_step()
+    context = {
+        "steps": {"artifact": {"outputs": resolved.outputs}},
+        "runner": {"temp": "/tmp/runner"},
+    }
+    inputs = {key: _evaluate(value, context) for key, value in download["with"].items()}
+    return _download_artifact(state, inputs)
+
+
+def _download_step() -> dict[str, Any]:
+    downloads = [
+        step
+        for step in _load_steps(RECEIPT_VERIFY)
+        if step.get("uses", "").startswith("actions/download-artifact@")
+    ]
+    assert len(downloads) == 1
+    # The selection model above is for this exact pin; re-check it when bumping.
+    assert downloads[0]["uses"].split("#")[0].strip() == DOWNLOAD_ARTIFACT
+    return downloads[0]
 
 
 # ------------------------------------------------------------------------------- tests
@@ -528,14 +579,41 @@ def test_producer_naming_fails_closed_on_invalid_run_identity(tmp_path, store, b
 def test_download_uses_only_the_resolved_identity_after_resolution():
     steps = _load_steps(RECEIPT_VERIFY)
     ids = [step.get("id") for step in steps]
-    downloads = [step for step in steps if step.get("uses", "").startswith("actions/download-artifact@")]
-    assert len(downloads) == 1
-    download = downloads[0]
+    download = _download_step()
     assert ids.index("validate") < ids.index("artifact") < steps.index(download)
     assert download["with"] == {
-        "name": "${{ steps.artifact.outputs.artifact-name }}",
+        "artifact-ids": "${{ steps.artifact.outputs.artifact-id }}",
         "path": "${{ runner.temp }}/nexus-core-receipt-artifact",
     }
+
+
+def test_same_name_artifact_appearing_after_resolution_is_never_downloaded(tmp_path, store):
+    # Between resolution and download another artifact with the producer's name
+    # appears (higher id). The download must fetch exactly the resolved artifact or
+    # fail; it must never switch to the newest same-name artifact.
+    state, api_url = store
+    _, attempt2 = _retained_attempts(tmp_path, api_url, state)
+    validated, resolved = _consume(tmp_path, api_url, run_attempt=2, producer=attempt2)
+    assert resolved is not None and resolved.returncode == 0, resolved and resolved.stderr
+    state.upload(Artifact(GOOD_ATTEMPT2_ID + 1, attempt2["artifact-name"], RUN_ID, "2026-10-09T12:00:00Z"))
+
+    try:
+        downloaded = _downloaded(state, resolved)
+    except DownloadFailed:
+        return
+    assert downloaded.id == GOOD_ATTEMPT2_ID
+
+
+def test_download_model_reproduces_the_issue_142_incident():
+    # Negative control for the selection model: with head-only names, download by
+    # name picks the stale attempt-1 artifact (its id is higher), as observed live.
+    state = ArtifactStore()
+    state.upload(Artifact(BAD_ATTEMPT1_ID, _legacy_name(), RUN_ID, "2026-10-09T10:05:00Z"))
+    state.upload(Artifact(GOOD_ATTEMPT2_ID, _legacy_name(), RUN_ID, "2026-10-09T10:00:00Z"))
+
+    assert _download_artifact(state, {"name": _legacy_name()}).id == BAD_ATTEMPT1_ID
+    with pytest.raises(DownloadFailed):
+        _download_artifact(state, {"artifact-ids": str(GOOD_ATTEMPT2_ID)})
 
 
 def test_upload_is_skipped_without_a_valid_attempt_bound_name():
@@ -551,3 +629,24 @@ def test_core_workflow_passes_producer_artifact_identity_to_verifier():
     assert "artifact-id: ${{ steps.gate.outputs.artifact-id }}" in text
     assert "artifact-id: ${{ needs.run.outputs.artifact-id }}" in text
     assert "artifact-name: ${{ needs.run.outputs.artifact-name }}" in text
+
+
+_BASH_HAS_MAPFILE = subprocess.run(["bash", "-c", "type mapfile"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _BASH_HAS_MAPFILE, reason="locate step needs bash >= 4 (mapfile)")
+def test_locate_finds_receipt_in_by_id_download_layout(tmp_path):
+    # Downloading by 'artifact-ids' extracts into <path>/<artifact-name>/.
+    artifact_dir = tmp_path / "nexus-core-receipt-artifact"
+    nested = artifact_dir / f"{_legacy_name()}-run{RUN_ID}-attempt2"
+    nested.mkdir(parents=True)
+    receipt = nested / "20261009T100000.000000+0000-0123456789ab.json"
+    receipt.write_text("{}", encoding="utf-8")
+    (nested / f"{receipt.name}.sigstore.json").write_text("{}", encoding="utf-8")
+
+    result = _run_step(
+        _step(RECEIPT_VERIFY, "locate"), {"runner": {"temp": str(tmp_path)}}, tmp_path
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.outputs == {"receipt": str(receipt), "bundle": f"{receipt}.sigstore.json"}

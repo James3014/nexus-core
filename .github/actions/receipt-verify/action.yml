@@ -227,8 +227,9 @@ runs:
     - name: Download receipt artifact
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
-        # Unique within this run: resolved above to exactly one producer artifact.
-        name: ${{ steps.artifact.outputs.artifact-name }}
+        # The exact artifact resolved above. By id, a same-name artifact that appears
+        # later is never substituted (by name, download-artifact returns the newest).
+        artifact-ids: ${{ steps.artifact.outputs.artifact-id }}
         path: ${{ runner.temp }}/nexus-core-receipt-artifact
 
     - name: Locate exactly one receipt and bundle

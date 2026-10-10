@@ -41,7 +41,7 @@ exit code:
   keeps the producer's attempt from `needs.run.outputs`), resolves it through the
   GitHub API to exactly one unexpired artifact of this run (and to `artifact-id`
   when given), failing closed on a missing, ambiguous or mismatched artifact,
-  downloads that artifact, requires exactly one receipt and
+  downloads exactly that artifact by id, requires exactly one receipt and
   one bundle, runs `sigstore verify github`, resolves the expected head tree with
   a shallow fetch of the PR head sha, and runs `nexus-certify receipt-check` with
   every expectation.
