@@ -173,6 +173,8 @@ def derive_verification_result(
             else EvidenceCondition.MISSING
         )
         return reduce_verification(condition, reasons=reasons)
+    if payload.get("candidate") is None:
+        return reduce_verification(EvidenceCondition.MISSING, reasons=("candidate_missing",))
     verifiers = manifest.get("verifiers")
     if not isinstance(verifiers, list) or not verifiers:
         return reduce_verification(EvidenceCondition.MISSING, reasons=("verifier_missing",))
@@ -332,7 +334,7 @@ def certify_changeset(payload: Mapping[str, Any]) -> ChangeSetCertification:
         )
     return _result(
         payload,
-        (),
+        _project_reasons(verification),
         verification_result=verification,
     )
 
@@ -758,13 +760,20 @@ def _result(
         str(candidate.get("commit", "")),
         str(diff.get("hash", "")),
     )
-    return _create_changeset_certification(
+    certification = _create_changeset_certification(
         identity,
         status=disposition,
         reason_codes=tuple(sorted(set(reasons))),
         envelope=result,
         verification_result=factual,
     )
+    if disposition.value == "CERTIFIED":
+        # Single CERTIFIED exit: never return a result our own validator rejects.
+        # _blocked does not re-enter _result, so this cannot recurse.
+        invalid = validate_changeset_certification(certification)
+        if invalid:
+            return _blocked(invalid[0], more_reasons=invalid[1:])
+    return certification
 
 
 def _policy(payload: Mapping[str, Any]) -> CertificationPolicy:
@@ -915,13 +924,16 @@ def _minimal_invalid(reason: str) -> dict[str, Any]:
 def _blocked(
     reason: str,
     verification_result: VerificationResult | None = None,
+    *,
+    more_reasons: tuple[str, ...] = (),
 ) -> ChangeSetCertification:
-    factual = verification_result or _unverifiable((reason,))
+    reasons = tuple(sorted({reason, *more_reasons}))
+    factual = verification_result or _unverifiable(reasons)
     disposition = certify_result(factual, CertificationPolicy())
     return _create_changeset_certification(
         ChangeSetIdentity("", "", "", ""),
         status=disposition,
-        reason_codes=(reason,),
+        reason_codes=reasons,
         verification_result=factual,
     )
 

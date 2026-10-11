@@ -570,3 +570,33 @@ def test_public_constructor_cannot_serialize_caller_selected_envelope_truth():
                 "claim_ceiling": "caller-selected",
             },
         )
+
+
+def _without_candidate():
+    payload = _envelope()
+    payload["candidate"] = None
+    payload["verifier_manifest"]["candidate_commit"] = "none"
+    payload["verifier_manifest"]["candidate_tree"] = "none"
+    return _rehash(payload)
+
+
+def test_missing_candidate_is_never_certified_and_roundtrips():
+    result = adapter.certify_changeset(_without_candidate())
+    assert result.status is not CertificationDisposition.CERTIFIED
+    assert "candidate_missing" in result.reason_codes
+    assert adapter.validate_changeset_certification(result) == ()
+
+
+def test_certified_exit_downgrades_results_the_validator_rejects(monkeypatch):
+    monkeypatch.setattr(
+        adapter, "validate_changeset_certification", lambda _c: ("candidate_missing",)
+    )
+    result = adapter.certify_changeset(_envelope())
+    assert result.status is CertificationDisposition.BLOCKED
+    assert result.reason_codes == ("candidate_missing",)
+
+
+def test_every_certified_result_validates_cleanly():
+    result = adapter.certify_changeset(_envelope())
+    assert result.status is CertificationDisposition.CERTIFIED
+    assert adapter.validate_changeset_certification(result) == ()
