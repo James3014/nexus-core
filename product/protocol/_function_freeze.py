@@ -4,9 +4,10 @@ Leaf module: imports nothing from ``product``.
 """
 
 from types import FunctionType
+from typing import Any
 
 
-def _freeze_function_globals(function):
+def _freeze_function_globals(function: Any) -> Any:
     frozen = FunctionType(
         function.__code__,
         dict(function.__globals__),
