@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """TG-7 representative corpus and second-repository shadow verifier.
 
 The benchmark is deliberately not an execution or receipt authority.  A
@@ -18,9 +19,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
-from product.benchmark import _canonical, _digest
+from product.benchmark import _canonical, _digest  # pyright: ignore[reportPrivateUsage]
 from product.certification.receipt import CLAIM_CEILING
 from product.protocol import (
     CERTIFICATION_RECEIPT_SCHEMA,
@@ -254,10 +255,16 @@ def validate_tg5_receipt(receipt: Mapping[str, Any]) -> list[str]:
     if receipt.get("receipt_hash") != _digest(body):
         errors.append("tg5-receipt receipt_hash does not match canonical digest of body")
     verification = receipt.get("verification", {})
-    if not isinstance(verification, Mapping) or verification.get("status") != "VERIFIED":
+    if (
+        not isinstance(verification, Mapping)
+        or cast("Mapping[str, Any]", verification).get("status") != "VERIFIED"
+    ):
         errors.append("tg5-receipt verification.status must be VERIFIED")
     certification = receipt.get("certification", {})
-    if not isinstance(certification, Mapping) or certification.get("disposition") != "CERTIFIED":
+    if (
+        not isinstance(certification, Mapping)
+        or cast("Mapping[str, Any]", certification).get("disposition") != "CERTIFIED"
+    ):
         errors.append("tg5-receipt certification.disposition must be CERTIFIED")
     return errors
 
@@ -287,6 +294,7 @@ def validate_corpus(
     cases = corpus.get("cases")
     if not isinstance(cases, list):
         return [*errors, "corpus cases must be a list"]
+    cases = cast("list[Any]", cases)
     if corpus.get("case_count") != len(cases):
         errors.append("corpus case_count does not equal physical case count")
     if len(cases) < 50:
@@ -306,10 +314,11 @@ def validate_corpus(
     seen: set[str] = set()
     ordered: list[str] = []
     family_counts = {family: 0 for family in HOSTILE_FAMILIES}
-    for index, case in enumerate(cases):
-        if not isinstance(case, Mapping):
+    for index, raw_case in enumerate(cases):
+        if not isinstance(raw_case, Mapping):
             errors.append(f"case at index {index} must be a JSON object")
             continue
+        case = cast("Mapping[str, Any]", raw_case)
         case_keys = set(case)
         if case_keys != CORPUS_CASE_REQUIRED_KEYS:
             missing = CORPUS_CASE_REQUIRED_KEYS - case_keys
@@ -477,6 +486,7 @@ def validate_shadow_receipt(
     cases = shadow_receipt.get("cases")
     if not isinstance(cases, list):
         return [*errors, "shadow_receipt cases must be a list"]
+    cases = cast("list[Any]", cases)
     eligible = shadow_receipt.get("eligible_count")
     infra = shadow_receipt.get("infra_invalid_count")
     if not isinstance(eligible, int) or eligible < 50:
@@ -485,10 +495,11 @@ def validate_shadow_receipt(
         errors.append("shadow_receipt infra_invalid_count must be non-negative integer")
     actual_infra = 0
     case_ids: list[str] = []
-    for item in cases:
-        if not isinstance(item, Mapping):
+    for raw_item in cases:
+        if not isinstance(raw_item, Mapping):
             errors.append("shadow_receipt case must be an object")
             continue
+        item = cast("Mapping[str, Any]", raw_item)
         if set(item) != SHADOW_CASE_REQUIRED_KEYS:
             errors.append(f"shadow_receipt case[{item.get('case_id')}] keys mismatch")
             continue
@@ -551,10 +562,11 @@ def validate_report(
     if not isinstance(family_counts, Mapping):
         errors.append("report family_counts must be an object")
     else:
+        counts = cast("Mapping[str, Any]", family_counts)
         for family in HOSTILE_FAMILIES:
-            if family_counts.get(family, 0) < 5:
+            if counts.get(family, 0) < 5:
                 errors.append(f"report family_counts[{family}] must be >= 5")
-        if isinstance(denominator, int) and sum(family_counts.values()) != denominator:
+        if isinstance(denominator, int) and sum(counts.values()) != denominator:
             errors.append("report family-count arithmetic mismatch")
     if (
         report.get("false_certification_count") != 0
@@ -760,6 +772,7 @@ def _load_attempt_file(path: Path) -> dict[str, Any]:
         raise ValueError(f"attempt receipt is not canonical JSON: {path}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"attempt receipt must be a JSON object: {path}")
+    value = cast("dict[str, Any]", value)
     if raw != (_canonical(value) + "\n").encode("utf-8"):
         raise ValueError(f"attempt receipt bytes are not canonical: {path}")
     return value
