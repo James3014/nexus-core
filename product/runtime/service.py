@@ -442,10 +442,7 @@ class RuntimeCertificationService:
 
             # 5. TG-3 EvidenceIdentityEnvelope
             # In live tracer, we construct an identity envelope carrying the TG-1 & TG-2 hashes
-            runner_result_dict = cast(
-                "dict[str, Any]",
-                runner_result.to_dict(),  # pyright: ignore[reportUnknownMemberType]
-            )
+            runner_result_dict = runner_result.to_dict()
             envelope_dict: dict[str, Any] = {
                 "schema": "nexus.evidence.identity-envelope.v1",
                 "context_hash": _hash(job.payload),
