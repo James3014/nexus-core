@@ -378,7 +378,6 @@ def test_accepted_identifiers_equal_canonical_form_except_newline():
             assert isinstance(fn(value), bool)
             if fn(value):
                 body = value[len(prefix) :]
-                body = body[:-1] if body.endswith("\n") else body  # known #160
                 assert value.startswith(prefix) and len(body) == n
                 assert all(c in _HEX for c in body)
 
@@ -393,11 +392,6 @@ def test_accepted_identifiers_equal_canonical_form_except_newline():
     check_all(gen, check, 300)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#160: re.match + '$' accepts a trailing newline "
-    "(https://github.com/James3014/nexus-core/issues/160)",
-)
 def test_identifiers_reject_trailing_newline():
     def check(seed):
         rng = random.Random(seed)

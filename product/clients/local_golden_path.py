@@ -68,7 +68,7 @@ _CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation"}
 CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS = 900
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _HEX40_RE = re.compile(r"[0-9a-f]{40}")
-_IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+_IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}\Z")
 _ISOLATION_KEYS = {"mode", "image", "network"}
 _REQUIREMENT_MODES = {"REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"}
 _APPLICABILITY = {"APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"}
@@ -237,7 +237,7 @@ def _validate_subject_fields(item: Mapping[str, Any], field: str) -> None:
 def _validate_env_passthrough(value: Any) -> None:
     if (
         not isinstance(value, list)
-        or any(not isinstance(item, str) or not _ENV_NAME_RE.match(item) for item in value)
+        or any(not isinstance(item, str) or not _ENV_NAME_RE.fullmatch(item) for item in value)
         or len(value) != len(set(value))
     ):
         raise LocalCheckError(
