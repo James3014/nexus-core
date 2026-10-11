@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Execution request/response ports and the deterministic Python profile."""
 
 from dataclasses import dataclass

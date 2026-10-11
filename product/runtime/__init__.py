@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Canonical Core V1 loopback HTTP runtime and certification service (TG-5).
 
 Names are resolved lazily (PEP 562) so importing a submodule that does not need

@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Physical-worktree binding adapter for the extracted TG7 shadow verifier.
 
 The extracted TG7 kernel keeps its historical evidence semantics unchanged.

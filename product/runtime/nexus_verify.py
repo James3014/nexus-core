@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Read-only GitHub subject acquisition for Nexus Verify carrying surfaces.
 
 This runtime helper composes the existing acquisition seam into a normalized
