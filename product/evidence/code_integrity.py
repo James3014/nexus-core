@@ -369,7 +369,10 @@ def _valid_declaration(subject: _FunctionSubject) -> bool:
         return True
     owner = subject.owner_class
     if owner is not None:
-        bases = {_dotted_name(base) for base in owner.bases}
+        bases = {
+            _dotted_name(base.value if isinstance(base, ast.Subscript) else base)
+            for base in owner.bases
+        }
         if bases & {"Protocol", "typing.Protocol"}:
             return True
     return False
