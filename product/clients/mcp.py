@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Nexus Core V1 MCP Library Adapter.
 
 Host-projected library adapter exposing nexus_certify tool contract (TG-6).
@@ -11,7 +12,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, cast
 
 from product.runtime.auth import read_bearer_token
 from product.runtime.schemas import (
@@ -49,6 +50,7 @@ def _send_http(
 ) -> tuple[int, dict[str, Any]]:
     """Execute HTTP call via custom transport or standard urllib."""
     if http_transport is not None:
+        res: Any
         if callable(http_transport):
             try:
                 res = http_transport(method=method, url=url, headers=headers, json=payload)
@@ -64,16 +66,20 @@ def _send_http(
             raise ValueError(f"unsupported http_transport object: {type(http_transport)}")
 
         # Extract status and payload
-        if isinstance(res, tuple) and len(res) == 2:
-            return res[0], res[1]
+        if isinstance(res, tuple) and len(res) == 2:  # pyright: ignore[reportUnknownArgumentType]
+            res_pair = cast("tuple[int, dict[str, Any]]", res)
+            return res_pair[0], res_pair[1]
         if isinstance(res, dict):
-            status = res.get("status_code", 200)
-            return status, res
-        if hasattr(res, "status_code"):
-            status = getattr(res, "status_code")
-            json_fn = getattr(res, "json", None)
-            data = json_fn() if callable(json_fn) else json_fn
-            return int(status), (data if isinstance(data, dict) else {"data": data})
+            res_map = cast("dict[str, Any]", res)
+            status = res_map.get("status_code", 200)
+            return status, res_map
+        if hasattr(res, "status_code"):  # pyright: ignore[reportUnknownArgumentType]
+            status = getattr(res, "status_code")  # pyright: ignore[reportUnknownArgumentType]
+            json_fn = getattr(res, "json", None)  # pyright: ignore[reportUnknownArgumentType]
+            data: Any = json_fn() if callable(json_fn) else json_fn
+            return int(status), (
+                cast("dict[str, Any]", data) if isinstance(data, dict) else {"data": data}
+            )
         raise ValueError(f"unexpected response format from http_transport: {res}")
 
     # Standard urllib default
@@ -83,12 +89,12 @@ def _send_http(
         with urllib.request.urlopen(req, timeout=HEADER_READ_TIMEOUT_SECONDS) as response:
             status = response.getcode()
             raw = response.read().decode("utf-8")
-            data = json.loads(raw) if raw else {}
+            data: Any = json.loads(raw) if raw else {}
             return status, data
     except urllib.error.HTTPError as e:
         status = e.code
         raw = e.read().decode("utf-8", errors="ignore")
-        data = json.loads(raw) if raw else {}
+        data: Any = json.loads(raw) if raw else {}
         return status, data
     except Exception as exc:
         raise ConnectionError(f"HTTP transport failed: {exc}") from exc

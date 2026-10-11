@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Internal experimental candidate-bound acquisition module.
 
 This module materialises an *exact* candidate commit/tree in a private detached
@@ -44,7 +45,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, cast
 
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
@@ -580,6 +581,7 @@ def _find_receipt_by_request_hash(
             continue
         if not isinstance(data, dict):
             continue
+        data = cast("dict[str, Any]", data)
         if data.get("kind") != ACQUISITION_RECEIPT_KIND:
             continue
         if data.get("acquisition_request_hash") != request_hash:
@@ -962,10 +964,10 @@ def acquire_and_verify_candidate(
                 f"request_id {stored_rid!r}, not {request.acquisition_request_id!r}",
             )
         _validate_receipt_material_crossbind(existing, request)
-        core_resp = existing.get("core_response") or {}
+        core_resp: dict[str, Any] = existing.get("core_response") or {}
         # Replay the stored outcome (written for every receipt kind, including
         # FAILED_CLOSED receipts whose core_response carries only an error).
-        stored_outcome = existing.get("outcome") or {}
+        stored_outcome: dict[str, Any] = existing.get("outcome") or {}
         return CandidateAcquisitionResult(
             request_id=request.acquisition_request_id,
             request_hash=request.request_hash,
@@ -1186,6 +1188,7 @@ def validate_candidate_acquisition_receipt(
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     if not isinstance(data, dict):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+    data = cast("dict[str, Any]", data)
     if (
         data.get("kind") != ACQUISITION_RECEIPT_KIND
         or data.get("schema_version") != ACQUISITION_RECEIPT_SCHEMA_VERSION

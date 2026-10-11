@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Transport-neutral public protocol for deterministic Core ChangeSet verification.
 
 This module is deliberately dependency-free with respect to other product layers.
@@ -10,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 
@@ -51,9 +52,10 @@ def canonical_json(value: Any) -> str:
         if type(item) in (list, tuple):
             return [normalize(child) for child in item]
         if type(item) is dict:
-            if any(type(key) is not str for key in item):
+            obj = cast("dict[Any, Any]", item)
+            if any(type(key) is not str for key in obj):
                 raise TypeError("canonical object keys must be strings")
-            return {key: normalize(item[key]) for key in sorted(item)}
+            return {key: normalize(obj[key]) for key in sorted(obj)}
         raise TypeError(f"unsupported canonical value: {type(item).__name__}")
 
     return json.dumps(
