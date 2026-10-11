@@ -265,6 +265,34 @@ class GitHubAcquisitionSnapshot:
         }
 
 
+def _strict_checks(raw: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(raw, (list, tuple)):
+        raise AcquisitionError("checks must be a list")
+    out: list[tuple[str, str]] = []
+    for x in raw:
+        if (
+            not isinstance(x, (list, tuple))
+            or len(x) != 2
+            or type(x[0]) is not str
+            or type(x[1]) is not str
+        ):
+            raise AcquisitionError("malformed check entry")
+        out.append((x[0], x[1]))
+    return tuple(out)
+
+
+def _strict_paths(raw: object, name: str) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)) or any(type(x) is not str for x in raw):
+        raise AcquisitionError(f"{name} must be a list of strings")
+    return tuple(raw)
+
+
+def _strict_bool(raw: object, name: str) -> bool:
+    if type(raw) is not bool:
+        raise AcquisitionError(f"{name} must be a bool")
+    return raw
+
+
 def _parse(
     raw: Mapping[str, object], locator: GitHubPullRequestLocator
 ) -> GitHubAcquisitionSnapshot:
@@ -280,18 +308,9 @@ def _parse(
     diff_bytes = values["diff_bytes"]
     if not isinstance(diff_bytes, bytes):
         raise AcquisitionError("diff_bytes must be bytes from the read port")
-    checks = values["checks"]
-    if not isinstance(checks, (list, tuple)):
-        raise AcquisitionError("checks must be a list")
-    checks_tuple: tuple[tuple[str, str], ...] = tuple(
-        (str(x[0]), str(x[1]))
-        for x in checks
-        if isinstance(x, (list, tuple)) and len(x) == 2
-    )
-    changed_paths = values["changed_paths"]
-    changed_tuple = tuple(str(x) for x in changed_paths) if isinstance(changed_paths, (list, tuple)) else ()
-    deleted_paths = values["deleted_paths"]
-    deleted_tuple = tuple(str(x) for x in deleted_paths) if isinstance(deleted_paths, (list, tuple)) else ()
+    checks_tuple = _strict_checks(values["checks"])
+    changed_tuple = _strict_paths(values["changed_paths"], "changed_paths")
+    deleted_tuple = _strict_paths(values["deleted_paths"], "deleted_paths")
     raw_pr = values["pr_number"]
     pr_num = raw_pr if isinstance(raw_pr, int) else int(str(raw_pr))
     return GitHubAcquisitionSnapshot(
@@ -308,7 +327,7 @@ def _parse(
         changed_paths=changed_tuple,
         deleted_paths=deleted_tuple,
         checks=checks_tuple,
-        pagination_complete=bool(values["pagination_complete"]),
+        pagination_complete=_strict_bool(values["pagination_complete"], "pagination_complete"),
         observed_at=str(values["observed_at"]),
         freshness_cas=str(values["freshness_cas"]),
         locator_hash=locator.locator_hash,
@@ -346,16 +365,9 @@ def load_github_acquisition_snapshot(payload: Mapping[str, object]) -> GitHubAcq
     try:
         raw_diff = values["diff_bytes"]
         diff_bytes = bytes.fromhex(str(raw_diff))
-        raw_checks = values["checks"]
-        checks_tuple: tuple[tuple[str, str], ...] = tuple(
-            (str(x[0]), str(x[1]))
-            for x in raw_checks
-            if isinstance(x, (list, tuple)) and len(x) == 2
-        ) if isinstance(raw_checks, (list, tuple)) else ()
-        raw_changed = values["changed_paths"]
-        changed_tuple = tuple(str(x) for x in raw_changed) if isinstance(raw_changed, (list, tuple)) else ()
-        raw_deleted = values["deleted_paths"]
-        deleted_tuple = tuple(str(x) for x in raw_deleted) if isinstance(raw_deleted, (list, tuple)) else ()
+        checks_tuple = _strict_checks(values["checks"])
+        changed_tuple = _strict_paths(values["changed_paths"], "changed_paths")
+        deleted_tuple = _strict_paths(values["deleted_paths"], "deleted_paths")
         raw_pr = values["pr_number"]
         pr_num = raw_pr if isinstance(raw_pr, int) else int(str(raw_pr))
         return GitHubAcquisitionSnapshot(
@@ -372,7 +384,7 @@ def load_github_acquisition_snapshot(payload: Mapping[str, object]) -> GitHubAcq
             changed_paths=changed_tuple,
             deleted_paths=deleted_tuple,
             checks=checks_tuple,
-            pagination_complete=bool(values["pagination_complete"]),
+            pagination_complete=_strict_bool(values["pagination_complete"], "pagination_complete"),
             observed_at=str(values["observed_at"]),
             freshness_cas=str(values["freshness_cas"]),
             locator_hash=str(values["locator_hash"]),
