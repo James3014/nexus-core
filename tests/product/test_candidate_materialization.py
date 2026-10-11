@@ -1110,3 +1110,39 @@ def test_temp_root_cleanup_failure_fails_closed_without_receipt(
 
     assert exc_info.value.reason_code == "CLEANUP_FAILED"
     assert not receipt_dir.exists() or not any(receipt_dir.glob("*.json"))
+
+
+def test_verifier_timeout_kills_backgrounded_grandchildren(
+    base_repo: Path, tmp_path: Path
+) -> None:
+    """#167: the whole verifier process group dies on timeout."""
+    import time
+
+    req = _build_request(
+        base_repo,
+        receipt_dir=tmp_path / "receipts",
+        override_profile=_make_profile(
+            ["test-verifier"],
+            [["sh", "-c", "sleep 47.3 & sleep 47.3"]],
+            timeout=1,
+        ),
+    )
+    with pytest.raises(CandidateAcquisitionError) as exc_info:
+        _acquire(req)
+
+    assert exc_info.value.reason_code == "VERIFIER_TIMEOUT"
+    time.sleep(0.5)
+    survivors = subprocess.run(["pgrep", "-f", "sleep 47.3"], capture_output=True, text=True)
+    assert survivors.stdout.strip() == ""
+
+
+def test_git_timeout_is_structured_error(tmp_path: Path) -> None:
+    """#167: a hung git call surfaces as CandidateAcquisitionError."""
+    with patch.object(
+        candidate_module.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired(cmd="git", timeout=1),
+    ):
+        with pytest.raises(CandidateAcquisitionError) as exc_info:
+            candidate_module._run_git(tmp_path, "status")
+    assert exc_info.value.reason_code == "GIT_TIMEOUT"
