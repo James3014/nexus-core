@@ -1,10 +1,18 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Pure, pre-materialized GitHub pull-request compatibility adapter."""
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, cast
 
-from product.evidence import ChangeSet
-from product.kernel import CertificationInput, certify
+from product.evidence import (
+    AcceptanceContract,
+    ChangeSet,
+    EvidenceBundle,
+    VerificationPlan,
+)
+from product.kernel import CertificationInput, CertificationResult, certify
 
 _SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -23,7 +31,7 @@ _FIELDS = frozenset(
 )
 
 
-def _text(value, field):
+def _text(value: object, field: str) -> None:
     if type(value) is not str or not value or value != value.strip() or "\x00" in value:
         raise ValueError(f"{field} must be a normalized nonblank string")
 
@@ -38,7 +46,7 @@ class GitHubPullRequestSnapshot:
     diff_hash: str
     changed_paths: tuple[str, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _text(self.repository_owner, "repository_owner")
         _text(self.repository_name, "repository_name")
         for field in ("repository_owner", "repository_name"):
@@ -68,7 +76,7 @@ class GitHubPullRequestSnapshot:
             ):
                 raise ValueError("changed_paths must contain normalized relative paths")
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, object]:
         return {
             "repository_owner": self.repository_owner,
             "repository_name": self.repository_name,
@@ -80,19 +88,19 @@ class GitHubPullRequestSnapshot:
         }
 
 
-def snapshot_to_dict(snapshot):
+def snapshot_to_dict(snapshot: object) -> dict[str, object]:
     if type(snapshot) is not GitHubPullRequestSnapshot:
         raise TypeError("snapshot must be GitHubPullRequestSnapshot")
     return snapshot.to_dict()
 
 
-def load_snapshot(payload):
-    if type(payload) is not dict or set(payload) != _FIELDS:
+def load_snapshot(payload: Any) -> GitHubPullRequestSnapshot:
+    if type(payload) is not dict or set(cast("dict[str, Any]", payload)) != _FIELDS:
         raise ValueError("malformed GitHub pull-request snapshot keys")
-    values = dict(payload)
+    values = dict(cast("dict[str, Any]", payload))
     if type(values["changed_paths"]) is not list:
         raise TypeError("changed_paths must be a list in serialized snapshots")
-    values["changed_paths"] = tuple(values["changed_paths"])
+    values["changed_paths"] = tuple(cast("list[Any]", values["changed_paths"]))
     return GitHubPullRequestSnapshot(**values)
 
 
@@ -100,7 +108,7 @@ load_github_pull_request_snapshot = load_snapshot
 serialize_github_pull_request_snapshot = snapshot_to_dict
 
 
-def to_changeset(snapshot):
+def to_changeset(snapshot: object) -> ChangeSet:
     if type(snapshot) is not GitHubPullRequestSnapshot:
         raise TypeError("snapshot must be GitHubPullRequestSnapshot")
     change_set_id = (
@@ -119,7 +127,17 @@ def to_changeset(snapshot):
 github_snapshot_to_changeset = to_changeset
 
 
-def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_certify):
+def _make_trust_sealed_api(
+    snapshot_type: type[GitHubPullRequestSnapshot],
+    change_set_type: type[ChangeSet],
+    input_type: type[CertificationInput],
+    kernel_certify: Callable[[object], CertificationResult],
+) -> tuple[
+    Callable[[object], ChangeSet],
+    Callable[[object], dict[str, object]],
+    Callable[[Any], GitHubPullRequestSnapshot],
+    Callable[..., CertificationResult],
+]:
     owner_pattern = _GITHUB_OWNER.fullmatch
     repository_pattern = _GITHUB_REPOSITORY.fullmatch
     sha40 = _SHA40.fullmatch
@@ -135,7 +153,7 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
         "changed_paths",
     )
 
-    def validate(value):
+    def validate(value: object) -> dict[str, Any]:
         if type(value) is not snapshot_type:
             raise TypeError("snapshot must be GitHubPullRequestSnapshot")
         data = vars(value)
@@ -158,7 +176,7 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
             raise ValueError("base_sha and head_sha must differ")
         if type(data["diff_hash"]) is not str or sha256(data["diff_hash"]) is None:
             raise ValueError("diff_hash must be sha256:<64 lowercase hex>")
-        paths = data["changed_paths"]
+        paths = cast("tuple[object, ...]", data["changed_paths"])
         if type(paths) is not tuple or not paths or len(paths) != len(set(paths)):
             raise ValueError("changed_paths must be a non-empty unique tuple")
         for path in paths:
@@ -174,7 +192,7 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
                 raise ValueError("changed_paths must contain normalized relative paths")
         return data
 
-    def sealed_to_changeset(value):
+    def sealed_to_changeset(value: object) -> ChangeSet:
         data = validate(value)
         owner = data["repository_owner"].lower()
         repository = data["repository_name"].lower()
@@ -198,7 +216,7 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
             raise ValueError("malformed mapped ChangeSet")
         return result
 
-    def sealed_snapshot_to_dict(value):
+    def sealed_snapshot_to_dict(value: object) -> dict[str, object]:
         data = validate(value)
         return {
             key: (
@@ -211,10 +229,10 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
             for key in ordered_fields
         }
 
-    def sealed_load(payload):
-        if type(payload) is not dict or set(payload) != fields:
+    def sealed_load(payload: Any) -> GitHubPullRequestSnapshot:
+        if type(payload) is not dict or set(cast("dict[str, Any]", payload)) != fields:
             raise ValueError("malformed GitHub pull-request snapshot keys")
-        values = dict(payload)
+        values = dict(cast("dict[str, Any]", payload))
         if type(values["changed_paths"]) is not list:
             raise TypeError("changed_paths must be a list in serialized snapshots")
         if (
@@ -224,7 +242,7 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
             raise ValueError("malformed GitHub pull-request snapshot owner or name")
         values["repository_owner"] = values["repository_owner"].lower()
         values["repository_name"] = values["repository_name"].lower()
-        values["changed_paths"] = tuple(sorted(values["changed_paths"]))
+        values["changed_paths"] = tuple(sorted(cast("list[Any]", values["changed_paths"])))
         loaded = snapshot_type(**values)
         validate(loaded)
         if vars(loaded) != values:
@@ -232,16 +250,16 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
         return loaded
 
     def sealed_certify(
-        value,
-        contract,
-        plan,
-        evidence,
+        value: object,
+        contract: AcceptanceContract,
+        plan: VerificationPlan,
+        evidence: EvidenceBundle,
         *,
-        policy_accepted=None,
-        authority_present=None,
-        approval_present=None,
-        signing_present=None,
-    ):
+        policy_accepted: bool | None = None,
+        authority_present: bool | None = None,
+        approval_present: bool | None = None,
+        signing_present: bool | None = None,
+    ) -> CertificationResult:
         change_set = sealed_to_changeset(value)
         return kernel_certify(
             input_type(
