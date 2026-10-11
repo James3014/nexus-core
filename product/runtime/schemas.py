@@ -1,12 +1,13 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Canonical schemas and validation functions for Core V1 HTTP runtime (TG-5)."""
 
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from product.certification.receipt import CLAIM_CEILING
-from product.evidence import _hash
+from product.evidence import _hash  # pyright: ignore[reportPrivateUsage]
 from product.protocol import (
     CERTIFICATION_RECEIPT_SCHEMA,
     IMPLEMENTATION_SCHEMA,
@@ -185,12 +186,13 @@ def validate_certification_request(payload: Any) -> tuple[str, ...]:
     """
     if not isinstance(payload, dict):
         return ("payload must be a JSON object",)
+    payload = cast("dict[str, Any]", payload)
 
     keys = set(payload.keys())
     if keys != _REQUIRED_REQUEST_KEYS:
         missing = _REQUIRED_REQUEST_KEYS - keys
         extra = keys - _REQUIRED_REQUEST_KEYS
-        errs = []
+        errs: list[str] = []
         if missing:
             errs.append(f"missing required keys: {sorted(missing)}")
         if extra:
@@ -214,11 +216,12 @@ def validate_certification_request(payload: Any) -> tuple[str, ...]:
     repo = payload["repository"]
     if not isinstance(repo, dict):
         return ("repository must be a JSON object",)
+    repo = cast("dict[str, Any]", repo)
     repo_keys = set(repo.keys())
     if repo_keys != _REQUIRED_REPO_KEYS:
         missing_repo = _REQUIRED_REPO_KEYS - repo_keys
         extra_repo = repo_keys - _REQUIRED_REPO_KEYS
-        errs = []
+        errs: list[str] = []
         if missing_repo:
             errs.append(f"repository missing keys: {sorted(missing_repo)}")
         if extra_repo:
@@ -338,6 +341,7 @@ def validate_receipt_verify_request(payload: Any) -> tuple[str, ...]:
     """Validate incoming receipt verification request against schema."""
     if not isinstance(payload, dict):
         return ("payload must be a JSON object",)
+    payload = cast("dict[str, Any]", payload)
     req_keys = frozenset(RECEIPT_VERIFY_REQUEST_SCHEMA["required"])
     if set(payload.keys()) != req_keys:
         return (f"keys must match {sorted(req_keys)}",)
@@ -345,6 +349,7 @@ def validate_receipt_verify_request(payload: Any) -> tuple[str, ...]:
     receipt = payload.get("receipt")
     if not isinstance(receipt, dict):
         return ("receipt must be a JSON object",)
+    receipt = cast("dict[str, Any]", receipt)
     if receipt.get("receipt_schema") != CERTIFICATION_RECEIPT_SCHEMA:
         return ("invalid receipt_schema in receipt",)
 
