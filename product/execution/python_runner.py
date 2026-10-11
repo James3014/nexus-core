@@ -9,6 +9,7 @@ the same request twice before returning a certifiable result.
 import hashlib
 import importlib.resources
 import json
+import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from enum import Enum
@@ -489,18 +490,15 @@ class PythonOCIRunner:
             try:
                 raw = executor(self.profile, request, index)
                 attempt = self._attempt(raw, request, index)
-            except (
-                TypeError,
-                ValueError,
-                KeyError,
-                ET.ParseError,
-                TimeoutError,
-                OSError,
-                RuntimeError,
-            ):
+            except (TypeError, ValueError, KeyError, ET.ParseError):
+                # Deterministic malformed output: safe to cache for exact replay.
                 result = self._unknown(("MALFORMED_OR_UNAVAILABLE",))
                 self._replay[key] = result
                 return result
+            except (TimeoutError, OSError, RuntimeError, subprocess.SubprocessError):
+                # Transient executor failure: report it but never cache it, so a
+                # retry reaches the executor again.
+                return self._unknown(("MALFORMED_OR_UNAVAILABLE",))
             attempts.append(attempt)
         if attempts[0].execution_id == attempts[1].execution_id:
             result = self._result(RunnerStatus.UNVERIFIABLE, ("DUPLICATE_EXECUTION_ID",), attempts)
@@ -671,10 +669,13 @@ class PythonOCIRunner:
             tests = sum(int(s.attrib.get("tests", "0")) for s in suites)
             failures = sum(int(s.attrib.get("failures", "0")) for s in suites)
             errors = sum(int(s.attrib.get("errors", "0")) for s in suites)
+            skipped = sum(int(s.attrib.get("skipped", "0")) for s in suites)
         except (TypeError, ValueError):
             raise ValueError("malformed junit counts")
         if (
             tests <= 0
+            or skipped < 0
+            or skipped >= tests
             or failures < 0
             or errors < 0
             or failures + errors > tests

@@ -29,6 +29,21 @@ HEADER_READ_TIMEOUT_SECONDS = 10.0
 CERTIFICATION_WAIT_TIMEOUT_SECONDS = 330.0
 POLL_INTERVAL_SECONDS = 0.5
 ADMISSION_EXIT_CODE = 78
+# Final-state exit codes; UNVERIFIABLE (6) and timeout (7) match cli.cmd_submit.
+EXIT_FAILED = 1
+EXIT_UNVERIFIABLE = 6
+EXIT_TIMEOUT = 7
+
+
+def exit_code_for_state(state: str | None) -> int:
+    """Map a final certification state to a process exit code (0 only for COMPLETED)."""
+    if state == "COMPLETED":
+        return 0
+    if state == "FAILED":
+        return EXIT_FAILED
+    if state == "UNVERIFIABLE":
+        return EXIT_UNVERIFIABLE
+    return EXIT_TIMEOUT  # still PENDING/RUNNING (or unknown) after the wait deadline
 
 
 def _is_loopback(host: str) -> bool:
@@ -299,13 +314,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.token_file is None:
         parser.error("--token-file is required with --request-file")
-    run_action(
+    action = run_action(
         request_file=args.request_file,
         token_file=args.token_file,
         service_url=args.service_url,
         receipt_out_path=args.receipt_output_file,
     )
-    return 0
+    state = action["outputs"]["state"]
+    code = exit_code_for_state(state)
+    if code == EXIT_TIMEOUT:
+        sys.stderr.write(f"certification did not reach a final state (state={state})\n")
+    return code
 
 
 if __name__ == "__main__":
