@@ -1,6 +1,7 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, cast
 from weakref import WeakValueDictionary
 
 from product.evidence import (
@@ -51,8 +52,8 @@ class CoverageEntry:
         if self.anomaly is not None and (type(self.anomaly) is not str or not self.anomaly):
             raise ValueError("anomaly must be a nonblank string when present")
 
-    def to_dict(self):
-        value = {
+    def to_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
             "logical_subject_id": self.logical_subject_id,
             "evidence_kind": self.evidence_kind,
             "requirement_mode": self.requirement_mode,
@@ -122,8 +123,8 @@ class CoverageProjection:
             if entry.category is CoverageCategory.CONDITIONALLY_NOT_APPLICABLE
         )
 
-    def to_dict(self):
-        value = {
+    def to_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
             "universe_generation": self.universe_generation,
             "universe_identity": self.universe_identity,
             "entries": [entry.to_dict() for entry in self.entries],
@@ -138,28 +139,32 @@ class CoverageProjection:
 
 
 def derive_coverage(
-    expected_subjects, observations, *, universe_generation, universe_identity
-):
+    expected_subjects: Iterable[Any],
+    observations: Iterable[object],
+    *,
+    universe_generation: Any,
+    universe_identity: Any,
+) -> CoverageProjection:
     """Pure reconciliation of expected logical subjects against observed evidence.
 
     Deterministic over its immutable inputs; never mutates and never invents
     universe entries. Observed rows that match no expected subject are reported
     as unexpected (informational only) so discovery cannot force a failure.
     """
-    seen = {}
+    seen: dict[Any, Any] = {}
     for observation in observations:
-        sid = vars(observation).get("logical_subject_id")
+        sid: Any = vars(observation).get("logical_subject_id")
         if sid is None:
             continue
         seen[(sid, vars(observation).get("evidence_kind"))] = observation
     universe_keys = {(s.logical_subject_id, s.evidence_kind) for s in expected_subjects}
     unexpected_subjects = tuple(sorted(seen.keys() - universe_keys))
 
-    entries = []
+    entries: list[CoverageEntry] = []
     for subject in sorted(expected_subjects, key=lambda s: s.logical_subject_id):
-        sv = vars(subject)
+        sv = cast("dict[str, Any]", vars(subject))
         key = (sv["logical_subject_id"], sv["evidence_kind"])
-        observed = seen.get(key)
+        observed: object | None = seen.get(key)
         anomaly = None
         if observed is None:
             for other_id, other_kind in seen:
@@ -200,7 +205,7 @@ class VerificationResult:
     integrity: IntegrityStatus = IntegrityStatus.VALID
     coverage: CoverageProjection | None = None
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise TypeError("VerificationResult is created by reduce_verification")
 
     def __post_init__(self):
@@ -250,8 +255,8 @@ class VerificationResult:
     def failed_checks(self):
         return self.reason_codes
 
-    def to_dict(self):
-        value = {
+    def to_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
             "status": self.status.value,
             "reason_codes": list(self.reason_codes),
         }
@@ -260,7 +265,7 @@ class VerificationResult:
         return value
 
 
-def _validate_reasons(reasons):
+def _validate_reasons(reasons: tuple[str, ...]) -> None:
     if not isinstance(reasons, tuple):
         raise TypeError("reasons must be a tuple")
     for reason in reasons:
@@ -279,7 +284,10 @@ def _make_reducer() -> tuple[Callable[..., VerificationResult], Callable[[object
     registry: WeakValueDictionary[int, VerificationResult] = WeakValueDictionary()
 
     def reduce_verification(
-        condition: Any, observations: Any = (), reasons: Any = (), coverage: Any = None
+        condition: Any,
+        observations: tuple[Any, ...] = (),
+        reasons: tuple[str, ...] = (),
+        coverage: Any = None,
     ) -> VerificationResult:
         if not isinstance(condition, IntegrityStatus):
             raise TypeError("condition must be IntegrityStatus")
@@ -380,13 +388,13 @@ del _make_reducer
 
 
 def _make_verify(
-    integrity_deriver,
-    subject_validator,
-    reducer,
-    observation_type,
-    observation_status,
-    integrity_status,
-):
+    integrity_deriver: Callable[..., Any],
+    subject_validator: Callable[..., Any],
+    reducer: Callable[..., VerificationResult],
+    observation_type: Any,
+    observation_status: Any,
+    integrity_status: Any,
+) -> Callable[..., VerificationResult]:
     def verify(
         contract: Any, change_set: object, plan: object, evidence: object
     ) -> VerificationResult:
@@ -395,18 +403,18 @@ def _make_verify(
         integrity = integrity_deriver(contract, change_set, plan, evidence)
         if integrity is not integrity_status.VALID:
             return reducer(integrity)
-        contract_data = vars(contract)
-        change_data = vars(change_set)
-        plan_data = vars(plan)
-        evidence_data = vars(evidence)
+        contract_data = cast("dict[str, Any]", vars(contract))
+        change_data: dict[str, Any] = vars(change_set)
+        plan_data: dict[str, Any] = vars(plan)
+        evidence_data: dict[str, Any] = vars(evidence)
         if set(change_data["paths"]) - set(contract_data["allowed_paths"]):
             return reducer(integrity_status.SCOPE_ESCAPE)
         if contract_data["deletion_policy"] == "FORBID" and change_data["deleted_paths"]:
             return reducer(integrity_status.SCOPE_ESCAPE, reasons=("DELETION_FORBIDDEN",))
         if set(contract_data["required_verifier_ids"]) != set(plan_data["required_verifier_ids"]):
             return reducer(integrity_status.MISSING)
-        observations = evidence_data["observations"]
-        obs = {vars(o)["verifier_id"]: o for o in observations}
+        observations: list[object] = evidence_data["observations"]
+        obs: dict[Any, object] = {vars(o)["verifier_id"]: o for o in observations}
         observed_ids = set(obs)
         if any(
             vars(o)["status"] not in {observation_status.PASS, observation_status.FAIL}
@@ -458,7 +466,7 @@ def _make_verify(
             subject.logical_subject_id for subject in universe
         } & set(contract_data["required_verifier_ids"])
         if namespace_overlap:
-            observed_by_subject = {}
+            observed_by_subject: dict[Any, Any] = {}
             for observation in observations:
                 subject_id = vars(observation)["logical_subject_id"]
                 if subject_id in namespace_overlap:
