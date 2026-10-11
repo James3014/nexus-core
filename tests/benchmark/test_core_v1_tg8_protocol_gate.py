@@ -14,7 +14,6 @@ from typing import Any
 import pytest
 
 from product.benchmark import _digest
-from product.benchmark import tg8_compatibility_gate as gate
 from product.protocol import (
     CERTIFICATION_RECEIPT_SCHEMA,
     EVIDENCE_BUNDLE_SCHEMA,
@@ -22,6 +21,7 @@ from product.protocol import (
     PROVENANCE_ENVELOPE_SCHEMA,
     PUBLIC_PROTOCOL_VERSION,
 )
+from product.protocol import compatibility_gate as gate
 
 
 def _write(path: Path, value: dict[str, Any]) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from product.benchmark import tg8_compatibility_gate as gate
+from product.protocol import compatibility_gate as gate
 
 
 def _hashed(body: dict[str, Any], key: str) -> dict[str, Any]:
