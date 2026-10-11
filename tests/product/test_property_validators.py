@@ -180,7 +180,7 @@ _NEW_ISSUE_FLOAT = (
 )
 
 _NEW_ISSUE_HANDOFF = (
-    "<new issue needed>: verify_handoff_evidence raises TypeError 'unhashable type' when "
+    "#178: verify_handoff_evidence raises TypeError 'unhashable type' when "
     "envelope `schema` is a list or dict (membership check at product/evidence/handoff.py:283)"
 )
 
