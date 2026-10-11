@@ -2213,8 +2213,22 @@ def evaluate_receipt_expectations(
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
-    """Independently recompute a local verification receipt payload."""
+    """Independently recompute a local verification receipt payload.
 
+    The payload is untrusted: any value that cannot be canonicalised or hashed
+    (floats, unhashable containers, pathological nesting) is a malformed receipt,
+    never an exception.
+    """
+
+    try:
+        return _validate_verification_receipt_payload(payload, repo=repo)
+    except (TypeError, ValueError, RecursionError):
+        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+
+
+def _validate_verification_receipt_payload(
+    payload: Mapping[str, Any], *, repo: str | Path | None = None
+) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     payload = dict(payload)
@@ -2265,7 +2279,8 @@ def validate_verification_receipt_payload(
         source = payload["config_source"]
         if (
             not isinstance(source, dict)
-            or source.get("kind") not in {"base-ref", "worktree"}
+            or not isinstance(source.get("kind"), str)
+            or source["kind"] not in {"base-ref", "worktree"}
             or not isinstance(source.get("config_drift"), bool)
         ):
             reasons.append("MALFORMED_RECEIPT")

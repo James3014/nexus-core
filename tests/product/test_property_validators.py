@@ -169,12 +169,6 @@ _HANDOFF_IDENTITY = HandoffIdentity(
     runtime_identity="runtime-sha:0000000000000000",
 )
 
-_NEW_ISSUE_FLOAT = (
-    "#177: validate_verification_receipt_payload raises TypeError on a float field "
-    "(product=0.0: 'unsupported canonical value: float') or a list config_source.kind "
-    "('unhashable type: list') instead of returning valid=False"
-)
-
 # ---------------------------------------------------- a. validator totality
 
 
@@ -302,12 +296,9 @@ def _check_verification_receipt_total(payload):
     assert isinstance(result, dict) and isinstance(result["valid"], bool)
 
 
-def test_validate_verification_receipt_payload_is_total_excluding_known_gap():
+def test_validate_verification_receipt_payload_is_total():
     base = _verification_receipt()
-    check_all(
-        lambda r: make_input(r, base, scalar_only=True, floats=False),
-        _check_verification_receipt_total,
-    )
+    check_all(lambda r: make_input(r, base), _check_verification_receipt_total)
 
 
 def _receipt_with(**fields: Any) -> dict[str, Any]:
@@ -320,13 +311,11 @@ def _receipt_with(**fields: Any) -> dict[str, Any]:
     return payload
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_FLOAT)
-def test_verification_receipt_list_kind_known_gap():
+def test_verification_receipt_list_kind_is_total():
     _check_verification_receipt_total(_receipt_with(kind=[]))
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_FLOAT)
-def test_verification_receipt_float_field_known_gap():
+def test_verification_receipt_float_field_is_total():
     _check_verification_receipt_total(_receipt_with(product=0.0))
 
 
