@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, NoReturn, Sequence
 
 from product.adapters.generic_verification import verify_generic_changeset
 from product.protocol import PUBLIC_PROTOCOL_VERSION
@@ -1661,7 +1661,7 @@ def _raise_with_receipt(
     config_source: Mapping[str, Any] | None = None,
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
-) -> None:
+) -> NoReturn:
     receipt = _base_receipt(
         repo=repo,
         config=config,
