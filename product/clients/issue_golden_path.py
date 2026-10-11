@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Issue-bound Golden Path over the existing local repository verifier."""
 
 from __future__ import annotations
@@ -12,19 +13,19 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, cast
 
 from product.clients.local_golden_path import (
-    _MATERIAL_IDENTITY_RE,
+    _MATERIAL_IDENTITY_RE,  # pyright: ignore[reportPrivateUsage]
     CONFIG_DIRECTORY,
     CONFIG_FILENAME,
     ISSUE_CEILING_UNBOUND,
     ISSUE_EVIDENCE_STALE_REASON,
-    ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401
+    ISSUE_EVIDENCE_UNBOUND_REASON,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     MATERIAL_TRANSITION_AUTHORIZED_ASSOCIATIONS,
     LocalCheckError,
-    _load_effective_config,
-    _raise_with_receipt,
+    _load_effective_config,  # pyright: ignore[reportPrivateUsage]
+    _raise_with_receipt,  # pyright: ignore[reportPrivateUsage]
     check_repository,
 )
 from product.protocol.generic_verification import canonical_hash
@@ -186,7 +187,7 @@ def _default_issue_reader(github_repo: str, issue_number: int) -> Mapping[str, A
             raise LocalCheckError("ISSUE_FETCH_FAILED", str(exc)) from exc
     if not isinstance(payload, dict) or "pull_request" in payload:
         raise LocalCheckError("ISSUE_REQUIRED", f"{github_repo}#{issue_number}")
-    return payload
+    return cast("dict[str, Any]", payload)
 
 
 def _issue_contract(github_repo: str, issue_number: int, raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -214,7 +215,7 @@ def _issue_contract(github_repo: str, issue_number: int, raw: Mapping[str, Any])
     if isinstance(association, str):
         contract["author_association"] = association
     user = raw.get("user")
-    login = user.get("login") if isinstance(user, Mapping) else None
+    login = cast("Mapping[str, Any]", user).get("login") if isinstance(user, Mapping) else None
     if isinstance(login, str) and login:
         contract["author_login"] = login
     return contract
@@ -356,8 +357,9 @@ def _validate_evidence_sufficiency(
         "source",
         "issue_contract_hash",
     }
-    if type(value) is not dict or set(value) != required:
+    if type(value) is not dict or set(cast("dict[str, Any]", value)) != required:
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid evidence sufficiency binding")
+    value = cast("dict[str, Any]", value)
     if value.get("schema") != ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA:
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unsupported evidence sufficiency binding")
     if value.get("config_path") != f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}":
@@ -375,11 +377,12 @@ def _validate_evidence_sufficiency(
 
 
 def _validate_binding(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict) or payload.get("schema") not in {
+    if not isinstance(payload, dict) or cast("dict[str, Any]", payload).get("schema") not in {
         LEGACY_ISSUE_BINDING_SCHEMA,
         ISSUE_BINDING_SCHEMA,
     }:
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unsupported binding")
+    payload = cast("dict[str, Any]", payload)
     if payload.get("schema") == LEGACY_ISSUE_BINDING_SCHEMA:
         if payload.get("version") != 1:
             raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid legacy binding version")
@@ -389,6 +392,7 @@ def _validate_binding(payload: Any) -> dict[str, Any]:
     contract = payload.get("issue_contract")
     if not isinstance(contract, dict):
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "missing issue contract")
+    contract = cast("dict[str, Any]", contract)
     issue_contract_hash = payload.get("issue_contract_hash")
     if (
         not isinstance(issue_contract_hash, str)

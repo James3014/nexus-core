@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Nexus Core V1 nexus-certify thin CLI.
 
 Canonical CLI transport for Core V1 certification runtime (TG-6).
@@ -16,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from product.clients.issue_golden_path import (
     ISSUE_EVIDENCE_MARKER_PREFIX,
@@ -26,8 +27,8 @@ from product.clients.issue_golden_path import (
 )
 from product.clients.local_golden_path import (
     LocalCheckError,
-    _load_effective_config,
-    _normalize_material_transitions,
+    _load_effective_config,  # pyright: ignore[reportPrivateUsage]
+    _normalize_material_transitions,  # pyright: ignore[reportPrivateUsage]
     check_repository,
     doctor_repository,
     evaluate_receipt_expectations,
@@ -50,7 +51,7 @@ class CertifyCLIError(Exception):
 
 
 class CertifyArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str) -> NoReturn:
         sys.stderr.write(f"usage error: {message}\n")
         sys.exit(2)
 
@@ -61,7 +62,7 @@ _RUNTIME_HINT = "this command requires: pip install 'nexus-certify[runtime]'"
 def _require_runtime() -> None:
     """Fail with exit 2 and an install hint when the optional runtime extra is absent."""
     try:
-        import aiohttp  # noqa: F401
+        import aiohttp  # noqa: F401  # pyright: ignore[reportUnusedImport]
     except ModuleNotFoundError as exc:
         if exc.name is not None and exc.name.split(".")[0] != "aiohttp":
             raise
@@ -81,6 +82,7 @@ def _make_http_request(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status_code = resp.getcode()
             data = resp.read().decode("utf-8")
+            parsed: dict[str, Any]
             try:
                 parsed = json.loads(data) if data else {}
             except json.JSONDecodeError:
@@ -89,11 +91,12 @@ def _make_http_request(
     except urllib.error.HTTPError as e:
         status_code = e.code
         err_body = e.read().decode("utf-8", errors="ignore")
+        parsed_err: dict[str, Any]
         try:
-            parsed = json.loads(err_body) if err_body else {}
+            parsed_err = json.loads(err_body) if err_body else {}
         except json.JSONDecodeError:
-            parsed = {"error": err_body}
-        return status_code, parsed
+            parsed_err = {"error": err_body}
+        return status_code, parsed_err
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise CertifyCLIError(f"transport error: {e}", exit_code=7) from e
 
@@ -385,8 +388,8 @@ def _require_trusted_config(args: argparse.Namespace) -> bool:
     )
 
 
-def _print_config_source(result: dict) -> None:
-    source = result.get("config_source") or {}
+def _print_config_source(result: dict[str, Any]) -> None:
+    source: dict[str, Any] = result.get("config_source") or {}
     if source.get("kind") == "base-ref":
         print(f"config: trusted ({source['ref']}@{source['commit'][:12]})")
     else:
@@ -424,6 +427,7 @@ def cmd_receipt_check(args: argparse.Namespace) -> int:
     }
     expectations_failed = False
     if any(value not in (None, False) for value in wanted.values()):
+        payload: Any
         try:
             payload = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -480,6 +484,7 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
         force=args.force,
     )
     print(f"issue binding initialized: {path}")
+    binding: Any
     try:
         binding = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -583,8 +588,9 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
 def cmd_handoff_init(args: argparse.Namespace) -> int:
     from product.clients.runtime_handoff import init_handoff
 
-    services = []
-    for service in args.service or []:
+    services: list[dict[str, Any]] = []
+    service_args: list[str] = args.service or []
+    for service in service_args:
         if "=" in service:
             service_id, endpoint = service.split("=", 1)
             parsed = urllib.parse.urlparse(endpoint)
