@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Client shell for runtime and manual handoff readiness (issue #83).
 
 This module manages handoff configuration, service probing, verifier execution,
@@ -18,16 +19,16 @@ import tomllib
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 
 from product.clients.local_golden_path import (
     CONFIG_DIRECTORY,
     LocalCheckError,
-    _check_ignored_residue,
-    _materialize_target_tree,
-    _repo_root,
-    _run_git,
-    _sha256_bytes,
+    _check_ignored_residue,  # pyright: ignore[reportPrivateUsage] -- sibling-module helper
+    _materialize_target_tree,  # pyright: ignore[reportPrivateUsage] -- sibling-module helper
+    _repo_root,  # pyright: ignore[reportPrivateUsage] -- sibling-module helper
+    _run_git,  # pyright: ignore[reportPrivateUsage] -- sibling-module helper
+    _sha256_bytes,  # pyright: ignore[reportPrivateUsage] -- sibling-module helper
     validate_verification_receipt,
 )
 from product.protocol import PUBLIC_PROTOCOL_VERSION
@@ -110,8 +111,9 @@ def _toml_array(values: Sequence[str]) -> str:
 
 
 def _validate_handoff_config(value: Any) -> dict[str, Any]:
-    if type(value) is not dict or set(value) != _CONFIG_KEYS:
+    if type(value) is not dict or set(cast("dict[str, Any]", value)) != _CONFIG_KEYS:
         raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unexpected or missing config keys")
+    value = cast("dict[str, Any]", value)
     if value.get("version") != HANDOFF_CONFIG_VERSION:
         raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unsupported version")
     if not isinstance(value.get("handoff_id"), str) or not value["handoff_id"].strip():
@@ -120,7 +122,10 @@ def _validate_handoff_config(value: Any) -> dict[str, Any]:
     if (
         not isinstance(command, list)
         or not command
-        or any(not isinstance(item, str) or not item or "\x00" in item for item in command)
+        or any(
+            not isinstance(item, str) or not item or "\x00" in item
+            for item in cast("list[Any]", command)
+        )
     ):
         raise LocalCheckError(
             "INVALID_HANDOFF_CONFIG", "verifier_command must be a non-empty string array"
@@ -133,12 +138,16 @@ def _validate_handoff_config(value: Any) -> dict[str, Any]:
     services = value.get("services")
     if not isinstance(services, list) or not services:
         raise LocalCheckError("INVALID_HANDOFF_CONFIG", "at least one service must be defined")
+    services = cast("list[Any]", services)
     seen_ids: set[str] = set()
     for svc in services:
-        if type(svc) is not dict or not {"service_id", "endpoint"}.issubset(set(svc)):
+        if type(svc) is not dict or not {"service_id", "endpoint"}.issubset(
+            set(cast("dict[str, Any]", svc))
+        ):
             raise LocalCheckError(
                 "INVALID_HANDOFF_CONFIG", "service missing service_id or endpoint"
             )
+        svc = cast("dict[str, Any]", svc)
         if set(svc) - _SERVICE_KEYS:
             raise LocalCheckError("INVALID_HANDOFF_CONFIG", "unexpected service config keys")
         service_id = svc.get("service_id")
@@ -440,6 +449,7 @@ def _read_latest_pointer(repo: Path) -> dict[str, Any] | None:
         raise LocalCheckError("HANDOFF_LATEST_POINTER_INVALID", str(exc)) from exc
     if not isinstance(pointer, dict):
         raise LocalCheckError("HANDOFF_LATEST_POINTER_INVALID", "pointer must be an object")
+    pointer = cast("dict[str, Any]", pointer)
     pointer_hash = pointer.get("pointer_hash")
     pointer_body = {key: value for key, value in pointer.items() if key != "pointer_hash"}
     if (
@@ -486,8 +496,8 @@ def _latest_handoff_receipt(repo: Path) -> Path | None:
         raise LocalCheckError("HANDOFF_LATEST_POINTER_INVALID", str(exc)) from exc
     if (
         not isinstance(payload, dict)
-        or payload.get("receipt_hash") != pointer["receipt_hash"]
-        or runtime_handoff_receipt_hash(payload) != pointer["receipt_hash"]
+        or cast("dict[str, Any]", payload).get("receipt_hash") != pointer["receipt_hash"]
+        or runtime_handoff_receipt_hash(cast("dict[str, Any]", payload)) != pointer["receipt_hash"]
     ):
         raise LocalCheckError(
             "HANDOFF_LATEST_POINTER_INVALID", "latest receipt hash mismatch"
@@ -539,7 +549,7 @@ def _write_handoff_receipt(repo: Path, payload: dict[str, Any]) -> Path:
 
 
 def _write_attempt_marker(repo: Path, reason_code: str) -> Path:
-    payload = {
+    payload: dict[str, Any] = {
         "protocol_version": PUBLIC_PROTOCOL_VERSION,
         "schema": RUNTIME_HANDOFF_SCHEMA_ID,
         "receipt_kind": RUNTIME_HANDOFF_RECEIPT_KIND,
@@ -581,6 +591,7 @@ def _repository_verification_reasons(
         return ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], latest
     if not isinstance(payload, dict):
         return ["PREREQUISITE_REPOSITORY_NOT_VERIFIED"], latest
+    payload = cast("dict[str, Any]", payload)
 
     reasons: list[str] = []
     validation = validate_verification_receipt(latest, repo=repo)
@@ -606,6 +617,7 @@ def _prerequisite_binding_reasons(
     binding = payload.get("prerequisite_repository")
     if not isinstance(binding, Mapping):
         return ["PREREQUISITE_REPOSITORY_BINDING_MISSING"]
+    binding = cast("Mapping[str, Any]", binding)
     receipt_file = binding.get("receipt_file")
     if (
         not isinstance(receipt_file, str)
@@ -622,6 +634,7 @@ def _prerequisite_binding_reasons(
         return ["PREREQUISITE_REPOSITORY_RECEIPT_INVALID"]
     if not isinstance(bound_payload, dict):
         return ["PREREQUISITE_REPOSITORY_RECEIPT_INVALID"]
+    bound_payload = cast("dict[str, Any]", bound_payload)
 
     reasons: list[str] = []
     if bound_payload.get("receipt_hash") != binding.get("receipt_hash"):
@@ -738,7 +751,7 @@ def check_handoff(path: str | Path = ".") -> dict[str, Any]:
         rpath = make_blocked_receipt([exc.reason_code])
         raise LocalCheckError(exc.reason_code, exc.detail, receipt_path=rpath) from exc
 
-    source_bind = {
+    source_bind: dict[str, Any] = {
         "target_commit": f"git-commit:{head_commit}",
         "target_tree": f"git-tree:{product_tree}",
         "worktree_clean": not bool(dirty),
@@ -1070,10 +1083,11 @@ def _runtime_freshness_reasons(
     if not isinstance(services, list) or not services:
         return ["NO_RUNTIME_SERVICES_DECLARED"]
 
-    for service in services:
+    for service in cast("list[Any]", services):
         if not isinstance(service, Mapping):
             reasons.append("RUNTIME_SERVICE_BINDING_INVALID")
             continue
+        service = cast("Mapping[str, Any]", service)
         service_id = service.get("service_id")
         service_config = config_services.get(service_id)
         if service_config is None:
@@ -1135,6 +1149,7 @@ def handoff_status(path: str | Path = ".") -> dict[str, Any]:
             "reason_codes": ["MALFORMED_RECEIPT"],
             "receipt_path": latest,
         }
+    payload = cast("dict[str, Any]", payload)
 
     validation = validate_runtime_handoff_payload(payload)
     reasons = list(validation["reason_codes"])
@@ -1175,6 +1190,7 @@ def validate_handoff_receipt(
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     if not isinstance(payload, dict):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+    payload = cast("dict[str, Any]", payload)
 
     res = validate_runtime_handoff_payload(payload)
     reasons = list(res["reason_codes"])

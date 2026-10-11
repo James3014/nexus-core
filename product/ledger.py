@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Durable append-only SQLite ledger with replay fencing and recovery.
 
 Core V1 TG-4 durable persistence boundary:
@@ -20,9 +21,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
-from product.evidence import _hash, canonical_json
+from product.evidence import (
+    _hash,  # pyright: ignore[reportPrivateUsage] -- sibling-module hash helper
+    canonical_json,
+)
 from product.evidence.ingestion import IDENTITY_ENVELOPE_SCHEMA
 from product.protocol import (
     CERTIFICATION_RECEIPT_SCHEMA,
@@ -427,7 +431,7 @@ def _validate_receipt_semantics(rec_dict: dict[str, object]) -> None:
     certification = rec_dict.get("certification")
     if not isinstance(certification, dict):
         raise ValueError("completion receipt certification must be an object")
-    if certification.get("disposition") not in _RECEIPT_DISPOSITIONS:
+    if cast("dict[str, Any]", certification).get("disposition") not in _RECEIPT_DISPOSITIONS:
         raise ValueError("completion receipt disposition is not a valid disposition")
     if rec_dict.get("claim_ceiling") != _RECEIPT_CLAIM_CEILING:
         raise ValueError("completion receipt claim_ceiling does not match protocol ceiling")
@@ -437,7 +441,7 @@ def _validate_receipt_semantics(rec_dict: dict[str, object]) -> None:
         raise ValueError("completion receipt implementation_schema is stale")
 
 
-def _row_to_entry(row: tuple) -> LedgerEntry:
+def _row_to_entry(row: tuple[Any, ...]) -> LedgerEntry:
     (
         seq,
         com_gen,
@@ -506,9 +510,12 @@ def append_or_replay(
     # Validate identity envelope
     try:
         env_dict = json.loads(request.identity_envelope_bytes.decode("utf-8"))
-        if not isinstance(env_dict, dict) or env_dict.get("schema") != IDENTITY_ENVELOPE_SCHEMA:
+        if (
+            not isinstance(env_dict, dict)
+            or cast("dict[str, Any]", env_dict).get("schema") != IDENTITY_ENVELOPE_SCHEMA
+        ):
             raise ValueError("invalid identity envelope schema")
-        computed_env_hash = _hash(env_dict)
+        computed_env_hash = _hash(cast("dict[str, Any]", env_dict))
     except Exception as exc:
         raise ValueError(f"malformed identity envelope bytes: {exc}") from exc
 
@@ -517,19 +524,21 @@ def append_or_replay(
         rec_dict = json.loads(request.completion_receipt_bytes.decode("utf-8"))
         if (
             not isinstance(rec_dict, dict)
-            or rec_dict.get("receipt_schema") != CERTIFICATION_RECEIPT_SCHEMA
+            or cast("dict[str, Any]", rec_dict).get("receipt_schema")
+            != CERTIFICATION_RECEIPT_SCHEMA
         ):
             raise ValueError("invalid completion receipt schema")
-        embedded_rec_hash = rec_dict.get("receipt_hash")
+        rec_map = cast("dict[str, Any]", rec_dict)
+        embedded_rec_hash = rec_map.get("receipt_hash")
         if not embedded_rec_hash or not isinstance(embedded_rec_hash, str):
             raise ValueError("completion receipt missing receipt_hash")
-        receipt_body = {key: value for key, value in rec_dict.items() if key != "receipt_hash"}
+        receipt_body = {key: value for key, value in rec_map.items() if key != "receipt_hash"}
         computed_rec_hash = _hash(receipt_body)
         if computed_rec_hash != embedded_rec_hash:
             raise ValueError("completion receipt hash mismatch")
-        _validate_receipt_semantics(rec_dict)
-        factual_disposition = rec_dict["certification"]["disposition"]
-        claim_ceiling = tuple(rec_dict["claim_ceiling"])
+        _validate_receipt_semantics(rec_map)
+        factual_disposition = rec_map["certification"]["disposition"]
+        claim_ceiling = tuple(rec_map["claim_ceiling"])
     except Exception as exc:
         raise ValueError(f"malformed completion receipt bytes: {exc}") from exc
 
@@ -651,7 +660,7 @@ def append_or_replay(
                     claim_ceiling=claim_ceiling,
                     source_snapshot_hash=request.source_snapshot_hash,
                     previous_entry_hash=previous_hash,
-                    signer_public_metadata=meta or None,
+                    signer_public_metadata=cast("dict[str, Any] | None", meta or None),
                 )
                 sign_domain = (
                     "nexus.ledger-entry-signature.v1",
@@ -706,7 +715,7 @@ def append_or_replay(
                 )
 
             # Failpoint before write
-            if request._failpoint == "before_write":
+            if request._failpoint == "before_write":  # pyright: ignore[reportPrivateUsage]
                 conn.execute("ROLLBACK;")
                 raise RuntimeError("Failpoint: before_write")
 
@@ -746,7 +755,7 @@ def append_or_replay(
             )
 
             # Failpoint after write before commit
-            if request._failpoint == "before_commit":
+            if request._failpoint == "before_commit":  # pyright: ignore[reportPrivateUsage]
                 conn.execute("ROLLBACK;")
                 raise RuntimeError("Failpoint: before_commit")
 
@@ -754,7 +763,7 @@ def append_or_replay(
             _secure_sidecars(target_path)
 
             # Failpoint after commit before response
-            if request._failpoint == "before_response":
+            if request._failpoint == "before_response":  # pyright: ignore[reportPrivateUsage]
                 raise UnknownEffectError(LedgerAppendStatus.UNKNOWN_EFFECT.value)
 
             entry = LedgerEntry(
