@@ -16,14 +16,15 @@
 | Conversations | Required | `required_review_thread_resolution: true` |
 | Force Push | Blocked | `non_fast_forward` enabled |
 | Branch Deletion | Blocked | `deletion` enabled |
-| Status Checks | Strict | `strict_required_status_checks_policy: true`<br>`required_status_checks: [{"context": "test"}]` |
+| Status Checks | Strict | `strict_required_status_checks_policy: true`<br>`required_status_checks: [{"context": "test"}, {"context": "Nexus Core issue completion"}]` |
 | Bypass Actors | None | Empty bypass actors list |
 
 ## Repository Required Checks
 
 - Repository: `James3014/nexus-core`
-- Required Status Check Context:
-  - `test` (GitHub Actions workflow `ci.yml` job `test`)
+- Required Status Check Contexts (both enforced on `main`):
+  - `test` — GitHub Actions workflow `ci.yml` job `test` (tests, static analysis and packaging)
+  - `Nexus Core issue completion` — GitHub Actions workflow `nexus-core-issue-completion.yml` job `verify` (signed Issue-bound verification receipt)
 
 ## Server-Side Verification
 

@@ -152,7 +152,12 @@ c293dc944fe99652ae8856d732a35b5191f52a5e
 
 ### 5. 設為必要檢查
 
-在你的 branch protection 或 ruleset 中，把名為 **`Nexus Core issue completion`** 的狀態檢查（也就是 `verify` job）設為必要。它的意思是：
+`James3014/nexus-core` 的受保護 `main` 分支目前同時要求以下兩項狀態檢查：
+
+- `test` — `.github/workflows/ci.yml` 的 `test` job；驗證測試、靜態分析及套件建置。
+- `Nexus Core issue completion` — `.github/workflows/nexus-core-issue-completion.yml` 的 `verify` job；驗證已簽署、綁定 Issue 的完成收據。
+
+其他 Repository 導入 Nexus Core 時，應同時要求自己的 CI 檢查與 `Nexus Core issue completion` 驗證檢查。後者的意思是：
 
 > 由這個 repository 的 main 分支 workflow 身分簽署的收據，描述的正是這個 head、這份基準設定檔、這個 Issue，並且結果為 VERIFIED。
 
