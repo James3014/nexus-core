@@ -350,7 +350,9 @@ def _validate_config(value: Any) -> dict[str, Any]:
     material_ids: list[str] = []
     for index, item in enumerate(cast("list[Any]", materials)):
         field = f"materials[{index}]"
-        if not isinstance(item, dict) or not set(cast("dict[str, Any]", item)).issubset(allowed_material_keys):
+        if not isinstance(item, dict) or not set(cast("dict[str, Any]", item)).issubset(
+            allowed_material_keys
+        ):
             raise LocalCheckError("INVALID_CONFIG", f"{field} has unexpected fields")
         item = cast("dict[str, Any]", item)
         required = {
@@ -383,7 +385,9 @@ def _validate_config(value: Any) -> dict[str, Any]:
     material_id_set = set(material_ids)
     for index, item in enumerate(cast("list[Any]", verifiers)):
         field = f"verifiers[{index}]"
-        if not isinstance(item, dict) or not set(cast("dict[str, Any]", item)).issubset(allowed_verifier_keys):
+        if not isinstance(item, dict) or not set(cast("dict[str, Any]", item)).issubset(
+            allowed_verifier_keys
+        ):
             raise LocalCheckError("INVALID_CONFIG", f"{field} has unexpected fields")
         item = cast("dict[str, Any]", item)
         required = {"id", "command", "timeout_seconds", "logical_subject_id", "evidence_kind"}
@@ -458,7 +462,10 @@ def _normalize_material_transitions(value: Any) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in cast("Sequence[Any]", value):
-        if not isinstance(item, Mapping) or set(cast("Mapping[str, Any]", item)) - {"authorized_by"} != _MATERIAL_TRANSITION_KEYS:
+        if (
+            not isinstance(item, Mapping)
+            or set(cast("Mapping[str, Any]", item)) - {"authorized_by"} != _MATERIAL_TRANSITION_KEYS
+        ):
             raise LocalCheckError(
                 "ISSUE_MATERIAL_TRANSITION_MALFORMED", "transition has unexpected fields"
             )
@@ -1541,7 +1548,10 @@ def derive_issue_verification(
 
 
 def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
-    if not isinstance(value, dict) or set(cast("dict[str, Any]", value)) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS:
+    if (
+        not isinstance(value, dict)
+        or set(cast("dict[str, Any]", value)) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS
+    ):
         return False
     value = cast("dict[str, Any]", value)
     if "material_transitions" in value:
