@@ -236,6 +236,22 @@ def test_ci001_blocks_concrete_method_placeholder():
             b"import typing\nclass Port(typing.Protocol):\n    def work(self):\n        pass\n",
             "Port.work",
         ),
+        (
+            b"from typing import Protocol, TypeVar\n"
+            b"T = TypeVar('T')\n"
+            b"class Port(Protocol[T]):\n"
+            b"    def work(self):\n"
+            b"        pass\n",
+            "Port.work",
+        ),
+        (
+            b"import typing\n"
+            b"T = typing.TypeVar('T')\n"
+            b"class Port(typing.Protocol[T]):\n"
+            b"    def work(self):\n"
+            b"        pass\n",
+            "Port.work",
+        ),
     ),
 )
 def test_ci001_preserves_legitimate_declaration_exclusions(source, qualname):

@@ -102,6 +102,58 @@ def test_hostile_second_read_fails_closed(change, error):
         acquire_github_pull_request(Port(_with_cas(_response(locator)), second), locator)
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("pagination_complete", "false"),
+        ("pagination_complete", 1),
+        ("checks", [{"name": "ci", "digest": "x"}]),
+        ("checks", [["lint"]]),
+        ("checks", [["ci", 1]]),
+        ("changed_paths", [123]),
+        ("deleted_paths", [123]),
+    ],
+)
+def test_malformed_snapshot_fields_are_rejected_not_coerced(field, value):
+    locator = GitHubPullRequestLocator("James3014", "Nexus-new", 635)
+    bad = _response(locator)
+    bad[field] = value
+    _with_cas(bad)
+    with pytest.raises(AcquisitionError, match="must be|malformed"):
+        acquire_github_pull_request(Port(bad, dict(bad)), locator)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("pagination_complete", "false"),
+        ("checks", [["lint"]]),
+        ("checks", [{"name": "ci"}]),
+        ("changed_paths", [123]),
+    ],
+)
+def test_loader_rejects_malformed_serialized_fields(field, value):
+    locator = GitHubPullRequestLocator("James3014", "Nexus-new", 635)
+    snapshot = acquire_github_pull_request(
+        Port(_with_cas(_response(locator)), _with_cas(_response(locator))), locator
+    )
+    payload = serialize_github_acquisition_snapshot(snapshot)
+    payload[field] = value
+    with pytest.raises(AcquisitionError):
+        load_github_acquisition_snapshot(payload)
+
+
+def test_current_subject_read_timeout_is_unverifiable():
+    from product.runtime.nexus_verify import read_current_pull_request_subject
+
+    result = read_current_pull_request_subject(
+        "James3014", "Nexus-new", 635, github_port=Port(TimeoutError("slow"))
+    )
+    assert result["status"] != "OK"
+    assert result["subject"] is None
+    assert result["reason_code"] == "GITHUB_READ_TIMEOUT"
+
+
 def test_permission_denial_is_not_a_snapshot():
     locator = GitHubPullRequestLocator("James3014", "Nexus-new", 635)
     with pytest.raises(PermissionDenied):
