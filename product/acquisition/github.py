@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Injected, read-only GitHub pull-request acquisition.
 
 The port intentionally has no credential parameter and this module has no
@@ -12,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, Sequence, cast, runtime_checkable
 
 _SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -100,7 +101,7 @@ def _hash(value: object, field: str) -> str:
 def _paths(value: object, field: str, *, allow_empty: bool = True) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         raise AcquisitionError(f"{field} must be a path list")
-    result = tuple(str(x) for x in value)
+    result = tuple(str(x) for x in cast("Sequence[object]", value))
     if not allow_empty and not result:
         raise AcquisitionError(f"{field} must be non-empty")
     if len(result) != len(set(result)):
@@ -269,7 +270,7 @@ def _strict_checks(raw: object) -> tuple[tuple[str, str], ...]:
     if not isinstance(raw, (list, tuple)):
         raise AcquisitionError("checks must be a list")
     out: list[tuple[str, str]] = []
-    for x in raw:
+    for x in cast("Sequence[Sequence[Any]]", raw):
         if (
             not isinstance(x, (list, tuple))
             or len(x) != 2
@@ -282,9 +283,11 @@ def _strict_checks(raw: object) -> tuple[tuple[str, str], ...]:
 
 
 def _strict_paths(raw: object, name: str) -> tuple[str, ...]:
-    if not isinstance(raw, (list, tuple)) or any(type(x) is not str for x in raw):
+    if not isinstance(raw, (list, tuple)) or any(
+        type(x) is not str for x in cast("Sequence[object]", raw)
+    ):
         raise AcquisitionError(f"{name} must be a list of strings")
-    return tuple(raw)
+    return tuple(cast("Sequence[str]", raw))
 
 
 def _strict_bool(raw: object, name: str) -> bool:

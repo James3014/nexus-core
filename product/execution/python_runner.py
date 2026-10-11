@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Deterministic, dependency-free boundary for the Python OCI witness.
 
 The product core does not start containers or acquire dependencies.  A
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, cast
 
 IMAGE = "python:3.12-alpine"
 IMAGE_DIGEST = "sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
@@ -98,7 +99,7 @@ class PythonOCIProfile:
     cpu_seconds: int = 60
     dependency_artifacts_hash: str = DEPENDENCY_ARTIFACTS_HASH
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _text(self.profile_id, "profile_id")
         _text(self.image, "image")
         _hash(self.image_digest, "image_digest")
@@ -123,7 +124,7 @@ class PythonOCIProfile:
         body = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()
         return _digest(body)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "profile_id": self.profile_id,
             "image": self.image,
@@ -243,7 +244,7 @@ class RunnerResult:
     artifact_hashes: tuple[str, ...]
     attempts: tuple[ExecutionAttempt, ...]
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "reason_codes": list(self.reason_codes),
@@ -273,11 +274,15 @@ class RunnerResult:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "RunnerResult":
-        if type(data) is not dict or type(data.get("reason_codes")) is not list:
+        if (
+            type(data) is not dict
+            or type(cast("dict[str, Any]", data).get("reason_codes")) is not list
+        ):
             raise ValueError("malformed receipt")
-        attempts = []
+        data = cast("dict[str, Any]", data)
+        attempts: list[ExecutionAttempt] = []
         profile = PythonOCIRunner().profile
-        for item in data.get("attempts", ()):
+        for item in cast("list[dict[str, Any]]", data.get("attempts", ())):
             if type(item.get("exit_code")) is not int:
                 raise ValueError("receipt exit code must be int")
             stdout, stderr, junit = (bytes.fromhex(item[k]) for k in ("stdout", "stderr", "junit"))
@@ -296,8 +301,10 @@ class RunnerResult:
                 _hash(item[field], field)
             _text(item["attempt_id"], "attempt_id")
             _text(item["execution_id"], "execution_id")
-            tests, failures, errors = PythonOCIRunner._check_junit(junit, item["exit_code"])
-            raw = dict(item)
+            tests, failures, errors = PythonOCIRunner._check_junit(  # pyright: ignore[reportPrivateUsage]
+                junit, item["exit_code"]
+            )
+            raw: dict[str, Any] = dict(item)
             raw.update({
                 "profile_id": PROFILE_ID,
                 "image": IMAGE,
@@ -342,7 +349,7 @@ class RunnerResult:
                         item["environment_hash"],
                         list(argv),
                         item["exit_code"],
-                        PythonOCIRunner._normalized_junit(junit),
+                        PythonOCIRunner._normalized_junit(junit),  # pyright: ignore[reportPrivateUsage]
                     ],
                     separators=(",", ":"),
                 ).encode()
@@ -401,7 +408,9 @@ class RunnerResult:
             and attempts[0].junit_failures + attempts[0].junit_errors > 0
             else RunnerStatus.UNVERIFIABLE
         )
-        same = PythonOCIRunner._same_outcome(attempts[0], attempts[1])
+        same = PythonOCIRunner._same_outcome(  # pyright: ignore[reportPrivateUsage]
+            attempts[0], attempts[1]
+        )
         if not same:
             status, reasons = (
                 (RunnerStatus.UNVERIFIABLE, ("DUPLICATE_EXECUTION_ID",))
@@ -485,7 +494,7 @@ class PythonOCIRunner:
             return self._unknown(("MALFORMED_REQUEST",))
         if key in self._replay:
             return self._replay[key]
-        attempts = []
+        attempts: list[ExecutionAttempt] = []
         for index in (1, 2):
             try:
                 raw = executor(self.profile, request, index)
@@ -571,7 +580,11 @@ class PythonOCIRunner:
         if len(stdout) > MAX_OUTPUT_BYTES or len(stderr) > MAX_OUTPUT_BYTES or len(junit) > MAX_OUTPUT_BYTES:
             raise ValueError("execution evidence exceeds size limit")
         raw_argv = raw.get("argv", self.profile.command)
-        argv = tuple(raw_argv) if isinstance(raw_argv, (tuple, list)) else self.profile.command
+        argv = (
+            tuple(cast("list[str]", raw_argv))
+            if isinstance(raw_argv, (tuple, list))
+            else self.profile.command
+        )
         if argv != self.profile.command:
             raise ValueError("unexpected argv")
         exit_code = raw.get("exit_code")
@@ -685,14 +698,14 @@ class PythonOCIRunner:
         return tests, failures, errors
 
     @staticmethod
-    def _same_outcome(a, b):
+    def _same_outcome(a: ExecutionAttempt, b: ExecutionAttempt) -> bool:
         return a.outcome_hash == b.outcome_hash
 
     @staticmethod
-    def _normalized_junit(data):
+    def _normalized_junit(data: bytes) -> list[Any]:
         root = ET.fromstring(data)
 
-        def normalize(item):
+        def normalize(item: ET.Element) -> list[Any]:
             attrs = {
                 k: v
                 for k, v in sorted(item.attrib.items())
@@ -722,7 +735,12 @@ class PythonOCIRunner:
             RunnerStatus.UNVERIFIABLE, tuple(sorted(reasons)), self.profile.hash, (), (), ()
         )
 
-    def _result(self, status, reasons, attempts):
+    def _result(
+        self,
+        status: RunnerStatus,
+        reasons: tuple[str, ...],
+        attempts: list[ExecutionAttempt],
+    ) -> RunnerResult:
         return RunnerResult(
             status,
             tuple(sorted(reasons)),
