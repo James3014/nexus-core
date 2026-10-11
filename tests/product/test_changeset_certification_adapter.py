@@ -600,3 +600,63 @@ def test_every_certified_result_validates_cleanly():
     result = adapter.certify_changeset(_envelope())
     assert result.status is CertificationDisposition.CERTIFIED
     assert adapter.validate_changeset_certification(result) == ()
+
+
+def _unhashable_mutations():
+    def set_path(path, value):
+        def apply(payload):
+            target = payload
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+
+        return apply
+
+    cases = {
+        "disposition": ("disposition",),
+        "deletion_policy": ("allowed_scope", "deletion_policy"),
+        "verifier_status": ("verifier_manifest", "verifiers", 0, "status"),
+    }
+    return [
+        pytest.param(set_path(path, value), id=f"{name}-{type(value).__name__}")
+        for name, path in cases.items()
+        for value in ([], {}, [[]], {"a": []})
+    ]
+
+
+@pytest.mark.parametrize("mutate", _unhashable_mutations())
+def test_unhashable_values_are_rejected_not_raised(mutate):
+    payload = _envelope()
+    mutate(payload)
+    _rehash(payload)
+    result = adapter.certify_changeset(payload)
+    assert result.status is not CertificationDisposition.CERTIFIED
+    assert isinstance(adapter.validate_changeset_certification(payload), tuple)
+    assert adapter.validate_changeset_certification(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", []),
+        ("status", {}),
+        ("reason_codes", [[]]),
+        ("reason_codes", [{}]),
+        ("reason_codes", [[], []]),
+    ],
+)
+def test_unhashable_verification_result_fields_are_malformed(field, value):
+    payload = _envelope()
+    claimed = {"status": "VERIFIED", "reason_codes": []}
+    claimed[field] = value
+    payload["verification_result"] = claimed
+    assert adapter.validate_changeset_certification(payload) == ("evidence_malformed",)
+
+
+def test_unhashable_reasons_are_reason_invalid():
+    payload = _envelope()
+    payload["reasons"] = [[], {}]
+    _rehash(payload)
+    result = adapter.certify_changeset(payload)
+    assert result.status is not CertificationDisposition.CERTIFIED
+    assert adapter.validate_changeset_certification(payload)
