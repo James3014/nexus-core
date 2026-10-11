@@ -150,7 +150,7 @@ class HandoffVerification:
         if not isinstance(self.integrity, IntegrityStatus):
             raise HandoffEvidenceError("integrity must be an IntegrityStatus")
         _require_sha256(self.input_binding_hash, "input_binding_hash")
-        if self.schema not in SUPPORTED_HANDOFF_SCHEMAS:
+        if not isinstance(self.schema, str) or self.schema not in SUPPORTED_HANDOFF_SCHEMAS:
             raise HandoffEvidenceError("unsupported handoff schema")
         if self.claim_ceiling != HANDOFF_CLAIM_CEILING:
             raise HandoffEvidenceError("handoff claim ceiling mismatch")
@@ -280,7 +280,8 @@ def verify_handoff_evidence(
             integrity=IntegrityStatus.MALFORMED,
         )
     schema = envelope.get("schema")
-    if schema not in SUPPORTED_HANDOFF_SCHEMAS:
+    # Untrusted value: set membership raises TypeError on unhashable input.
+    if not isinstance(schema, str) or schema not in SUPPORTED_HANDOFF_SCHEMAS:
         return _result(
             HandoffVerdict.INVALID,
             ["INVALID:schema"],
