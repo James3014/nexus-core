@@ -16,7 +16,7 @@ from product.evidence import (
     VerificationPlan,
     _hash,
 )
-from product.verification import verify
+from product.verification import VerificationStatus, verify
 
 __all__ = [
     "SUFFICIENCY_SCHEMA",
@@ -106,7 +106,12 @@ class SufficiencyRequest:
 
 
 def _project_subject(
-    verifier_id: str, observation: Observation | None, expected_hash, core_integrity, stale_evidence
+    verifier_id: str,
+    observation: Observation | None,
+    expected_hash,
+    core_integrity,
+    stale_evidence,
+    core_status=VerificationStatus.VERIFIED,
 ):
     if observation is None:
         return SufficiencySubjectReport(
@@ -171,6 +176,16 @@ def _project_subject(
             status=observation.status,
             sufficiency=EvidenceSufficiency.FAILED,
             reason_codes=(f"FAILED:verifier:{verifier_id}",),
+        )
+    if core_status is not VerificationStatus.VERIFIED:
+        return SufficiencySubjectReport(
+            verifier_id=observation.verifier_id,
+            artifact_id=observation.artifact_id,
+            observed_artifact_hash=observation.artifact_hash,
+            expected_content_hash=expected_hash,
+            status=observation.status,
+            sufficiency=EvidenceSufficiency.FAILED,
+            reason_codes=(f"FAILED:core:{core_status.value}",),
         )
     return SufficiencySubjectReport(
         verifier_id=observation.verifier_id,
@@ -247,6 +262,7 @@ def _make_analyzer():
                     expected_map.get(vid, ""),
                     core.integrity,
                     stale_evidence,
+                    core.status,
                 )
             )
         report_tuple = tuple(reports)
