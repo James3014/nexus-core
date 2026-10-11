@@ -1883,7 +1883,7 @@ def condition_for_ingestion_reasons(reasons):
     return IntegrityStatus.VALID
 
 
-def _parse_time(value):
+def _parse_time(value: object) -> datetime | None:
     if type(value) is not str or not re.fullmatch(
         r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)", value
     ):
@@ -2081,7 +2081,7 @@ def _mint_failure(context, reasons):
     return result
 
 
-def is_trusted_ingestion_result(context, result):
+def is_trusted_ingestion_result(context: object, result: object) -> bool:
     if type(context) is not TrustedIngestionContext or type(result) is not IngestionResult:
         return False
     if not _validate_context_nested(context):
@@ -2114,7 +2114,7 @@ def is_trusted_ingestion_result(context, result):
     return False
 
 
-def classify_ingestion_result(context, result):
+def classify_ingestion_result(context: object, result: object) -> IngestionTrustStatus:
     if type(context) is not TrustedIngestionContext or type(result) is not IngestionResult:
         return IngestionTrustStatus.UNTRUSTED
     binding = _TRUSTED_FINGERPRINTS.get(result)
@@ -2129,7 +2129,7 @@ def classify_ingestion_result(context, result):
     return IngestionTrustStatus.TRUSTED
 
 
-def ingest_evidence(context, submissions):
+def ingest_evidence(context: object, submissions: object) -> IngestionResult:
     if type(context) is not TrustedIngestionContext:
         raise TypeError("context must be TrustedIngestionContext")
     if type(submissions) is not tuple:

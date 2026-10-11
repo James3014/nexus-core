@@ -98,7 +98,7 @@ def _make_kernel(
                 errors += (f"MALFORMED:{field}",)
         return tuple(dict.fromkeys(errors))
 
-    def certify(value):
+    def certify(value: object) -> CertificationResult:
         errors = validate_input(value)
         if errors:
             raise ValueError("invalid_certification_input:" + ",".join(errors))

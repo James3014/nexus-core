@@ -44,7 +44,7 @@ canonical_json = _make_canonical_json(json.dumps)
 
 
 def _make_hash(canonical, sha256):
-    def hash_value(value):
+    def hash_value(value: object) -> str:
         return "sha256:" + sha256(canonical(value).encode()).hexdigest()
 
     return hash_value
@@ -139,7 +139,7 @@ _HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SEALED_HASH_RE_FULLMATCH = _HASH_RE.fullmatch
 
 
-def _require_text(value, field):
+def _require_text(value: object, field: str) -> None:
     if type(value) is not str:
         raise TypeError(f"{field} must be a string")
     if not value or value != value.strip() or "\x00" in value:

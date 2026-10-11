@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Runtime and manual handoff readiness evidence validation (issue #83).
 
 This module is part of the Evidence Trust Core. It validates that evidence
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from product.protocol.runtime_handoff import (
     HANDOFF_CLAIM_CEILING,
@@ -81,7 +82,7 @@ def validate_handoff_evidence_envelope(
         reasons.append("CLAIM_CEILING_MISMATCH")
 
     non_claims = payload.get("non_claims")
-    if not isinstance(non_claims, list) or tuple(non_claims) != HANDOFF_NON_CLAIMS:
+    if not isinstance(non_claims, list) or tuple(cast("list[Any]", non_claims)) != HANDOFF_NON_CLAIMS:
         reasons.append("NON_CLAIMS_MISMATCH")
 
     handoff_id = payload.get("handoff_id")
@@ -94,6 +95,7 @@ def validate_handoff_evidence_envelope(
     if not isinstance(prerequisite, Mapping):
         reasons.append("PREREQUISITE_REPOSITORY_BINDING_MISSING")
     else:
+        prerequisite = cast("Mapping[str, Any]", prerequisite)
         if not isinstance(prerequisite.get("receipt_file"), str) or not prerequisite.get(
             "receipt_file"
         ):
@@ -116,6 +118,7 @@ def validate_handoff_evidence_envelope(
     if not isinstance(source, Mapping):
         reasons.append("SOURCE_BINDING_MISSING")
     else:
+        source = cast("Mapping[str, Any]", source)
         if not is_git_commit_ref(source.get("target_commit")):
             reasons.append("INVALID_TARGET_COMMIT")
         if not is_git_tree_ref(source.get("target_tree")):
@@ -128,14 +131,16 @@ def validate_handoff_evidence_envelope(
     if not isinstance(runtime, Mapping):
         reasons.append("RUNTIME_BINDING_MISSING")
     else:
+        runtime = cast("Mapping[str, Any]", runtime)
         services = runtime.get("services")
         if not isinstance(services, list) or not services:
             reasons.append("NO_RUNTIME_SERVICES_DECLARED")
         else:
-            for idx, svc in enumerate(services):
-                if not isinstance(svc, Mapping):
+            for idx, svc_raw in enumerate(cast("list[Any]", services)):
+                if not isinstance(svc_raw, Mapping):
                     reasons.append(f"SERVICE[{idx}]_MALFORMED")
                     continue
+                svc = cast("Mapping[str, Any]", svc_raw)
                 if not isinstance(svc.get("service_id"), str) or not svc.get("service_id"):
                     reasons.append(f"SERVICE[{idx}]_ID_INVALID")
                 if not isinstance(svc.get("endpoint"), str) or not svc.get("endpoint"):
@@ -166,8 +171,13 @@ def validate_handoff_evidence_envelope(
     if not isinstance(verifier, Mapping):
         reasons.append("HANDOFF_VERIFIER_MISSING")
     else:
+        verifier = cast("Mapping[str, Any]", verifier)
         command = verifier.get("command")
-        if not isinstance(command, list) or not command or any(not isinstance(c, str) for c in command):
+        if (
+            not isinstance(command, list)
+            or not command
+            or any(not isinstance(c, str) for c in cast("list[Any]", command))
+        ):
             reasons.append("INVALID_VERIFIER_COMMAND")
         exit_code = verifier.get("exit_code")
         if not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code != 0:

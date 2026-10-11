@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Transport-neutral adapter for deterministic Core ChangeSet verification.
 
 The adapter validates the public wire contract, projects it into the existing
@@ -8,7 +9,7 @@ choices.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from product.evidence import (
     AcceptanceContract,
@@ -62,29 +63,34 @@ def _text(value: Any) -> bool:
 def _paths(value: Any, *, allow_empty: bool = False) -> bool:
     if type(value) is not list or (not value and not allow_empty):
         return False
+    paths = cast("list[Any]", value)
     if any(
         not _text(path)
         or path.startswith("/")
         or "\\" in path
         or any(part in {"", ".", ".."} for part in path.split("/"))
-        for path in value
+        for path in paths
     ):
         return False
-    return len(value) == len(set(value))
+    return len(paths) == len(set(paths))
 
 
 def _ids(value: Any) -> bool:
-    return type(value) is list and bool(value) and all(_text(item) for item in value) and len(value) == len(set(value))
+    if type(value) is not list:
+        return False
+    items = cast("list[Any]", value)
+    return bool(items) and all(_text(item) for item in items) and len(items) == len(set(items))
 
 
 def _exact(value: Any, keys: set[str]) -> bool:
-    return type(value) is dict and set(value) == keys
+    return type(value) is dict and set(cast("dict[str, Any]", value)) == keys
 
 
 def _subset_exact(value: Any, required: set[str], optional: set[str]) -> bool:
-    return type(value) is dict and required.issubset(value) and set(value).issubset(
-        required | optional
-    )
+    if type(value) is not dict:
+        return False
+    fields = cast("dict[str, Any]", value)
+    return required.issubset(fields) and set(fields).issubset(required | optional)
 
 
 def _git_oid_or_none(value: Any) -> bool:
@@ -149,7 +155,7 @@ def _validate_contract(value: Any) -> str | None:
     if type(generation) is not int or isinstance(generation, bool) or generation < 0:
         return "acceptance_contract.universe_generation"
     logical_ids: list[str] = []
-    for index, subject in enumerate(expected):
+    for index, subject in enumerate(cast("list[Any]", expected)):
         prefix = f"acceptance_contract.expected_subjects[{index}]"
         if _validate_subject(subject) is None:
             return prefix
@@ -207,7 +213,7 @@ def _validate_manifest(value: Any) -> str | None:
     if type(entries) is not list or not entries:
         return "change_manifest.entries"
     seen: set[str] = set()
-    for index, row in enumerate(entries):
+    for index, row in enumerate(cast("list[Any]", entries)):
         prefix = f"change_manifest.entries[{index}]"
         if not _exact(
             row,
@@ -290,7 +296,7 @@ def _validate_evidence(value: Any) -> str | None:
     verifier_ids: set[str] = set()
     artifact_ids: set[str] = set()
     logical_ids: set[str] = set()
-    for index, row in enumerate(observations):
+    for index, row in enumerate(cast("list[Any]", observations)):
         prefix = f"evidence_bundle.observations[{index}]"
         if not _subset_exact(
             row,
