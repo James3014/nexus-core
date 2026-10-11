@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Small, deterministic trust-boundary for verifier evidence submissions."""
 
 import hashlib
@@ -8,7 +9,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Any, Iterable, Mapping, Protocol, Sequence, cast, runtime_checkable
 
 from product.evidence import (
     AcceptanceContract,
@@ -18,7 +19,7 @@ from product.evidence import (
     Observation,
     ObservationStatus,
     VerificationPlan,
-    _hash,
+    _hash,  # pyright: ignore[reportPrivateUsage] # evidence-core sibling helper
 )
 from product.protocol import EVIDENCE_REQUIREMENT_SCHEMA, PROVENANCE_ENVELOPE_SCHEMA
 
@@ -27,7 +28,9 @@ MAX_COLLECTION_ITEMS = 256
 MAX_CONTENT_BYTES = 1_048_576
 
 
-_TRUSTED_FINGERPRINTS = weakref.WeakKeyDictionary()
+_TRUSTED_FINGERPRINTS: weakref.WeakKeyDictionary[object, tuple[weakref.ref[Any], object, bool]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class EvidenceType(str, Enum):
@@ -151,7 +154,7 @@ def _native_junit_counts(data: bytes, exit_code: int) -> tuple[int, int, int]:
 def _native_normalized_junit(data: bytes) -> object:
     root = ET.fromstring(data)
 
-    def normalize(item):
+    def normalize(item: ET.Element) -> list[object]:
         attrs = {
             k: v
             for k, v in sorted(item.attrib.items())
@@ -198,7 +201,7 @@ class GitHubAcquisitionReceipt:
             raise ValueError("diff_hash does not match diff_bytes")
         _native_sha(self.diff_hash, "diff_hash")
         for name in ("changed_paths", "deleted_paths"):
-            values = getattr(self, name)
+            values: tuple[str, ...] = getattr(self, name)
             if (
                 type(values) is not tuple
                 or values != tuple(sorted(values))
@@ -291,7 +294,8 @@ class GitHubAcquisitionReceipt:
     def from_dict(cls, value: Mapping[str, object]) -> "GitHubAcquisitionReceipt":
         if type(value) is not dict:
             raise TypeError("acquisition receipt must be a dict")
-        data = dict(value)
+        value = cast("dict[str, Any]", value)
+        data: dict[str, Any] = dict(value)
         try:
             data["diff_bytes"] = bytes.fromhex(data["diff_bytes"])
             data["changed_paths"] = tuple(data["changed_paths"])
@@ -598,6 +602,7 @@ class PythonRunnerReceipt:
     ) -> "PythonRunnerReceipt":
         if type(value) is not dict:
             raise TypeError("runner receipt must be a dict")
+        value = cast("dict[str, Any]", value)
         try:
             required = {
                 "status",
@@ -610,7 +615,9 @@ class PythonRunnerReceipt:
             }
             if set(value) != required:
                 raise ValueError("runner receipt schema keys mismatch")
-            profile_data = profile if profile is not None else value["profile"]
+            profile_data: dict[str, Any] = cast(
+                "dict[str, Any]", profile if profile is not None else value["profile"]
+            )
             if type(profile_data) is not dict or set(profile_data) != {
                 "profile_id",
                 "image",
@@ -625,10 +632,12 @@ class PythonRunnerReceipt:
                 "cpu_seconds",
             }:
                 raise ValueError("runner profile schema keys mismatch")
-            profile_obj = PythonRunnerProfileReceipt(**{
-                **profile_data,
-                "command": tuple(profile_data["command"]),
-            })
+            profile_obj = PythonRunnerProfileReceipt(
+                **{  # pyright: ignore[reportArgumentType] # validated in __post_init__
+                    **profile_data,
+                    "command": tuple(profile_data["command"]),
+                }
+            )
             attempt_keys = {
                 "attempt_id",
                 "execution_id",
@@ -648,19 +657,22 @@ class PythonRunnerReceipt:
                 "junit_errors",
                 "outcome_hash",
             }
-            if type(value["attempts"]) is not list or any(
-                type(item) is not dict or set(item) != attempt_keys for item in value["attempts"]
+            raw_attempts: list[dict[str, Any]] = value["attempts"]
+            if type(raw_attempts) is not list or any(
+                type(item) is not dict or set(item) != attempt_keys for item in raw_attempts
             ):
                 raise ValueError("runner attempt schema keys mismatch")
             attempts = tuple(
-                PythonExecutionAttemptReceipt(**{
-                    **item,
-                    "argv": tuple(item["argv"]),
-                    "stdout": bytes.fromhex(item["stdout"]),
-                    "stderr": bytes.fromhex(item["stderr"]),
-                    "junit": bytes.fromhex(item["junit"]),
-                })
-                for item in value["attempts"]
+                PythonExecutionAttemptReceipt(
+                    **{  # pyright: ignore[reportArgumentType] # validated in __post_init__
+                        **item,
+                        "argv": tuple(item["argv"]),
+                        "stdout": bytes.fromhex(item["stdout"]),
+                        "stderr": bytes.fromhex(item["stderr"]),
+                        "junit": bytes.fromhex(item["junit"]),
+                    }
+                )
+                for item in raw_attempts
             )
             return cls(
                 value["status"],
@@ -695,7 +707,7 @@ class EvidenceIdentityEnvelope:
     external_receipt_hashes: tuple[str, ...]
     identity_hash: str
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for name in (
             "context_hash",
             "profile_hash",
@@ -731,7 +743,7 @@ class EvidenceIdentityEnvelope:
             raise ValueError("identity_hash does not match envelope")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return self.identity_hash
 
     def to_dict(self) -> dict[str, object]:
@@ -953,7 +965,7 @@ def load_identity_envelope(payload: Mapping[str, object]) -> EvidenceIdentityEnv
     }
     if set(payload) != required or payload.get("schema") != IDENTITY_ENVELOPE_SCHEMA:
         raise ValueError("malformed identity envelope")
-    hashes = payload["external_receipt_hashes"]
+    hashes = cast("list[Any]", payload["external_receipt_hashes"])
     if type(hashes) is not list:
         raise ValueError("external_receipt_hashes must be a list")
     if hashes != sorted(hashes) or len(hashes) != len(set(hashes)):
@@ -988,16 +1000,16 @@ class ExternalEd25519VerifierPort(Protocol):
 
 def build_external_signature_payload(
     *,
-    issuer_id,
-    key_id,
-    evidence_id,
-    subject_hash,
-    action,
-    decision,
-    external_receipt_hash,
-    acquisition_snapshot_hash,
-    runner_result_hash,
-):
+    issuer_id: str,
+    key_id: str,
+    evidence_id: str,
+    subject_hash: str,
+    action: str,
+    decision: str,
+    external_receipt_hash: str,
+    acquisition_snapshot_hash: str,
+    runner_result_hash: str,
+) -> bytes:
     values = {
         "schema": EXTERNAL_SIGNATURE_PAYLOAD_SCHEMA,
         "issuer_id": issuer_id,
@@ -1026,7 +1038,7 @@ def parse_external_signature_payload(payload: bytes) -> dict[str, str]:
     if type(payload) is not bytes:
         raise ValueError("payload must be bytes")
     try:
-        value = json.loads(payload.decode("utf-8"))
+        value: dict[str, str] = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("malformed external signature payload") from exc
     required = {
@@ -1065,7 +1077,7 @@ class ExternalVerificationReceipt:
     status: str
     receipt_hash: str
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for name in ("issuer_id", "algorithm", "key_id", "status"):
             _text(getattr(self, name), name)
         if self.algorithm != "Ed25519":
@@ -1292,7 +1304,7 @@ def verify_trust_reference_signature(
         return False
 
 
-def _text(value, name):
+def _text(value: object, name: str) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be a string")
     if not value or value != value.strip() or "\x00" in value:
@@ -1301,14 +1313,14 @@ def _text(value, name):
         raise ValueError(f"{name} exceeds maximum length")
 
 
-def _runtime_timestamp(value):
+def _runtime_timestamp(value: object) -> None:
     if type(value) is not str:
         raise TypeError("runtime timestamps must be strings")
     if not value or value != value.strip() or "\x00" in value or len(value) > MAX_TEXT_LENGTH:
         raise ValueError("runtime timestamps must be normalized")
 
 
-def _hash_value(value, name):
+def _hash_value(value: Any, name: str) -> None:
     _text(value, name)
     if not (
         value.startswith("sha256:")
@@ -1318,7 +1330,7 @@ def _hash_value(value, name):
         raise ValueError(f"{name} must be sha256:<64 lowercase hex>")
 
 
-def _tuple_text(values, name, nonempty=True):
+def _tuple_text(values: tuple[Any, ...], name: str, nonempty: bool = True) -> None:
     if type(values) is not tuple:
         raise TypeError(f"{name} must be a tuple")
     for value in values:
@@ -1331,15 +1343,15 @@ def _tuple_text(values, name, nonempty=True):
         raise ValueError(f"{name} must be non-empty")
 
 
-def _canon(value):
+def _canon(value: Any) -> Any:
     if isinstance(value, str):
         return str(value)
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, tuple):
-        return tuple(_canon(v) for v in value)
+        return tuple(_canon(v) for v in cast("tuple[object, ...]", value))
     if isinstance(value, list):
-        return [_canon(v) for v in value]
+        return [_canon(v) for v in cast("list[object]", value)]
     if isinstance(value, bytes):
         return "bytes:" + value.hex()
     if hasattr(value, "__dataclass_fields__"):
@@ -1358,7 +1370,7 @@ class ProducerGrant:
     software_hash: str
     verification_methods: tuple[str, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _text(self.producer_id, "producer_id")
         _hash_value(self.software_hash, "software_hash")
         if type(self.role) is not ProducerRole:
@@ -1375,7 +1387,7 @@ class IssuerGrant:
     actions: tuple[str, ...]
     verification_methods: tuple[str, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _text(self.issuer_id, "issuer_id")
         if (
             type(self.roles) is not tuple
@@ -1402,7 +1414,7 @@ class IngestionProfile:
     issuers: tuple[IssuerGrant, ...]
     max_age_seconds: int
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _text(self.profile_id, "profile_id")
         if type(self.producers) is not tuple or any(
             type(v) is not ProducerGrant for v in self.producers
@@ -1424,7 +1436,7 @@ class IngestionProfile:
             raise ValueError("max_age_seconds must be non-negative int")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             _canon((
                 self.profile_id,
@@ -1451,7 +1463,7 @@ class EvidenceRequirement:
     human_semantic_review_required: bool
     expected_status: ObservationStatus
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for n in ("verifier_id", "artifact_id", "producer_id", "execution_id", "attempt_id"):
             _text(getattr(self, n), n)
         if (
@@ -1470,7 +1482,7 @@ class EvidenceRequirement:
             raise TypeError("expected_status must be ObservationStatus")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             _canon((
                 EVIDENCE_REQUIREMENT_SCHEMA,
@@ -1504,7 +1516,7 @@ class RuntimeSourceObservation:
     expires_at: str
     readiness_status: str | None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if type(self.generation) is not EvidenceGeneration:
             raise TypeError("generation must be EvidenceGeneration")
         if self.generation in (EvidenceGeneration.EXECUTION, EvidenceGeneration.LEGACY_NARRATIVE):
@@ -1548,7 +1560,7 @@ class ProvenanceEnvelope:
     generation: EvidenceGeneration
     runtime: RuntimeSourceObservation | None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _text(self.schema, "schema")
         _text(self.evidence_id, "evidence_id")
         _text(self.verifier_id, "verifier_id")
@@ -1582,7 +1594,7 @@ class ProvenanceEnvelope:
             raise TypeError("runtime must be RuntimeSourceObservation")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(_canon(tuple(getattr(self, f) for f in self.__dataclass_fields__)))
 
 
@@ -1592,7 +1604,7 @@ class EvidenceSubmission:
     status: ObservationStatus
     provenance: ProvenanceEnvelope
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if type(self.content) is not bytes:
             raise TypeError("content must be bytes")
         if len(self.content) > MAX_CONTENT_BYTES:
@@ -1620,7 +1632,7 @@ class TrustReference:
     external_verification_receipt: bytes
     external_verification_receipt_hash: str
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if type(self.role) is not TrustRole or type(self.decision) is not TrustDecision:
             raise TypeError("invalid trust enum")
         for name in (
@@ -1651,7 +1663,7 @@ class TrustReference:
             raise ValueError("external verification receipt hash mismatch")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(_canon(tuple(getattr(self, f) for f in self.__dataclass_fields__)))
 
 
@@ -1670,7 +1682,7 @@ class TrustedIngestionContext:
     required_action: str
     prerequisite_payload_hashes: tuple[tuple[TrustRole, str], ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if (
             type(self.contract) is not AcceptanceContract
             or type(self.change_set) is not ChangeSet
@@ -1715,7 +1727,7 @@ class TrustedIngestionContext:
             raise ValueError("prerequisites must be sorted")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             _canon((
                 self.contract,
@@ -1750,7 +1762,7 @@ class IngestionReceipt:
     reason_codes: tuple[str, ...]
     receipt_hash: str
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         for name in ("context_hash", "profile_hash"):
             _hash_value(getattr(self, name), name)
         if self.bundle_hash is not None:
@@ -1791,15 +1803,15 @@ class IngestionReceipt:
             raise ValueError("receipt_hash does not match receipt")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return self.receipt_hash
 
     @property
-    def machine_verified_count(self):
+    def machine_verified_count(self) -> int:
         return len(self.machine_verified_artifact_ids)
 
     @property
-    def human_open_count(self):
+    def human_open_count(self) -> int:
         return len(self.human_open_artifact_ids)
 
 
@@ -1810,7 +1822,7 @@ class IngestionResult:
     condition: IntegrityStatus
     reason_codes: tuple[str, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if (
             type(self.receipt) is not IngestionReceipt
             or type(self.condition) is not IntegrityStatus
@@ -1870,7 +1882,7 @@ _REASON_CODES = {
 }
 
 
-def condition_for_ingestion_reasons(reasons):
+def condition_for_ingestion_reasons(reasons: Sequence[str]) -> IntegrityStatus:
     for reason in reasons:
         if type(reason) is not str or ":" not in reason or reason.split(":", 1)[0] not in _REASONS:
             raise ValueError("unknown ingestion reason")
@@ -1900,7 +1912,7 @@ def _parse_time(value: object) -> datetime | None:
         return None
 
 
-def _valid_revision(value):
+def _valid_revision(value: object) -> bool:
     return (
         type(value) is str
         and bool(value.strip())
@@ -1910,7 +1922,7 @@ def _valid_revision(value):
     )
 
 
-def derive_runtime_freshness(runtime, observed_at):
+def derive_runtime_freshness(runtime: object, observed_at: object) -> FreshnessStatus:
     if type(runtime) is not RuntimeSourceObservation:
         return FreshnessStatus.CONVERGENCE_UNKNOWN
     now, at, expiry = (
@@ -1949,11 +1961,11 @@ def derive_runtime_freshness(runtime, observed_at):
     return FreshnessStatus.READY_IDENTITY_BOUND
 
 
-def _raw_hash(content):
+def _raw_hash(content: bytes) -> str:
     return "sha256:" + hashlib.sha256(content).hexdigest()
 
 
-def _mint_receipt(values):
+def _mint_receipt(values: Iterable[Any]) -> IngestionReceipt:
     body = tuple(values)
     receipt_hash = _hash(_canon(body))
     obj = object.__new__(IngestionReceipt)
@@ -1963,7 +1975,12 @@ def _mint_receipt(values):
     return obj
 
 
-def _mint_result(bundle, receipt, condition, reason_codes):
+def _mint_result(
+    bundle: EvidenceBundle | None,
+    receipt: IngestionReceipt,
+    condition: IntegrityStatus,
+    reason_codes: tuple[str, ...],
+) -> IngestionResult:
     obj = object.__new__(IngestionResult)
     for field, value in zip(
         IngestionResult.__dataclass_fields__, (bundle, receipt, condition, reason_codes)
@@ -1973,14 +1990,14 @@ def _mint_result(bundle, receipt, condition, reason_codes):
     return obj
 
 
-def _result_fingerprint(context, result):
+def _result_fingerprint(context: TrustedIngestionContext, result: IngestionResult) -> object:
     return _canon((
         context.hash,
         tuple(getattr(result, field) for field in IngestionResult.__dataclass_fields__),
     ))
 
 
-def _validate_context_nested(context):
+def _validate_context_nested(context: TrustedIngestionContext) -> bool:
     try:
         if (
             type(context.contract) is not AcceptanceContract
@@ -2004,7 +2021,7 @@ def _validate_context_nested(context):
     return True
 
 
-def _revalidate_context_or_raise(context):
+def _revalidate_context_or_raise(context: TrustedIngestionContext) -> None:
     if (
         type(context.contract) is not AcceptanceContract
         or type(context.change_set) is not ChangeSet
@@ -2057,7 +2074,9 @@ def _revalidate_context_or_raise(context):
         requirement.__post_init__()
 
 
-def _mint_failure(context, reasons):
+def _mint_failure(
+    context: TrustedIngestionContext, reasons: tuple[str, ...]
+) -> IngestionResult:
     receipt = _mint_receipt((
         context.hash,
         context.profile.hash,
@@ -2134,26 +2153,27 @@ def ingest_evidence(context: object, submissions: object) -> IngestionResult:
         raise TypeError("context must be TrustedIngestionContext")
     if type(submissions) is not tuple:
         raise TypeError("submissions must be tuple")
+    submissions = cast("tuple[object, ...]", submissions)
     if len(submissions) > MAX_COLLECTION_ITEMS:
         raise ValueError("submissions exceed maximum size")
     _revalidate_context_or_raise(context)
-    gate_reasons = []
+    gate_reasons: list[str] = []
     if context.plan.acceptance_contract_hash != context.contract.hash:
         gate_reasons.append("CROSS_BOUND:acceptance_contract")
     if context.plan.change_set_hash != context.change_set.hash:
         gate_reasons.append("CROSS_BOUND:changeset")
     if gate_reasons:
         return _mint_failure(context, tuple(sorted(gate_reasons)))
-    reasons = []
-    observations = []
-    raw_hashes = []
-    provenance_hashes = []
-    freshness = []
-    machine = []
-    human = []
-    human_reasons = []
-    missing = []
-    valid_requirements = []
+    reasons: list[str] | tuple[str, ...] = []
+    observations: list[Observation] = []
+    raw_hashes: list[str] = []
+    provenance_hashes: list[str] = []
+    freshness: list[tuple[str, FreshnessStatus]] = []
+    machine: list[str] = []
+    human: list[str] = []
+    human_reasons: list[tuple[str, str]] = []
+    missing: list[str] = []
+    valid_requirements: list[EvidenceRequirement] = []
     invalid_requirement = False
     invalid_profile = False
     try:
@@ -2185,9 +2205,9 @@ def ingest_evidence(context: object, submissions: object) -> IngestionResult:
         r.verifier_id not in set(context.contract.required_verifier_ids) for r in valid_requirements
     ):
         reasons.append("MALFORMED:requirement")
-    seen_artifacts = set()
-    seen_verifier_content = set()
-    validated_provenance = []
+    seen_artifacts: set[str] = set()
+    seen_verifier_content: set[tuple[str, str]] = set()
+    validated_provenance: list[ProvenanceEnvelope] = []
     for submission in submissions:
         if type(submission) is not EvidenceSubmission:
             reasons.append("MALFORMED:submission")
@@ -2429,7 +2449,7 @@ def ingest_evidence(context: object, submissions: object) -> IngestionResult:
     for verifier in sorted(required_ids - submitted_ids):
         missing.append(verifier)
         reasons.append("MISSING:required_verifier")
-    for verifier, artifact in reqs:
+    for verifier, _ in reqs:
         if verifier not in {p.verifier_id for p in validated_provenance}:
             missing.append(verifier)
     if context:

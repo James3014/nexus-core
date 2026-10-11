@@ -456,7 +456,9 @@ class EvidenceBundle:
         """Hash of the native serialized envelope (distinct from ``hash``)."""
         return self.to_dict()["bundle_hash"]
 
-    def integrity(self, contract, change_set, plan):
+    def integrity(
+        self, contract: AcceptanceContract, change_set: ChangeSet, plan: VerificationPlan
+    ) -> IntegrityStatus:
         if self.claimed_bundle_hash is not None and self.claimed_bundle_hash != self.hash:
             return IntegrityStatus.TAMPERED
         if self.acceptance_contract_hash != contract.hash:
