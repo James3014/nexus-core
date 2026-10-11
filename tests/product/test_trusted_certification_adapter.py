@@ -1209,6 +1209,7 @@ def test_architecture_no_clock_crypto_transport_legacy_path_or_reducer_cycle():
         "enum",
         "hashlib",
         "weakref",
+        "typing",
         "product.evidence.ingestion",
         "product.kernel",
     }
