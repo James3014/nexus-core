@@ -557,3 +557,38 @@ def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest
     restored_bytes = receipt_source.read_bytes()
     assert restored_bytes == receipt_bytes, "receipt changed after rollback"
     assert json.loads(restored_bytes.decode("utf-8"))["receipt_hash"] == claimed_hash
+
+
+def _stub_cli_http(monkeypatch, status_code, payload):
+    import product.clients.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "_require_runtime", lambda: None)
+    monkeypatch.setattr(cli_module, "_get_token", lambda _token_file: "t")
+    monkeypatch.setattr(cli_module, "_make_http_request", lambda **_kwargs: (status_code, payload))
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [("COMPLETED", 0), ("FAILED", 1), ("UNVERIFIABLE", 6)],
+)
+def test_cli_status_exit_code_follows_final_state(state, expected, monkeypatch, capsys):
+    _stub_cli_http(monkeypatch, 200, {"request_id": "r", "state": state})
+    args = argparse.Namespace(token_file=None, url="http://x", request_id="r")
+    assert cmd_status(args) == expected
+    assert json.loads(capsys.readouterr().out)["state"] == state
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [("COMPLETED", 0), ("FAILED", 1), ("UNVERIFIABLE", 6)],
+)
+def test_cli_submit_exit_code_follows_final_state(state, expected, monkeypatch, tmp_path, capsys):
+    import product.clients.cli as cli_module
+
+    monkeypatch.setattr("product.runtime.schemas.validate_certification_request", lambda _p: [])
+    _stub_cli_http(monkeypatch, 200, {"request_id": "r", "state": state})
+    req = tmp_path / "req.json"
+    req.write_text("{}", encoding="utf-8")
+    args = argparse.Namespace(request=str(req), token_file=None, url="http://x")
+    assert cli_module.cmd_submit(args) == expected
+    assert json.loads(capsys.readouterr().out)["state"] == state

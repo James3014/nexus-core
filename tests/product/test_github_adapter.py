@@ -307,7 +307,14 @@ def test_adapter_has_no_network_sdk_or_mutation_surface():
         if isinstance(node, ast.Import)
         for alias in node.names
     ]
-    assert set(imports) <= {"re", "dataclasses", "product.evidence", "product.kernel"}
+    assert set(imports) <= {
+        "re",
+        "dataclasses",
+        "collections.abc",
+        "typing",
+        "product.evidence",
+        "product.kernel",
+    }
     assert all(not any(token in item.lower() for token in forbidden) for item in imports)
     calls = [
         node.func.attr.lower()
