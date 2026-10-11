@@ -38,7 +38,7 @@ Golden Path 指令（`init`、`doctor`、`check`、`receipt-check`、`issue-init
 
 PyPI：https://pypi.org/project/nexus-certify/
 
-PyPI 上的版本是 `0.1.3`。`main` 分支已包含下文所述較新的受信任設定檔、隔離與簽章收據功能，之後會發布新版。在那之前，若需要這些功能，請從固定的 commit 安裝：
+PyPI 上最新發布的版本是 `0.1.3`（2026-10-10 查核）。`main` 分支的版本為 `0.2.0`，尚未發布到 PyPI。其中包含下文所述較新的受信任設定檔、隔離與簽章收據功能，之後會發布新版。在那之前，若需要這些功能，請從固定的 commit 安裝：
 
 ```bash
 python -m pip install "git+https://github.com/James3014/nexus-core.git@c293dc944fe99652ae8856d732a35b5191f52a5e"
