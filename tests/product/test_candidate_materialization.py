@@ -414,6 +414,36 @@ def test_exact_request_readback_without_rerun(base_repo: Path, tmp_path: Path) -
     assert receipt_count_after == receipt_count_before
 
 
+def test_replay_failed_closed_receipt_returns_stored_outcome(
+    base_repo: Path, tmp_path: Path
+) -> None:
+    """Replay of a non-200 verify receipt matches the first call's outcome."""
+
+    def _rejecting_verify(_payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        return 422, {"error": {"code": "CORE_VERIFY_REJECTED"}}
+
+    req = _build_request(base_repo, receipt_dir=tmp_path / "receipts")
+    first = acquire_and_verify_candidate(req, _rejecting_verify)
+    assert first.status == "FAILED_CLOSED"
+    assert first.reason_codes == ["CORE_VERIFY_REJECTED"]
+
+    second = acquire_and_verify_candidate(req, _rejecting_verify)
+    assert second.replayed
+    assert second.status == first.status
+    assert second.reason_codes == first.reason_codes
+    assert second.core_response == first.core_response
+
+
+def test_replay_success_receipt_returns_stored_outcome(base_repo: Path, tmp_path: Path) -> None:
+    req = _build_request(base_repo, receipt_dir=tmp_path / "receipts")
+    first = _acquire(req)
+    second = _acquire(req)
+    assert second.replayed
+    assert second.status == first.status != "UNKNOWN"
+    assert second.reason_codes == first.reason_codes
+    assert second.core_response == first.core_response
+
+
 # ---------------------------------------------------------------------------
 # Test 5: Replay conflict – same hash, different request ID
 # ---------------------------------------------------------------------------

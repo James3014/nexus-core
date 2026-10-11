@@ -217,6 +217,11 @@ def _make_trust_sealed_api(snapshot_type, change_set_type, input_type, kernel_ce
         values = dict(payload)
         if type(values["changed_paths"]) is not list:
             raise TypeError("changed_paths must be a list in serialized snapshots")
+        if (
+            type(values["repository_owner"]) is not str
+            or type(values["repository_name"]) is not str
+        ):
+            raise ValueError("malformed GitHub pull-request snapshot owner or name")
         values["repository_owner"] = values["repository_owner"].lower()
         values["repository_name"] = values["repository_name"].lower()
         values["changed_paths"] = tuple(sorted(values["changed_paths"]))

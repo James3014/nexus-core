@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -271,3 +272,55 @@ def test_receipt_loader_rejects_non_integer_exit_code(exit_code):
     tampered["attempts"][0]["exit_code"] = exit_code
     with pytest.raises(ValueError):
         RunnerResult.from_dict(tampered)
+
+
+@pytest.mark.parametrize(
+    "error", [TimeoutError(), OSError(), RuntimeError(), subprocess.TimeoutExpired("x", 1)]
+)
+def test_transient_executor_failure_is_not_cached(error):
+    calls = []
+
+    def flaky(profile, req, index):
+        calls.append(index)
+        if len(calls) == 1:
+            raise error
+        return executor(profile, req, index)
+
+    runner = PythonOCIRunner()
+    first = runner.run(request(), flaky)
+    assert first.status is RunnerStatus.UNVERIFIABLE
+    assert first.reason_codes == ("MALFORMED_OR_UNAVAILABLE",)
+    assert runner.run(request(), flaky).status is RunnerStatus.VERIFIED
+
+
+def test_deterministic_malformed_output_is_still_cached():
+    runner = PythonOCIRunner()
+    assert runner.run(request(), lambda *_: {}).status is RunnerStatus.UNVERIFIABLE
+    called = []
+    runner.run(request(), lambda *_: called.append(1))
+    assert not called
+
+
+@pytest.mark.parametrize(
+    "junit",
+    [
+        b'<testsuite tests="3" failures="0" errors="0" skipped="3" />',
+        b'<testsuites><testsuite tests="1" skipped="1" />'
+        b'<testsuite tests="2" skipped="2" /></testsuites>',
+    ],
+)
+def test_all_skipped_suite_is_not_verified(junit):
+    def skipped(profile, req, index):
+        return {**executor(profile, req, index), "junit": junit}
+
+    result = PythonOCIRunner().run(request(), skipped)
+    assert result.status is RunnerStatus.UNVERIFIABLE
+    assert result.reason_codes == ("MALFORMED_OR_UNAVAILABLE",)
+
+
+def test_partially_skipped_suite_is_verified():
+    def partial(profile, req, index):
+        junit = b'<testsuite tests="3" failures="0" errors="0" skipped="2" />'
+        return {**executor(profile, req, index), "junit": junit}
+
+    assert PythonOCIRunner().run(request(), partial).status is RunnerStatus.VERIFIED
