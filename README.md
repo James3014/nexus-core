@@ -38,7 +38,7 @@ The Golden Path commands (`init`, `doctor`, `check`, `receipt-check`, `issue-ini
 
 PyPI: https://pypi.org/project/nexus-certify/
 
-The latest PyPI release is `0.1.3` (checked 2026-10-10). The `main` branch is version `0.2.0`, which is not on PyPI yet. It contains the newer trusted-config, isolation and signed-receipt features described below. A release will follow. Until then, install from a pinned commit if you need them:
+The latest PyPI release is `0.1.3` (checked 2026-10-10). The `main` branch is version `0.3.0`, which is not on PyPI yet. It contains the newer trusted-config, isolation and signed-receipt features described below. A release will follow. Until then, install from a pinned commit if you need them:
 
 ```bash
 python -m pip install "git+https://github.com/James3014/nexus-core.git@c293dc944fe99652ae8856d732a35b5191f52a5e"
