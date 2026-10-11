@@ -562,6 +562,48 @@ def test_verifier_that_mutates_tracked_file_fails_closed(
 
 
 # ---------------------------------------------------------------------------
+# Test 8b: verifier that moves worktree HEAD must be detected (#155).
+#          Committing leaves staged/unstaged diffs clean relative to the new
+#          HEAD, so only the HEAD tree / commit comparison catches it.
+# ---------------------------------------------------------------------------
+
+_GIT_ID = ["-c", "user.email=a@b.c", "-c", "user.name=x"]
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        # Edit a tracked file and commit it.
+        "echo 'VALUE = 666' > app.py && git "
+        + " ".join(_GIT_ID)
+        + " commit -qam evil",
+        # Roll HEAD back to the parent commit.
+        "git reset -q --hard HEAD~1",
+        # Check out a different commit.
+        "git checkout -q --detach HEAD~1",
+        # Same tree, different commit (amend changes only the message).
+        "git " + " ".join(_GIT_ID) + " commit -q --amend -m rewritten",
+    ],
+    ids=["commit-change", "reset-hard", "checkout-other", "amend-same-tree"],
+)
+def test_verifier_that_moves_head_fails_closed(
+    base_repo: Path, tmp_path: Path, script: str
+) -> None:
+    """Issue #155: a verifier that moves HEAD must cause CANDIDATE_TREE_DRIFT."""
+    req = _build_request(
+        base_repo,
+        receipt_dir=tmp_path / "receipts",
+        verifier_ids=["head-mover"],
+        verifier_commands=[["sh", "-c", f"{script}; exit 0"]],
+    )
+
+    with pytest.raises(CandidateAcquisitionError) as exc_info:
+        _acquire(req)
+
+    assert exc_info.value.reason_code == "CANDIDATE_TREE_DRIFT"
+
+
+# ---------------------------------------------------------------------------
 # Test 9: FALSE GREEN 2 – inter-verifier contamination via untracked file.
 #         Verifier A creates marker.tmp; verifier B should NOT see it.
 #         Each verifier must run in a fresh clean materialisation.

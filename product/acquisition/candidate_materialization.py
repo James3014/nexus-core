@@ -670,21 +670,58 @@ def _remove_temp_root(tmp_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worktree drift detection (F: physical scan, NOT HEAD^{tree})
+# Worktree drift detection (F: HEAD tree/commit plus physical scan)
 # ---------------------------------------------------------------------------
 
 
-def _check_physical_worktree_clean(wt_path: Path, candidate_tree: str) -> None:
-    """Fail closed if the physical worktree has drifted from candidate_tree.
+def _check_physical_worktree_clean(
+    wt_path: Path,
+    candidate_tree: str,
+    candidate_head: str | None = None,
+) -> None:
+    """Fail closed if the physical worktree has drifted from the candidate.
 
-    Uses ``git diff-index --cached HEAD`` to detect staged changes, and
-    ``git diff-files`` to detect unstaged tracked changes.  Untracked files
-    are explicitly removed to prevent contamination of subsequent verifiers
-    (they cannot alter the tree hash but could influence verifier behaviour).
+    Uses both a committed-state check and a physical scan, because neither
+    alone is sufficient:
 
-    Intentionally does NOT use ``HEAD^{tree}`` which only reads the committed
-    tree and cannot observe worktree file mutations.
+    * ``HEAD^{tree}`` must equal ``candidate_tree`` (and ``HEAD`` must equal
+      ``candidate_head`` when given).  This catches a verifier that edits a
+      file and runs ``git commit`` / ``reset`` / ``checkout``: HEAD moves, so
+      the HEAD-relative diffs below would be clean.
+    * ``git diff-index --cached HEAD`` detects staged changes and
+      ``git diff-files`` detects unstaged tracked changes.  This catches
+      uncommitted worktree mutations, which ``HEAD^{tree}`` cannot observe.
+
+    Untracked files are explicitly removed to prevent contamination of
+    subsequent verifiers (they cannot alter the tree hash but could influence
+    verifier behaviour).
     """
+    head_tree = _run_git(wt_path, "rev-parse", "--verify", "HEAD^{tree}")
+    if head_tree.returncode != 0:
+        raise CandidateAcquisitionError(
+            "CANDIDATE_TREE_DRIFT",
+            f"git rev-parse HEAD^{{tree}} failed: {head_tree.stderr.strip()}",
+        )
+    if head_tree.stdout.strip() != candidate_tree:
+        raise CandidateAcquisitionError(
+            "CANDIDATE_TREE_DRIFT",
+            f"worktree HEAD tree {head_tree.stdout.strip()} != "
+            f"candidate tree {candidate_tree}",
+        )
+    if candidate_head is not None:
+        head = _run_git(wt_path, "rev-parse", "--verify", "HEAD^{commit}")
+        if head.returncode != 0:
+            raise CandidateAcquisitionError(
+                "CANDIDATE_TREE_DRIFT",
+                f"git rev-parse HEAD failed: {head.stderr.strip()}",
+            )
+        if head.stdout.strip() != candidate_head:
+            raise CandidateAcquisitionError(
+                "CANDIDATE_TREE_DRIFT",
+                f"worktree HEAD {head.stdout.strip()} != "
+                f"candidate head {candidate_head}",
+            )
+
     # Check for tracked modifications (staged or unstaged).
     staged = _run_git(wt_path, "diff-index", "--cached", "--name-only", "HEAD")
     if staged.returncode != 0:
@@ -993,7 +1030,9 @@ def acquire_and_verify_candidate(
                 # F: Detect physical worktree drift after this verifier.
                 # Untracked artifacts are also cleaned so they cannot
                 # contaminate the next verifier's fresh materialisation.
-                _check_physical_worktree_clean(wt_path, request.candidate_tree)
+                _check_physical_worktree_clean(
+                    wt_path, request.candidate_tree, request.candidate_head
+                )
 
                 artifacts.append(
                     _verifier_artifact(
