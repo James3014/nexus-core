@@ -164,7 +164,9 @@ def validate_auth_header(
     token = parts[1]
     if len(token) != TOKEN_LENGTH:
         return False
-    return hmac.compare_digest(token, expected_token)
+    return hmac.compare_digest(
+        token.encode("utf-8", "surrogatepass"), expected_token.encode("utf-8", "surrogatepass")
+    )
 
 
 def create_auth_middleware(

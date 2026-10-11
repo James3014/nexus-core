@@ -827,3 +827,36 @@ def test_cli_handoff_lifecycle(test_repo: Path, dummy_server: dict[str, Any]):
     # 3. handoff-status
     ret = main(["handoff-status", "--repo", repo_str])
     assert ret == 0
+
+
+def test_validate_handoff_envelope_rejects_float_duration_without_raising():
+    """Issue #164: a float duration_ms must be a rejection, not a TypeError."""
+    from product.evidence.runtime_handoff import validate_handoff_evidence_envelope
+    from product.protocol.runtime_handoff import (
+        RUNTIME_HANDOFF_RECEIPT_KIND,
+        RUNTIME_HANDOFF_SCHEMA_ID,
+        runtime_handoff_receipt_hash,
+    )
+
+    digest = "sha256:" + "1" * 64
+    payload: dict[str, Any] = {
+        "schema": RUNTIME_HANDOFF_SCHEMA_ID,
+        "receipt_kind": RUNTIME_HANDOFF_RECEIPT_KIND,
+        "claim_ceiling": HANDOFF_CLAIM_CEILING,
+        "non_claims": list(HANDOFF_NON_CLAIMS),
+        "handoff_id": "h",
+        "handoff_config_hash": digest,
+        "handoff_verifier": {
+            "command": ["t"],
+            "exit_code": 0,
+            "stdout_sha256": digest,
+            "stderr_sha256": digest,
+            "duration_ms": 3,
+        },
+        "verdict": "HANDOFF_READY",
+    }
+    payload["receipt_hash"] = runtime_handoff_receipt_hash(payload)
+    assert validate_handoff_evidence_envelope(payload)["valid"] is False  # control: no raise
+    payload["handoff_verifier"]["duration_ms"] = 1.5
+    result = validate_handoff_evidence_envelope(payload)
+    assert result == {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}

@@ -718,6 +718,18 @@ def _make_subject_validator(
                 "ALLOW",
             }:
                 errors.append("MALFORMED:contract.deletion_policy")
+            subjects = c.get("expected_subjects")
+            try:
+                if type(subjects) is not tuple or any(
+                    type(subject) is not ExpectedEvidenceSubject for subject in subjects
+                ):
+                    raise TypeError("expected_subjects must be a tuple of subjects")
+                sorted(subject.canonical_value for subject in subjects)
+            except (TypeError, AttributeError):
+                errors.append("MALFORMED:contract.expected_subjects")
+            generation = c.get("universe_generation")
+            if type(generation) is not int or generation < 0:
+                errors.append("MALFORMED:contract.universe_generation")
         if cs is not None:
             for key in ("change_set_id", "source_revision", "target_revision"):
                 text(cs, key, "change_set")
@@ -732,7 +744,13 @@ def _make_subject_validator(
                     require_paths(deleted_paths, "deleted_paths")
                 except (TypeError, ValueError):
                     errors.append("MALFORMED:change_set.deleted_paths")
-            if type(deleted_paths) is not tuple or not set(deleted_paths).issubset(cs.get("paths", ())):
+            try:
+                deleted_ok = type(deleted_paths) is tuple and set(deleted_paths).issubset(
+                    cs.get("paths", ())
+                )
+            except TypeError:
+                deleted_ok = False
+            if not deleted_ok:
                 errors.append("MALFORMED:change_set.deleted_paths")
         if p is not None:
             text(p, "plan_id", "plan")
