@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Certification service orchestrating TG-1 through TG-4 and Completion Core (TG-5)."""
 
 from __future__ import annotations
@@ -8,7 +9,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from product.acquisition.github import (
     GitHubPullRequestLocator,
@@ -27,7 +28,7 @@ from product.evidence import (
     Observation,
     ObservationStatus,
     VerificationPlan,
-    _hash,
+    _hash,  # pyright: ignore[reportPrivateUsage]
 )
 from product.execution.python_runner import (
     PythonOCIRunner,
@@ -89,6 +90,8 @@ def _decode_durable_payloads(
         raise _DurableLedgerReadError("durable ledger payload is corrupt") from exc
     if not isinstance(receipt, dict) or not isinstance(envelope, dict):
         raise _DurableLedgerReadError("durable ledger payload is corrupt")
+    receipt = cast("dict[str, Any]", receipt)
+    envelope = cast("dict[str, Any]", envelope)
     if _hash(envelope) != envelope_hash:
         raise _DurableLedgerReadError("durable ledger envelope integrity failed")
     embedded_receipt_hash = receipt.get("receipt_hash")
@@ -439,7 +442,8 @@ class RuntimeCertificationService:
 
             # 5. TG-3 EvidenceIdentityEnvelope
             # In live tracer, we construct an identity envelope carrying the TG-1 & TG-2 hashes
-            envelope_dict = {
+            runner_result_dict = runner_result.to_dict()
+            envelope_dict: dict[str, Any] = {
                 "schema": "nexus.evidence.identity-envelope.v1",
                 "context_hash": _hash(job.payload),
                 "profile_hash": runner_result.profile_hash,
@@ -454,7 +458,7 @@ class RuntimeCertificationService:
                 "producer_id": "nexus.controller.v1",
                 "issuer_id": "nexus.service.v1",
                 "acquisition_snapshot_hash": snapshot.freshness_cas,
-                "runner_result_hash": _hash(runner_result.to_dict()),
+                "runner_result_hash": _hash(runner_result_dict),
                 "verification_receipt_hash": receipt.hash,
                 "external_receipt_hashes": [],
             }
@@ -488,7 +492,7 @@ class RuntimeCertificationService:
                     state=job.state,
                     generation=committed_gen,
                     acquisition=snapshot.to_dict(),
-                    execution=runner_result.to_dict(),
+                    execution=runner_result_dict,
                     evidence=envelope_dict,
                     verification=receipt_dict.get("verification"),
                     disposition=disposition_str,
@@ -605,7 +609,7 @@ class RuntimeCertificationService:
                 message=errs[0],
             )
 
-        receipt = payload["receipt"]
+        receipt: dict[str, Any] = payload["receipt"]
         requested_scope = payload["requested_scope"]
         original_inputs = payload.get("original_inputs")
 
@@ -640,6 +644,7 @@ class RuntimeCertificationService:
                 }
 
             # Attempt full recomputation
+            original_inputs = cast("dict[str, Any]", original_inputs)
             try:
                 raw_c = original_inputs["acceptance_contract"]
                 raw_cs = original_inputs["change_set"]
@@ -757,7 +762,7 @@ class RuntimeCertificationService:
         if not tasks:
             return
 
-        done, pending = await asyncio.wait(tasks, timeout=timeout)
+        _done, pending = await asyncio.wait(tasks, timeout=timeout)
         for p in pending:
             p.cancel()
         if pending:
