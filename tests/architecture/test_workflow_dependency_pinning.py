@@ -108,6 +108,48 @@ def test_production_github_workflows_are_pinned_to_immutable_shas():
     )
 
 
+def test_production_composite_actions_are_pinned_to_immutable_shas():
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    actions_dir = repo_root / ".github" / "actions"
+    assert actions_dir.is_dir(), f"Actions directory not found at {actions_dir}"
+
+    action_files = sorted(
+        list(actions_dir.glob("*/action.yml")) + list(actions_dir.glob("*/action.yaml"))
+    )
+    assert action_files, "No composite action files discovered in .github/actions"
+
+    all_violations: list[WorkflowPinViolation] = []
+    for action in action_files:
+        content = action.read_text(encoding="utf-8")
+        rel_path = str(action.relative_to(repo_root))
+        all_violations.extend(check_workflow_content_for_unpinned_actions(content, rel_path))
+
+    assert not all_violations, (
+        "Discovered unpinned movable GitHub Action dependencies in composite actions:\n"
+        + "\n".join(f"  - {v.format()}" for v in all_violations)
+    )
+
+
+def test_negative_control_composite_action_movable_tag_rejected():
+    sample = (
+        "name: Composite\n"
+        "runs:\n"
+        "  using: composite\n"
+        "  steps:\n"
+        "    - uses: actions/foo@v4\n"
+        "      with:\n"
+        "        x: y\n"
+    )
+    violations = check_workflow_content_for_unpinned_actions(
+        sample, ".github/actions/fake/action.yml"
+    )
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.lineno == 5
+    assert v.action_name == "actions/foo"
+    assert v.action_ref == "v4"
+
+
 def test_negative_control_movable_tag_rejected():
     sample = (
         "name: CI\n"

@@ -836,3 +836,27 @@ def test_receipt_binds_protocol_and_claim_ceiling():
             CertificationPolicy(),
             implementation_schema="old",
         )
+
+
+def test_hostile_subjects_and_paths_are_malformed_not_raised():
+    """Issue #164: validator must shape-check expected_subjects and tampered paths."""
+    from product.evidence import derive_evidence_integrity, validate_evidence_subjects
+
+    def parts():
+        i = _input()
+        return i.contract, i.change_set, i.plan, i.evidence
+
+    for hostile in ("not-a-subject", ("not-a-subject",), None):
+        c, cs, p, e = parts()
+        object.__setattr__(c, "expected_subjects", hostile)
+        assert "MALFORMED:contract.expected_subjects" in validate_evidence_subjects(c, cs, p, e)
+        assert derive_evidence_integrity(c, cs, p, e) is IntegrityStatus.MALFORMED
+
+    c, cs, p, e = parts()
+    object.__setattr__(c, "universe_generation", "1")
+    assert derive_evidence_integrity(c, cs, p, e) is IntegrityStatus.MALFORMED
+
+    c, cs, p, e = parts()
+    object.__setattr__(cs, "paths", None)
+    assert validate_evidence_subjects(c, cs, p, e)
+    assert derive_evidence_integrity(c, cs, p, e) is IntegrityStatus.MALFORMED

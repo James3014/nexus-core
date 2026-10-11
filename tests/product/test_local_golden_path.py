@@ -18,6 +18,7 @@ from product.clients.local_golden_path import (
     evaluate_receipt_expectations,
     init_repository,
     validate_verification_receipt,
+    validate_verification_receipt_payload,
 )
 from product.protocol.generic_verification import (
     acceptance_contract_hash,
@@ -2083,6 +2084,7 @@ def test_transition_stale_or_unknown_fails_closed_before_verifiers(
     assert raised.value.reason_code == reason
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["evidence_artifacts"] == []
+    assert receipt["inputs"]["material_transitions"] == [transition]
 
 
 def test_transition_with_untrusted_worktree_config_fails_closed(external_repo: Path):
@@ -2110,3 +2112,116 @@ def test_transition_observed_identity_must_equal_target(pin_repo: Path):
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["evidence_artifacts"][0]["status"] == "FAIL"
     assert receipt["evidence_artifacts"][0]["observed_identity"] == "git-commit:" + "c" * 40
+
+
+def _receipt_with_trees(tmp_path: Path, source_tree: str, target_tree: str) -> Path:
+    receipt = {
+        "inputs": {
+            "request": {
+                "change_manifest": {
+                    "source_tree": source_tree,
+                    "target_tree": target_tree,
+                    "entries": [],
+                }
+            }
+        }
+    }
+    path = tmp_path / "receipt.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    return path
+
+
+def test_receipt_option_shaped_tree_id_is_rejected_without_git_side_effects(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    empty_tree = subprocess.run(
+        ["git", "hash-object", "-t", "tree", "/dev/null"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep", encoding="utf-8")
+    absent = tmp_path / "absent.txt"
+
+    for target in (victim, absent):
+        path = _receipt_with_trees(
+            tmp_path, f"git-tree:--output={target}", f"git-tree:{empty_tree}"
+        )
+        validation = validate_verification_receipt(path, repo=repo)
+        assert validation["valid"] is False
+        assert "GIT_MANIFEST_MISMATCH" in validation["reason_codes"]
+
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert not absent.exists()
+
+
+@pytest.mark.parametrize(
+    "bad", ["git-tree:HEAD", "git-tree:" + "A" * 40, "git-tree:abc123", "git-tree:"]
+)
+def test_receipt_non_hex_tree_id_is_rejected(tmp_path: Path, bad: str) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    path = _receipt_with_trees(tmp_path, bad, "git-tree:" + "0" * 40)
+    validation = validate_verification_receipt(path, repo=repo)
+    assert validation["valid"] is False
+    assert "GIT_MANIFEST_MISMATCH" in validation["reason_codes"]
+
+
+def test_config_base_ref_option_shaped_is_rejected(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    with pytest.raises(LocalCheckError) as exc:
+        init_repository(
+            repo,
+            base_ref="--git-dir=x",
+            allowed_patterns=["src/**"],
+            verifier_command=["true"],
+        )
+    assert "INVALID_CONFIG" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("product",), 0.0),
+        (("inputs", "config", "version"), 1.5),
+        (("inputs", "request", "change_set"), {"x": float("nan")}),
+        (("config_source", "kind"), []),
+        (("config_source", "kind"), {}),
+        (("config_source", "kind"), [["x"]]),
+        (("config_source", "config_drift"), 0.0),
+    ],
+)
+def test_receipt_malformed_untrusted_values_are_rejected_not_raised(
+    valid_receipt: dict[str, Any], path: tuple[str, ...], value: Any
+) -> None:
+    valid_receipt.setdefault("config_source", {"kind": "worktree", "config_drift": False})
+    target = valid_receipt
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    validation = validate_verification_receipt_payload(valid_receipt)
+
+    assert validation["valid"] is False
+    assert validation["reason_codes"]
+
+
+def test_receipt_deeply_nested_value_is_rejected_not_raised(
+    valid_receipt: dict[str, Any],
+) -> None:
+    nested: Any = []
+    for _ in range(100_000):
+        nested = [nested]
+    valid_receipt["product"] = nested
+
+    validation = validate_verification_receipt_payload(valid_receipt)
+
+    assert validation == {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}

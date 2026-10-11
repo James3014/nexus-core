@@ -212,6 +212,14 @@ def test_loader_revalidates_after_post_init_rebinding(monkeypatch):
         load_github_pull_request_snapshot(values)
 
 
+@pytest.mark.parametrize("field", ["repository_owner", "repository_name"])
+def test_loader_rejects_non_string_owner_or_name_with_value_error(field):
+    payload = serialize_github_pull_request_snapshot(snapshot())
+    payload[field] = 5
+    with pytest.raises(ValueError):
+        load_github_pull_request_snapshot(payload)
+
+
 def test_loader_rejects_valid_constructor_substitution(monkeypatch):
     original_init = GitHubPullRequestSnapshot.__init__
     payload = serialize_github_pull_request_snapshot(snapshot())

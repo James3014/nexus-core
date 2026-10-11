@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Workflow/session handoff evidence verification (issue #59).
 
 A bounded verification profile over a neutral, versioned handoff envelope. It
@@ -19,9 +20,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
-from product.evidence import IntegrityStatus, _hash, _require_text
+from product.evidence import (  # pyright: ignore[reportPrivateUsage] -- sealed Core internals
+    IntegrityStatus,
+    _hash,  # pyright: ignore[reportPrivateUsage]
+    _require_text,  # pyright: ignore[reportPrivateUsage]
+)
 
 HANDOFF_SCHEMA = "nexus.core.workflow_handoff.v1"
 HANDOFF_CLAIM_CEILING = "CORE_HANDOFF_EVIDENCE_VERIFICATION_ONLY"
@@ -93,11 +98,12 @@ class HandoffIdentity:
     def from_mapping(cls, data: Any) -> HandoffIdentity:
         if not isinstance(data, dict):
             raise HandoffEvidenceError("handoff identity must be an object")
+        fields = cast("dict[str, Any]", data)
         return cls(
-            repository=_text(data.get("repository"), "repository"),
-            source_revision=_text(data.get("source_revision"), "source_revision"),
-            runtime_identity=str(data.get("runtime_identity") or "").strip(),
-            target_revision=str(data.get("target_revision") or "").strip(),
+            repository=_text(fields.get("repository"), "repository"),
+            source_revision=_text(fields.get("source_revision"), "source_revision"),
+            runtime_identity=str(fields.get("runtime_identity") or "").strip(),
+            target_revision=str(fields.get("target_revision") or "").strip(),
         )
 
     def to_dict(self) -> dict[str, str]:
@@ -150,7 +156,7 @@ class HandoffVerification:
         if not isinstance(self.integrity, IntegrityStatus):
             raise HandoffEvidenceError("integrity must be an IntegrityStatus")
         _require_sha256(self.input_binding_hash, "input_binding_hash")
-        if self.schema not in SUPPORTED_HANDOFF_SCHEMAS:
+        if not isinstance(self.schema, str) or self.schema not in SUPPORTED_HANDOFF_SCHEMAS:
             raise HandoffEvidenceError("unsupported handoff schema")
         if self.claim_ceiling != HANDOFF_CLAIM_CEILING:
             raise HandoffEvidenceError("handoff claim ceiling mismatch")
@@ -279,15 +285,17 @@ def verify_handoff_evidence(
             input_binding_hash=_empty_binding("not-object"),
             integrity=IntegrityStatus.MALFORMED,
         )
-    schema = envelope.get("schema")
-    if schema not in SUPPORTED_HANDOFF_SCHEMAS:
+    env = cast("dict[str, Any]", envelope)
+    schema = env.get("schema")
+    # Untrusted value: set membership raises TypeError on unhashable input.
+    if not isinstance(schema, str) or schema not in SUPPORTED_HANDOFF_SCHEMAS:
         return _result(
             HandoffVerdict.INVALID,
             ["INVALID:schema"],
             input_binding_hash=_empty_binding("schema"),
             integrity=IntegrityStatus.MALFORMED,
         )
-    if envelope.get("claim_ceiling") != HANDOFF_CLAIM_CEILING:
+    if env.get("claim_ceiling") != HANDOFF_CLAIM_CEILING:
         return _result(
             HandoffVerdict.INVALID,
             ["INVALID:claim_ceiling_escalation"],
@@ -295,19 +303,22 @@ def verify_handoff_evidence(
             integrity=IntegrityStatus.MALFORMED,
         )
     try:
-        operation_id = _text(envelope.get("operation_id"), "operation_id")
-        attempt_id = _text(envelope.get("attempt_id"), "attempt_id")
-        identity = HandoffIdentity.from_mapping(envelope.get("identity"))
-        checkpoint = envelope.get("checkpoint")
-        if not isinstance(checkpoint, dict):
+        operation_id = _text(env.get("operation_id"), "operation_id")
+        attempt_id = _text(env.get("attempt_id"), "attempt_id")
+        identity = HandoffIdentity.from_mapping(env.get("identity"))
+        checkpoint_raw = env.get("checkpoint")
+        if not isinstance(checkpoint_raw, dict):
             raise HandoffEvidenceError("checkpoint must be an object")
+        checkpoint = cast("dict[str, Any]", checkpoint_raw)
         checkpoint_hash = _require_sha256(checkpoint.get("content_hash"), "checkpoint.content_hash")
-        receipt_refs = envelope.get("receipt_refs")
-        if not isinstance(receipt_refs, list) or any(
-            not isinstance(item, str) or not item.strip() for item in receipt_refs
+        receipt_refs_raw = env.get("receipt_refs")
+        if not isinstance(receipt_refs_raw, list) or any(
+            not isinstance(item, str) or not item.strip()
+            for item in cast("list[Any]", receipt_refs_raw)
         ):
             raise HandoffEvidenceError("receipt_refs must be a list of non-empty strings")
-        asserted_terminal = envelope.get("asserted_terminal")
+        receipt_refs = cast("list[str]", receipt_refs_raw)
+        asserted_terminal = env.get("asserted_terminal")
         if type(asserted_terminal) is not bool:
             raise HandoffEvidenceError("asserted_terminal must be a bool")
     except (TypeError, ValueError) as exc:
@@ -339,20 +350,20 @@ def verify_handoff_evidence(
             identity.binding_hash,
             checkpoint_hash,
             tuple(receipt_refs),
-            str(envelope.get("asserted_phase") or ""),
+            str(env.get("asserted_phase") or ""),
             asserted_terminal,
-            str(envelope.get("producer_identity") or ""),
-            str(envelope.get("observed_identity") or ""),
+            str(env.get("producer_identity") or ""),
+            str(env.get("observed_identity") or ""),
             current.binding_hash if current is not None else "",
         )
     )
 
     # --- Tamper: every declared hash must recompute exactly. ---
     tamper_reasons: list[str] = []
-    declared_binding = envelope.get("identity_binding_hash")
+    declared_binding = env.get("identity_binding_hash")
     if not isinstance(declared_binding, str) or declared_binding != identity.binding_hash:
         tamper_reasons.append("TAMPERED:identity_binding_hash")
-    body = envelope.get("body")
+    body: Any = env.get("body")
     if body is not None and not isinstance(body, dict):
         return _result(
             HandoffVerdict.INVALID,
@@ -360,15 +371,25 @@ def verify_handoff_evidence(
             input_binding_hash=input_binding_hash,
             integrity=IntegrityStatus.MALFORMED,
         )
-    declared_body_hash = envelope.get("body_content_hash")
+    declared_body_hash = env.get("body_content_hash")
+    try:
+        recomputed_body_hash = (
+            _hash(cast("dict[str, Any]", body)) if isinstance(body, dict) else None
+        )
+        recomputed_envelope_hash = _hash({k: v for k, v in env.items() if k != "envelope_hash"})
+    except (TypeError, ValueError, RecursionError):
+        return _result(
+            HandoffVerdict.INVALID,
+            ["INVALID:envelope_not_canonical"],
+            input_binding_hash=input_binding_hash,
+            integrity=IntegrityStatus.MALFORMED,
+        )
     if isinstance(body, dict):
-        recomputed_body_hash = _hash(body)
         if declared_body_hash != recomputed_body_hash:
             tamper_reasons.append("TAMPERED:body_content_hash")
     elif declared_body_hash not in (None, ""):
         tamper_reasons.append("TAMPERED:body_content_hash")
-    recomputed_envelope_hash = _hash({k: v for k, v in envelope.items() if k != "envelope_hash"})
-    if envelope.get("envelope_hash") != recomputed_envelope_hash:
+    if env.get("envelope_hash") != recomputed_envelope_hash:
         tamper_reasons.append("TAMPERED:envelope_hash")
     if tamper_reasons:
         return _result(
@@ -385,9 +406,14 @@ def verify_handoff_evidence(
             for name in ("repository", "source_revision")
             if getattr(identity, name) != getattr(current, name)
         ]
-        if identity.runtime_identity and current.runtime_identity:
-            if identity.runtime_identity != current.runtime_identity:
-                stale_fields.append("runtime_identity")
+        # A current identity that carries a value must be matched by the
+        # envelope's own observed value; absence never matches (expected
+        # configuration cannot fill a missing observed identity). When the
+        # current side declares none, there is nothing to bind against.
+        for name in ("runtime_identity", "target_revision"):
+            expected = getattr(current, name)
+            if expected and getattr(identity, name) != expected:
+                stale_fields.append(name)
         if stale_fields:
             return _result(
                 HandoffVerdict.STALE,
@@ -404,8 +430,8 @@ def verify_handoff_evidence(
     checkpoint_status = str(checkpoint.get("status") or "").strip()
     if asserted_terminal and not checkpoint_status:
         mismatch.append("MISMATCHED:terminal_without_status")
-    producer_identity = str(envelope.get("producer_identity") or "").strip()
-    observed_identity = str(envelope.get("observed_identity") or "").strip()
+    producer_identity = str(env.get("producer_identity") or "").strip()
+    observed_identity = str(env.get("observed_identity") or "").strip()
     if producer_identity and not observed_identity:
         mismatch.append("MISMATCHED:observed_identity_missing")
     if mismatch:
@@ -437,26 +463,28 @@ def project_workflow_checkpoint_envelope(
     """
     if not isinstance(checkpoint, dict):
         raise HandoffEvidenceError("checkpoint payload must be an object")
-    status = str(checkpoint.get("status") or "").strip()
+    cp = cast("dict[str, Any]", checkpoint)
+    status = str(cp.get("status") or "").strip()
     terminal = status in {"COMPLETED", "FAILED"}
-    receipts = list(checkpoint.get("evidence_refs") or [])
-    for effect in checkpoint.get("completed_effects") or []:
-        if isinstance(effect, dict) and str(effect.get("receipt_ref") or "").strip():
+    receipts: list[str] = list(cp.get("evidence_refs") or [])
+    for effect_raw in cast("list[Any]", cp.get("completed_effects") or []):
+        effect = cast("dict[str, Any]", effect_raw)
+        if isinstance(effect_raw, dict) and str(effect.get("receipt_ref") or "").strip():
             receipts.append(str(effect["receipt_ref"]).strip())
     return build_handoff_envelope(
-        operation_id=str(checkpoint.get("operation_id") or ""),
-        attempt_id=str(checkpoint.get("attempt_id") or ""),
-        identity=checkpoint.get("identity") or {},
+        operation_id=str(cp.get("operation_id") or ""),
+        attempt_id=str(cp.get("attempt_id") or ""),
+        identity=cp.get("identity") or {},
         checkpoint_content_hash=_normalize_content_hash(
-            str(checkpoint.get("checkpoint_hash") or ""), "checkpoint_hash"
+            str(cp.get("checkpoint_hash") or ""), "checkpoint_hash"
         ),
         receipt_refs=tuple(receipts),
-        asserted_phase=str(checkpoint.get("phase") or ""),
+        asserted_phase=str(cp.get("phase") or ""),
         asserted_terminal=terminal,
         checkpoint_status=status,
         producer_identity=producer_identity,
         observed_identity=observed_identity,
-        body={k: v for k, v in checkpoint.items() if k != "checkpoint_hash"},
+        body={k: v for k, v in cp.items() if k != "checkpoint_hash"},
     )
 
 

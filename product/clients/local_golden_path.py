@@ -68,7 +68,7 @@ _CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation"}
 CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS = 900
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _HEX40_RE = re.compile(r"[0-9a-f]{40}")
-_IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+_IMAGE_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}\Z")
 _ISOLATION_KEYS = {"mode", "image", "network"}
 _REQUIREMENT_MODES = {"REQUIRED", "CONDITIONALLY_REQUIRED", "NOT_APPLICABLE"}
 _APPLICABILITY = {"APPLICABLE", "NOT_APPLICABLE", "UNRESOLVED"}
@@ -144,7 +144,7 @@ def _repo_root(path: str | Path) -> Path:
 
 
 def _toml_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=True)
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _toml_array(values: Sequence[str]) -> str:
@@ -237,7 +237,7 @@ def _validate_subject_fields(item: Mapping[str, Any], field: str) -> None:
 def _validate_env_passthrough(value: Any) -> None:
     if (
         not isinstance(value, list)
-        or any(not isinstance(item, str) or not _ENV_NAME_RE.match(item) for item in value)
+        or any(not isinstance(item, str) or not _ENV_NAME_RE.fullmatch(item) for item in value)
         or len(value) != len(set(value))
     ):
         raise LocalCheckError(
@@ -280,6 +280,8 @@ def _validate_config(value: Any) -> dict[str, Any]:
 
     if not isinstance(value["base_ref"], str) or not value["base_ref"].strip():
         raise LocalCheckError("INVALID_CONFIG", "base_ref must be non-empty")
+    if value["base_ref"].startswith("-"):
+        raise LocalCheckError("INVALID_CONFIG", "base_ref must not start with '-'")
     patterns = value["allowed_patterns"]
     if (
         not isinstance(patterns, list)
@@ -746,6 +748,9 @@ def _materialize_target_tree(repo: Path, head: str) -> str:
 
 
 def _manifest_from_trees(repo: Path, source_tree: str, target_tree: str) -> dict[str, Any]:
+    for label, tree_id in (("source_tree", source_tree), ("target_tree", target_tree)):
+        if not isinstance(tree_id, str) or not _HEX40_RE.fullmatch(tree_id):
+            raise LocalCheckError("GIT_MANIFEST_MALFORMED", f"{label} must be 40 lowercase hex")
     result = _run_git(
         repo,
         "diff-tree",
@@ -754,6 +759,7 @@ def _manifest_from_trees(repo: Path, source_tree: str, target_tree: str) -> dict
         "-r",
         "--no-renames",
         "-z",
+        "--end-of-options",
         source_tree,
         target_tree,
         text=False,
@@ -1669,6 +1675,7 @@ def _raise_with_receipt(
         requirements_context=requirements_context,
         config_source=config_source,
         issue_verification=issue_verification,
+        material_transitions=material_transitions,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path)
@@ -2207,8 +2214,22 @@ def evaluate_receipt_expectations(
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
-    """Independently recompute a local verification receipt payload."""
+    """Independently recompute a local verification receipt payload.
 
+    The payload is untrusted: any value that cannot be canonicalised or hashed
+    (floats, unhashable containers, pathological nesting) is a malformed receipt,
+    never an exception.
+    """
+
+    try:
+        return _validate_verification_receipt_payload(payload, repo=repo)
+    except (TypeError, ValueError, RecursionError):
+        return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+
+
+def _validate_verification_receipt_payload(
+    payload: Mapping[str, Any], *, repo: str | Path | None = None
+) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     payload = dict(payload)
@@ -2259,7 +2280,8 @@ def validate_verification_receipt_payload(
         source = payload["config_source"]
         if (
             not isinstance(source, dict)
-            or source.get("kind") not in {"base-ref", "worktree"}
+            or not isinstance(source.get("kind"), str)
+            or source["kind"] not in {"base-ref", "worktree"}
             or not isinstance(source.get("config_drift"), bool)
         ):
             reasons.append("MALFORMED_RECEIPT")

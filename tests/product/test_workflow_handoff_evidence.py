@@ -10,6 +10,7 @@ from product.evidence import IntegrityStatus, _hash
 from product.evidence.handoff import (
     HANDOFF_CLAIM_CEILING,
     HANDOFF_SCHEMA,
+    HandoffEvidenceError,
     HandoffIdentity,
     HandoffVerdict,
     HandoffVerification,
@@ -276,3 +277,86 @@ def test_no_second_orchestration_state_machine_is_exported():
     assert is_trustworthy(HandoffVerdict.INVALID) is False
     assert is_trustworthy(HandoffVerdict.VALID) is True
     assert identity_binding(_current()).to_dict() == _current().to_dict()
+
+
+def test_non_canonical_float_in_envelope_or_body_is_invalid_not_raised():
+    """Issue #164: canonical hashing rejects floats; the verdict must be INVALID."""
+    with_extra_key = dict(_envelope())
+    with_extra_key["extra"] = 1.5
+    body_float = dict(_envelope())
+    body_float["body"] = {**body_float["body"], "duration": 1.5}
+    for envelope in (with_extra_key, body_float):
+        result = verify_handoff_evidence(envelope, current_identity=_current())
+        assert result.verdict is HandoffVerdict.INVALID
+        assert result.integrity is IntegrityStatus.MALFORMED
+
+
+@pytest.mark.parametrize("schema", [[], {}, ["x"], {"a": 1}, None, 1, 1.5, True, b"x"])
+def test_non_string_schema_is_invalid_not_raised(schema):
+    envelope = _envelope()
+    envelope["schema"] = schema
+    result = verify_handoff_evidence(envelope, current_identity=_current())
+    assert result.verdict is HandoffVerdict.INVALID
+    assert result.reason_codes == ("INVALID:schema",)
+    assert result.integrity is IntegrityStatus.MALFORMED
+    assert not result.trustworthy
+
+
+@pytest.mark.parametrize("schema", [[], {}, None, 1])
+def test_verification_rejects_non_string_schema_without_type_error(schema):
+    good = verify_handoff_evidence(_envelope(), current_identity=_current())
+    fields = {
+        "verdict": good.verdict,
+        "reason_codes": good.reason_codes,
+        "integrity": good.integrity,
+        "input_binding_hash": good.input_binding_hash,
+        "claim_ceiling": good.claim_ceiling,
+    }
+    with pytest.raises(HandoffEvidenceError):
+        HandoffVerification(schema=schema, **fields)
+
+
+def test_target_revision_mismatch_is_stale():
+    envelope = _envelope()
+    current = HandoffIdentity(
+        repository="James3014/nexus-runtime",
+        source_revision="git-commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        runtime_identity="runtime-sha:0000000000000000",
+        target_revision="git-commit:" + "c" * 40,
+    )
+    result = verify_handoff_evidence(envelope, current_identity=current)
+    assert result.verdict is HandoffVerdict.STALE
+    assert "STALE:identity:target_revision" in result.reason_codes
+    matching = HandoffIdentity(
+        repository=current.repository,
+        source_revision=current.source_revision,
+        runtime_identity=current.runtime_identity,
+        target_revision="git-commit:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    assert (
+        verify_handoff_evidence(envelope, current_identity=matching).verdict is HandoffVerdict.VALID
+    )
+
+
+def test_missing_observed_runtime_identity_is_stale_against_current_runtime():
+    fixture = {
+        **RUNTIME_CHECKPOINT_FIXTURE,
+        "identity": {
+            k: v
+            for k, v in RUNTIME_CHECKPOINT_FIXTURE["identity"].items()
+            if k != "runtime_identity"
+        },
+    }
+    envelope = project_workflow_checkpoint_envelope(
+        fixture, producer_identity="agent:session-a", observed_identity="agent:session-a"
+    )
+    result = verify_handoff_evidence(envelope, current_identity=_current())
+    assert result.verdict is HandoffVerdict.STALE
+    assert "STALE:identity:runtime_identity" in result.reason_codes
+    # Envelope carries a runtime identity but current declares none: unchanged.
+    bare = HandoffIdentity(
+        repository=_current().repository, source_revision=_current().source_revision
+    )
+    assert (
+        verify_handoff_evidence(_envelope(), current_identity=bare).verdict is HandoffVerdict.VALID
+    )

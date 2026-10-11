@@ -109,7 +109,9 @@ def _map_http_status_to_exit_code(status_code: int, payload: dict[str, Any]) -> 
         return 2
     if status_code >= 500:
         return 7
-    return 0
+    if 200 <= status_code < 300:
+        return 0
+    return 1
 
 
 def _get_token(token_file: str | None) -> str:
@@ -583,11 +585,17 @@ def cmd_handoff_init(args: argparse.Namespace) -> int:
         if "=" in service:
             service_id, endpoint = service.split("=", 1)
             parsed = urllib.parse.urlparse(endpoint)
+            try:
+                port = parsed.port
+            except ValueError as exc:
+                raise LocalCheckError(
+                    "INVALID_HANDOFF_CONFIG", f"invalid service endpoint port: {exc}"
+                ) from exc
             services.append(
                 {
                     "service_id": service_id.strip(),
                     "endpoint": endpoint.strip(),
-                    "port": parsed.port,
+                    "port": port,
                 }
             )
         else:

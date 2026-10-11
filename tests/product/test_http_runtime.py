@@ -447,3 +447,35 @@ async def test_server_restart_and_port_reuse(isolated_env):
             assert resp.status_code == 404
 
         await handle.stop()
+
+
+def test_non_ascii_bearer_token_is_rejected_not_raised():
+    """Issue #164: compare_digest on str raises TypeError for non-ASCII input."""
+    token = generate_bearer_token()
+    assert validate_auth_header("Bearer " + "é" * len(token), token) is False
+    assert validate_auth_header("Bearer " + "\ud800" * len(token), token) is False
+    assert validate_auth_header(f"Bearer {token}", token) is True
+
+
+@pytest.mark.asyncio
+async def test_post_routes_return_400_for_invalid_utf8_and_deep_nesting(isolated_env):
+    """Issue #164: undecodable or pathologically nested bodies are 400, never 500."""
+    handle = await start_runtime(
+        host="127.0.0.1",
+        port=0,
+        token_path=isolated_env["token_path"],
+        db_path=isolated_env["db_path"],
+    )
+    headers = {
+        "Authorization": f"Bearer {handle.token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{handle.port}") as client:
+            for path in ("/v1/certifications", "/v1/changesets/verify", "/v1/receipts/verify"):
+                for body in (b"\xff\xfe", b"[" * 200000):
+                    resp = await client.post(path, content=body, headers=headers)
+                    assert resp.status_code == 400, (path, body[:4])
+                    assert resp.json()["code"] == "MALFORMED_REQUEST"
+    finally:
+        await handle.stop()

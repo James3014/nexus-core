@@ -31,6 +31,7 @@ from product.ledger import (
     LedgerAppendStatus,
     UnknownEffectError,
     append_or_replay,
+    compute_entry_hash,
     get_by_request_id,
     resolve_ledger_path,
     verify_chain,
@@ -41,6 +42,8 @@ from tests.product.test_trusted_evidence_serialization import (
     _accepted_tg1_tg2_fixture,
     _Verifier,
 )
+
+PINNED_NONEMPTY_HASH = "sha256:2229ef935f9f69293e2e147edbec9eecc17a356825a5850a1ed8be318edd8cff"
 
 
 @pytest.fixture
@@ -633,14 +636,16 @@ def test_external_head_anchor_verification(test_db_path: Path, sample_payloads):
     head_hash = res.entry.entry_hash
 
     # Valid anchor returns VERIFIED
-    expected_payload = canonical_json((
-        "nexus.ledger-head-anchor.v1",
-        "ledger-anchor",
-        LEDGER_SCHEMA_VERSION,
-        1,
-        1,
-        head_hash,
-    )).encode("utf-8")
+    expected_payload = canonical_json(
+        (
+            "nexus.ledger-head-anchor.v1",
+            "ledger-anchor",
+            LEDGER_SCHEMA_VERSION,
+            1,
+            1,
+            head_hash,
+        )
+    ).encode("utf-8")
 
     verifier_ok = MockAnchorVerifier(expected_payload=expected_payload, return_status="VERIFIED")
     verified_res = verify_external_anchor(
@@ -709,3 +714,158 @@ def test_multiprocess_concurrency_fencing(test_db_path: Path, sample_payloads):
     ver = verify_chain(db_path=test_db_path)
     assert ver.valid
     assert ver.entries_count == 1
+
+
+class _EmptyMetaSigner:
+    """Signer whose public metadata is empty (issue #163 part 1)."""
+
+    def __init__(self, public_metadata: dict[str, object] | None = None):
+        if public_metadata is not None:
+            self.public_metadata = public_metadata
+
+    def sign_entry(self, digest: bytes) -> tuple[str, str, dict[str, object], bytes]:
+        return "Ed25519", "key-empty", {}, b"sig"
+
+
+def _signed_request(payloads, signer, key: str) -> LedgerAppendRequest:
+    env_bytes, rec_bytes, snap_hash = payloads
+    return LedgerAppendRequest(
+        ledger_id="ledger-163",
+        request_id=f"req-{key}",
+        idempotency_key=f"idem-{key}",
+        expected_generation=0,
+        attempt=1,
+        canonical_request={"k": key},
+        identity_envelope_bytes=env_bytes,
+        completion_receipt_bytes=rec_bytes,
+        source_snapshot_hash=snap_hash,
+        signer=signer,
+    )
+
+
+def test_empty_signer_metadata_verifies_and_round_trips(test_db_path: Path, sample_payloads):
+    res = append_or_replay(
+        _signed_request(sample_payloads, _EmptyMetaSigner(), "empty"), db_path=test_db_path
+    )
+    assert res.status is LedgerAppendStatus.APPENDED
+    ver = verify_chain(db_path=test_db_path)
+    assert ver.valid, ver.error_reason
+    replay = append_or_replay(
+        _signed_request(sample_payloads, _EmptyMetaSigner(), "empty"), db_path=test_db_path
+    )
+    assert replay.status is LedgerAppendStatus.REPLAYED
+    assert replay.entry is not None and res.entry is not None
+    assert replay.entry.signer_public_metadata == res.entry.signer_public_metadata
+
+
+def test_empty_signer_metadata_with_nonempty_prelim_metadata_verifies(
+    test_db_path: Path, sample_payloads
+):
+    signer = _EmptyMetaSigner({"a": "b"})  # pre-signing metadata differs from returned {}
+    res = append_or_replay(_signed_request(sample_payloads, signer, "diff"), db_path=test_db_path)
+    assert res.status is LedgerAppendStatus.APPENDED
+    assert verify_chain(db_path=test_db_path).valid
+
+
+def test_legacy_row_with_empty_metadata_string_still_verifies(test_db_path: Path, sample_payloads):
+    """Rows written before the fix stored "{}" while hashing None; they must verify."""
+    res = append_or_replay(
+        _signed_request(sample_payloads, _EmptyMetaSigner(), "legacy"), db_path=test_db_path
+    )
+    assert res.status is LedgerAppendStatus.APPENDED
+    conn = sqlite3.connect(str(test_db_path))
+    try:
+        conn.execute("DROP TRIGGER prevent_ledger_update;")
+        conn.execute("UPDATE ledger_entries SET signer_public_metadata = '{}';")
+        conn.commit()
+    finally:
+        conn.close()
+    assert verify_chain(db_path=test_db_path).valid
+
+
+def test_nonempty_metadata_entry_hash_is_unchanged(test_db_path: Path, sample_payloads):
+    """Pin the entry-hash formula for a non-empty-metadata signer (hash computed pre-fix)."""
+    kwargs = dict(
+        schema="nexus.ledger-entry.v1",
+        ledger_id="L",
+        sequence=1,
+        committed_generation=1,
+        request_id="r",
+        idempotency_key="k",
+        request_hash="sha256:" + "1" * 64,
+        envelope_hash="sha256:" + "2" * 64,
+        receipt_hash="sha256:" + "3" * 64,
+        factual_disposition="CERTIFIED",
+        claim_ceiling=("c",),
+        source_snapshot_hash="sha256:" + "4" * 64,
+        previous_entry_hash="sha256:" + "0" * 64,
+    )
+    assert compute_entry_hash(**kwargs, signer_public_metadata={"k": "v"}) == PINNED_NONEMPTY_HASH
+    res = append_or_replay(
+        _signed_request(sample_payloads, MockSigner(), "nonempty"), db_path=test_db_path
+    )
+    entry = res.entry
+    assert entry is not None
+    recomputed = compute_entry_hash(
+        schema=entry.schema,
+        ledger_id=entry.ledger_id,
+        sequence=entry.sequence,
+        committed_generation=entry.committed_generation,
+        request_id=entry.request_id,
+        idempotency_key=entry.idempotency_key,
+        request_hash=entry.request_hash,
+        envelope_hash=entry.envelope_hash,
+        receipt_hash=entry.receipt_hash,
+        factual_disposition=entry.factual_disposition,
+        claim_ceiling=entry.claim_ceiling,
+        source_snapshot_hash=entry.source_snapshot_hash,
+        previous_entry_hash=entry.previous_entry_hash,
+        signer_public_metadata=MockSigner().public_metadata,
+    )
+    assert entry.entry_hash == recomputed
+    assert verify_chain(db_path=test_db_path).valid
+
+
+def _receipt_variant(rec_bytes: bytes, **overrides) -> bytes:
+    from product.evidence import _hash
+
+    body = {k: v for k, v in json.loads(rec_bytes).items() if k != "receipt_hash"}
+    body.update(overrides)
+    return json.dumps({**body, "receipt_hash": _hash(body)}, sort_keys=True).encode()
+
+
+@pytest.mark.parametrize(
+    "overrides,match",
+    [
+        ({"certification": {"disposition": "NOT_A_DISPOSITION"}}, "disposition"),
+        ({"claim_ceiling": []}, "claim_ceiling"),
+        ({"protocol_version": "bogus"}, "protocol_version"),
+        ({"implementation_schema": "bogus"}, "implementation_schema"),
+    ],
+)
+def test_append_rejects_semantically_invalid_receipt(
+    test_db_path: Path, sample_payloads, overrides, match
+):
+    env_bytes, rec_bytes, snap_hash = sample_payloads
+    forged = _receipt_variant(rec_bytes, **overrides)
+    req = LedgerAppendRequest(
+        "ledger-163", "req-f", "idem-f", 0, 1, {"a": 1}, env_bytes, forged, snap_hash
+    )
+    with pytest.raises(ValueError, match=f"malformed completion receipt bytes: .*{match}"):
+        append_or_replay(req, db_path=test_db_path)
+    assert not test_db_path.exists()
+
+
+def test_valid_receipt_still_appends_and_replays(test_db_path: Path, sample_payloads):
+    req = _signed_request(sample_payloads, None, "valid")
+    assert append_or_replay(req, db_path=test_db_path).status is LedgerAppendStatus.APPENDED
+    assert append_or_replay(req, db_path=test_db_path).status is LedgerAppendStatus.REPLAYED
+
+
+def test_ledger_receipt_constants_match_certification():
+    from product import ledger
+    from product.certification import CertificationDisposition
+    from product.certification.receipt import CLAIM_CEILING
+
+    assert ledger._RECEIPT_DISPOSITIONS == {item.value for item in CertificationDisposition}
+    assert ledger._RECEIPT_CLAIM_CEILING == list(CLAIM_CEILING)

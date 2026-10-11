@@ -162,9 +162,14 @@ The workflow must run on `pull_request_target`, and it skips pull requests from 
 
 Your config needs container isolation for GitHub-hosted runners. See [Config reference](#config-reference).
 
-### 5. Require the check
+### 5. Require the checks
 
-In your branch protection or ruleset, require the status check named **`Nexus Core issue completion`** (the `verify` job). It means:
+For `James3014/nexus-core`, the protected `main` branch currently requires both status checks:
+
+- `test` — the `test` job in `.github/workflows/ci.yml`; covers tests, static analysis and package verification.
+- `Nexus Core issue completion` — the `verify` job in `.github/workflows/nexus-core-issue-completion.yml`; verifies the signed, Issue-bound completion receipt.
+
+When adopting Nexus Core in another repository, require its own CI checks as well as the `Nexus Core issue completion` verifier check. The latter means:
 
 > A receipt signed by this repository's main-branch workflow identity describes exactly this head, this base config, this Issue, and says VERIFIED.
 

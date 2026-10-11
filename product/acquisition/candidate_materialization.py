@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -62,6 +63,9 @@ from product.protocol.generic_verification import (
 
 ACQUISITION_RECEIPT_KIND = "NEXUS_CORE_CANDIDATE_ACQUISITION_RECEIPT"
 ACQUISITION_RECEIPT_SCHEMA_VERSION = 1
+
+# Upper bound for any single local git invocation made by this module.
+GIT_COMMAND_TIMEOUT_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Public error type
@@ -211,9 +215,55 @@ def _run_git(
             capture_output=True,
             text=text,
             check=False,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise CandidateAcquisitionError("GIT_TIMEOUT", str(exc)) from exc
     except OSError as exc:
         raise CandidateAcquisitionError("GIT_UNAVAILABLE", str(exc)) from exc
+
+
+def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
+    if not hasattr(os, "killpg"):
+        proc.kill()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _run_verifier_command(
+    cmd: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a verifier in its own process group; kill the whole group on timeout.
+
+    ``subprocess.run(timeout=)`` only kills the direct child, so backgrounded
+    grandchildren would outlive the timeout and worktree removal.
+    """
+    with subprocess.Popen(
+        list(cmd),
+        cwd=cwd,
+        env=dict(env),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=hasattr(os, "killpg"),
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(proc)
+            proc.communicate()
+            raise
+        except BaseException:
+            _kill_process_group(proc)
+            raise
+        _kill_process_group(proc)  # reap any backgrounded grandchildren
+        return subprocess.CompletedProcess(list(cmd), proc.returncode, stdout, stderr)
 
 
 def _git_stdout(cwd: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
@@ -670,21 +720,58 @@ def _remove_temp_root(tmp_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worktree drift detection (F: physical scan, NOT HEAD^{tree})
+# Worktree drift detection (F: HEAD tree/commit plus physical scan)
 # ---------------------------------------------------------------------------
 
 
-def _check_physical_worktree_clean(wt_path: Path, candidate_tree: str) -> None:
-    """Fail closed if the physical worktree has drifted from candidate_tree.
+def _check_physical_worktree_clean(
+    wt_path: Path,
+    candidate_tree: str,
+    candidate_head: str | None = None,
+) -> None:
+    """Fail closed if the physical worktree has drifted from the candidate.
 
-    Uses ``git diff-index --cached HEAD`` to detect staged changes, and
-    ``git diff-files`` to detect unstaged tracked changes.  Untracked files
-    are explicitly removed to prevent contamination of subsequent verifiers
-    (they cannot alter the tree hash but could influence verifier behaviour).
+    Uses both a committed-state check and a physical scan, because neither
+    alone is sufficient:
 
-    Intentionally does NOT use ``HEAD^{tree}`` which only reads the committed
-    tree and cannot observe worktree file mutations.
+    * ``HEAD^{tree}`` must equal ``candidate_tree`` (and ``HEAD`` must equal
+      ``candidate_head`` when given).  This catches a verifier that edits a
+      file and runs ``git commit`` / ``reset`` / ``checkout``: HEAD moves, so
+      the HEAD-relative diffs below would be clean.
+    * ``git diff-index --cached HEAD`` detects staged changes and
+      ``git diff-files`` detects unstaged tracked changes.  This catches
+      uncommitted worktree mutations, which ``HEAD^{tree}`` cannot observe.
+
+    Untracked files are explicitly removed to prevent contamination of
+    subsequent verifiers (they cannot alter the tree hash but could influence
+    verifier behaviour).
     """
+    head_tree = _run_git(wt_path, "rev-parse", "--verify", "HEAD^{tree}")
+    if head_tree.returncode != 0:
+        raise CandidateAcquisitionError(
+            "CANDIDATE_TREE_DRIFT",
+            f"git rev-parse HEAD^{{tree}} failed: {head_tree.stderr.strip()}",
+        )
+    if head_tree.stdout.strip() != candidate_tree:
+        raise CandidateAcquisitionError(
+            "CANDIDATE_TREE_DRIFT",
+            f"worktree HEAD tree {head_tree.stdout.strip()} != "
+            f"candidate tree {candidate_tree}",
+        )
+    if candidate_head is not None:
+        head = _run_git(wt_path, "rev-parse", "--verify", "HEAD^{commit}")
+        if head.returncode != 0:
+            raise CandidateAcquisitionError(
+                "CANDIDATE_TREE_DRIFT",
+                f"git rev-parse HEAD failed: {head.stderr.strip()}",
+            )
+        if head.stdout.strip() != candidate_head:
+            raise CandidateAcquisitionError(
+                "CANDIDATE_TREE_DRIFT",
+                f"worktree HEAD {head.stdout.strip()} != "
+                f"candidate head {candidate_head}",
+            )
+
     # Check for tracked modifications (staged or unstaged).
     staged = _run_git(wt_path, "diff-index", "--cached", "--name-only", "HEAD")
     if staged.returncode != 0:
@@ -876,12 +963,14 @@ def acquire_and_verify_candidate(
             )
         _validate_receipt_material_crossbind(existing, request)
         core_resp = existing.get("core_response") or {}
-        verif = core_resp.get("verification") or {}
+        # Replay the stored outcome (written for every receipt kind, including
+        # FAILED_CLOSED receipts whose core_response carries only an error).
+        stored_outcome = existing.get("outcome") or {}
         return CandidateAcquisitionResult(
             request_id=request.acquisition_request_id,
             request_hash=request.request_hash,
-            status=verif.get("status", "UNKNOWN"),
-            reason_codes=list(verif.get("reason_codes", [])),
+            status=stored_outcome.get("status", "UNKNOWN"),
+            reason_codes=list(stored_outcome.get("reason_codes", [])),
             core_response=core_resp,
             receipt_path=request.receipt_directory
             / _receipt_path_for(existing),
@@ -971,13 +1060,11 @@ def acquire_and_verify_candidate(
                         existing_opts + " -p no:cacheprovider"
                     ).strip()
                 try:
-                    executed = subprocess.run(
+                    executed = _run_verifier_command(
                         cmd,
                         cwd=wt_path,
                         env=local_env,
-                        capture_output=True,
                         timeout=request.profile.timeout_seconds,
-                        check=False,
                     )
                 except subprocess.TimeoutExpired as exc:
                     raise CandidateAcquisitionError(
@@ -993,7 +1080,9 @@ def acquire_and_verify_candidate(
                 # F: Detect physical worktree drift after this verifier.
                 # Untracked artifacts are also cleaned so they cannot
                 # contaminate the next verifier's fresh materialisation.
-                _check_physical_worktree_clean(wt_path, request.candidate_tree)
+                _check_physical_worktree_clean(
+                    wt_path, request.candidate_tree, request.candidate_head
+                )
 
                 artifacts.append(
                     _verifier_artifact(

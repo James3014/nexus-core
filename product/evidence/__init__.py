@@ -3,9 +3,9 @@ import json
 import re
 from dataclasses import dataclass
 from enum import Enum
-from types import FunctionType
 
 from product.protocol import EVIDENCE_BUNDLE_SCHEMA
+from product.protocol._function_freeze import _freeze_function_globals
 
 
 def _make_canonical_json(dumps):
@@ -44,7 +44,7 @@ canonical_json = _make_canonical_json(json.dumps)
 
 
 def _make_hash(canonical, sha256):
-    def hash_value(value):
+    def hash_value(value: object) -> str:
         return "sha256:" + sha256(canonical(value).encode()).hexdigest()
 
     return hash_value
@@ -139,7 +139,7 @@ _HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SEALED_HASH_RE_FULLMATCH = _HASH_RE.fullmatch
 
 
-def _require_text(value, field):
+def _require_text(value: object, field: str) -> None:
     if type(value) is not str:
         raise TypeError(f"{field} must be a string")
     if not value or value != value.strip() or "\x00" in value:
@@ -718,6 +718,18 @@ def _make_subject_validator(
                 "ALLOW",
             }:
                 errors.append("MALFORMED:contract.deletion_policy")
+            subjects = c.get("expected_subjects")
+            try:
+                if type(subjects) is not tuple or any(
+                    type(subject) is not ExpectedEvidenceSubject for subject in subjects
+                ):
+                    raise TypeError("expected_subjects must be a tuple of subjects")
+                sorted(subject.canonical_value for subject in subjects)
+            except (TypeError, AttributeError):
+                errors.append("MALFORMED:contract.expected_subjects")
+            generation = c.get("universe_generation")
+            if type(generation) is not int or generation < 0:
+                errors.append("MALFORMED:contract.universe_generation")
         if cs is not None:
             for key in ("change_set_id", "source_revision", "target_revision"):
                 text(cs, key, "change_set")
@@ -732,7 +744,13 @@ def _make_subject_validator(
                     require_paths(deleted_paths, "deleted_paths")
                 except (TypeError, ValueError):
                     errors.append("MALFORMED:change_set.deleted_paths")
-            if type(deleted_paths) is not tuple or not set(deleted_paths).issubset(cs.get("paths", ())):
+            try:
+                deleted_ok = type(deleted_paths) is tuple and set(deleted_paths).issubset(
+                    cs.get("paths", ())
+                )
+            except TypeError:
+                deleted_ok = False
+            if not deleted_ok:
                 errors.append("MALFORMED:change_set.deleted_paths")
         if p is not None:
             text(p, "plan_id", "plan")
@@ -1057,21 +1075,6 @@ def load_evidence_bundle_envelope(
             for r in payload["observations"]
         ),
     )
-
-
-def _freeze_function_globals(function):
-    frozen = FunctionType(
-        function.__code__,
-        dict(function.__globals__),
-        function.__name__,
-        function.__defaults__,
-        function.__closure__,
-    )
-    frozen.__kwdefaults__ = (
-        dict(function.__kwdefaults__) if function.__kwdefaults__ is not None else None
-    )
-    frozen.__annotations__ = dict(function.__annotations__)
-    return frozen
 
 
 # Snapshot validator dependencies after all authoritative types and sealed

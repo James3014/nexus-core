@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 from weakref import WeakValueDictionary
 
 from product.evidence import (
@@ -366,7 +367,7 @@ def _make_reducer():
         registry[id(result)] = result
         return result
 
-    def is_reduced_result(result):
+    def is_reduced_result(result: object) -> bool:
         return isinstance(result, VerificationResult) and registry.get(id(result)) is result
 
     return reduce_verification, is_reduced_result
@@ -384,7 +385,9 @@ def _make_verify(
     observation_status,
     integrity_status,
 ):
-    def verify(contract, change_set, plan, evidence):
+    def verify(
+        contract: Any, change_set: object, plan: object, evidence: object
+    ) -> VerificationResult:
         if subject_validator(contract, change_set, plan, evidence):
             return reducer(integrity_status.MALFORMED)
         integrity = integrity_deriver(contract, change_set, plan, evidence)

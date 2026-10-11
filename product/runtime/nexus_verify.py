@@ -58,6 +58,12 @@ def read_current_pull_request_subject(
             "reason_code": "GITHUB_READ_PERMISSION_DENIED",
             "subject": None,
         }
+    except TimeoutError:
+        return {
+            "status": _STATUS_UNVERIFIABLE,
+            "reason_code": "GITHUB_READ_TIMEOUT",
+            "subject": None,
+        }
     except AcquisitionDriftError:
         return {
             "status": _STATUS_UNVERIFIABLE,

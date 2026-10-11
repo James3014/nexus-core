@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from math import isfinite
-from types import FunctionType
 
 from product.certification import CertificationDisposition, CertificationPolicy, certify_result
 from product.evidence import _hash, _require_hash
@@ -9,6 +8,7 @@ from product.protocol import (
     IMPLEMENTATION_SCHEMA,
     PUBLIC_PROTOCOL_VERSION,
 )
+from product.protocol._function_freeze import _freeze_function_globals
 from product.verification import VerificationResult, is_reduced_result
 
 _RECEIPT_HASH = _hash
@@ -467,21 +467,6 @@ def _validate_receipt_envelope(payload, expected_receipt):
         return tuple(dict.fromkeys(errors))
     except (TypeError, ValueError, RecursionError, OverflowError):
         return ("MALFORMED:payload",)
-
-
-def _freeze_function_globals(function):
-    frozen = FunctionType(
-        function.__code__,
-        dict(function.__globals__),
-        function.__name__,
-        function.__defaults__,
-        function.__closure__,
-    )
-    frozen.__kwdefaults__ = (
-        dict(function.__kwdefaults__) if function.__kwdefaults__ is not None else None
-    )
-    frozen.__annotations__ = dict(function.__annotations__)
-    return frozen
 
 
 # Freeze class invariant and envelope-validation dependencies. Receipt hashing

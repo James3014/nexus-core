@@ -102,7 +102,7 @@ def _handoff_receipt_dir(repo: Path) -> Path:
 
 
 def _toml_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=True)
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _toml_array(values: Sequence[str]) -> str:

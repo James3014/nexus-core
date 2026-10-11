@@ -414,6 +414,36 @@ def test_exact_request_readback_without_rerun(base_repo: Path, tmp_path: Path) -
     assert receipt_count_after == receipt_count_before
 
 
+def test_replay_failed_closed_receipt_returns_stored_outcome(
+    base_repo: Path, tmp_path: Path
+) -> None:
+    """Replay of a non-200 verify receipt matches the first call's outcome."""
+
+    def _rejecting_verify(_payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        return 422, {"error": {"code": "CORE_VERIFY_REJECTED"}}
+
+    req = _build_request(base_repo, receipt_dir=tmp_path / "receipts")
+    first = acquire_and_verify_candidate(req, _rejecting_verify)
+    assert first.status == "FAILED_CLOSED"
+    assert first.reason_codes == ["CORE_VERIFY_REJECTED"]
+
+    second = acquire_and_verify_candidate(req, _rejecting_verify)
+    assert second.replayed
+    assert second.status == first.status
+    assert second.reason_codes == first.reason_codes
+    assert second.core_response == first.core_response
+
+
+def test_replay_success_receipt_returns_stored_outcome(base_repo: Path, tmp_path: Path) -> None:
+    req = _build_request(base_repo, receipt_dir=tmp_path / "receipts")
+    first = _acquire(req)
+    second = _acquire(req)
+    assert second.replayed
+    assert second.status == first.status != "UNKNOWN"
+    assert second.reason_codes == first.reason_codes
+    assert second.core_response == first.core_response
+
+
 # ---------------------------------------------------------------------------
 # Test 5: Replay conflict – same hash, different request ID
 # ---------------------------------------------------------------------------
@@ -559,6 +589,48 @@ def test_verifier_that_mutates_tracked_file_fails_closed(
         f"Expected CANDIDATE_TREE_DRIFT but got {exc_info.value.reason_code!r}; "
         "the physical worktree drift was not detected"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 8b: verifier that moves worktree HEAD must be detected (#155).
+#          Committing leaves staged/unstaged diffs clean relative to the new
+#          HEAD, so only the HEAD tree / commit comparison catches it.
+# ---------------------------------------------------------------------------
+
+_GIT_ID = ["-c", "user.email=a@b.c", "-c", "user.name=x"]
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        # Edit a tracked file and commit it.
+        "echo 'VALUE = 666' > app.py && git "
+        + " ".join(_GIT_ID)
+        + " commit -qam evil",
+        # Roll HEAD back to the parent commit.
+        "git reset -q --hard HEAD~1",
+        # Check out a different commit.
+        "git checkout -q --detach HEAD~1",
+        # Same tree, different commit (amend changes only the message).
+        "git " + " ".join(_GIT_ID) + " commit -q --amend -m rewritten",
+    ],
+    ids=["commit-change", "reset-hard", "checkout-other", "amend-same-tree"],
+)
+def test_verifier_that_moves_head_fails_closed(
+    base_repo: Path, tmp_path: Path, script: str
+) -> None:
+    """Issue #155: a verifier that moves HEAD must cause CANDIDATE_TREE_DRIFT."""
+    req = _build_request(
+        base_repo,
+        receipt_dir=tmp_path / "receipts",
+        verifier_ids=["head-mover"],
+        verifier_commands=[["sh", "-c", f"{script}; exit 0"]],
+    )
+
+    with pytest.raises(CandidateAcquisitionError) as exc_info:
+        _acquire(req)
+
+    assert exc_info.value.reason_code == "CANDIDATE_TREE_DRIFT"
 
 
 # ---------------------------------------------------------------------------
@@ -1068,3 +1140,52 @@ def test_temp_root_cleanup_failure_fails_closed_without_receipt(
 
     assert exc_info.value.reason_code == "CLEANUP_FAILED"
     assert not receipt_dir.exists() or not any(receipt_dir.glob("*.json"))
+
+
+def test_verifier_timeout_kills_backgrounded_grandchildren(
+    base_repo: Path, tmp_path: Path
+) -> None:
+    """#167: the whole verifier process group dies on timeout."""
+    import time
+    import uuid
+
+    # Unique sleep argument so pgrep/pkill only ever match this test's processes.
+    marker = f"47.{uuid.uuid4().int % 10**12:012d}"
+    req = _build_request(
+        base_repo,
+        receipt_dir=tmp_path / "receipts",
+        override_profile=_make_profile(
+            ["test-verifier"],
+            [["sh", "-c", f"sleep {marker} & sleep {marker}"]],
+            timeout=1,
+        ),
+    )
+    survivors = ""
+    try:
+        with pytest.raises(CandidateAcquisitionError) as exc_info:
+            _acquire(req)
+        assert exc_info.value.reason_code == "VERIFIER_TIMEOUT"
+
+        deadline = time.monotonic() + 5.0
+        while True:
+            survivors = subprocess.run(
+                ["pgrep", "-af", f"sleep {marker}"], capture_output=True, text=True
+            ).stdout.strip()
+            if not survivors or time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        assert survivors == "", f"verifier descendants survived timeout:\n{survivors}"
+    finally:
+        subprocess.run(["pkill", "-9", "-f", f"sleep {marker}"], check=False)
+
+
+def test_git_timeout_is_structured_error(tmp_path: Path) -> None:
+    """#167: a hung git call surfaces as CandidateAcquisitionError."""
+    with patch.object(
+        candidate_module.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired(cmd="git", timeout=1),
+    ):
+        with pytest.raises(CandidateAcquisitionError) as exc_info:
+            candidate_module._run_git(tmp_path, "status")
+    assert exc_info.value.reason_code == "GIT_TIMEOUT"
