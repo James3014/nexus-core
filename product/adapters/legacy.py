@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Bounded compatibility adapter for legacy evidence values."""
 
 from dataclasses import dataclass
@@ -7,10 +8,10 @@ from product.evidence.ingestion import (
     IngestionResult,  # noqa: F401
     IntegrityStatus,  # noqa: F401
     TrustedIngestionContext,  # noqa: F401
-    _parse_time,  # noqa: F401
-    classify_ingestion_result,  # noqa: F401
+    _parse_time,  # noqa: F401  # pyright: ignore[reportPrivateUsage, reportUnusedImport]
+    classify_ingestion_result,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     ingest_evidence,  # noqa: F401
-    is_trusted_ingestion_result,  # noqa: F401
+    is_trusted_ingestion_result,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
 
 
