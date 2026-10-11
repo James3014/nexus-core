@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -62,6 +63,9 @@ from product.protocol.generic_verification import (
 
 ACQUISITION_RECEIPT_KIND = "NEXUS_CORE_CANDIDATE_ACQUISITION_RECEIPT"
 ACQUISITION_RECEIPT_SCHEMA_VERSION = 1
+
+# Upper bound for any single local git invocation made by this module.
+GIT_COMMAND_TIMEOUT_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Public error type
@@ -211,9 +215,55 @@ def _run_git(
             capture_output=True,
             text=text,
             check=False,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise CandidateAcquisitionError("GIT_TIMEOUT", str(exc)) from exc
     except OSError as exc:
         raise CandidateAcquisitionError("GIT_UNAVAILABLE", str(exc)) from exc
+
+
+def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
+    if not hasattr(os, "killpg"):
+        proc.kill()
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _run_verifier_command(
+    cmd: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a verifier in its own process group; kill the whole group on timeout.
+
+    ``subprocess.run(timeout=)`` only kills the direct child, so backgrounded
+    grandchildren would outlive the timeout and worktree removal.
+    """
+    with subprocess.Popen(
+        list(cmd),
+        cwd=cwd,
+        env=dict(env),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=hasattr(os, "killpg"),
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(proc)
+            proc.communicate()
+            raise
+        except BaseException:
+            _kill_process_group(proc)
+            raise
+        _kill_process_group(proc)  # reap any backgrounded grandchildren
+        return subprocess.CompletedProcess(list(cmd), proc.returncode, stdout, stderr)
 
 
 def _git_stdout(cwd: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
@@ -1010,13 +1060,11 @@ def acquire_and_verify_candidate(
                         existing_opts + " -p no:cacheprovider"
                     ).strip()
                 try:
-                    executed = subprocess.run(
+                    executed = _run_verifier_command(
                         cmd,
                         cwd=wt_path,
                         env=local_env,
-                        capture_output=True,
                         timeout=request.profile.timeout_seconds,
-                        check=False,
                     )
                 except subprocess.TimeoutExpired as exc:
                     raise CandidateAcquisitionError(
