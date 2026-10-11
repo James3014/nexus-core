@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Repository-aware adapter for the extracted TG8 protocol maturity kernel.
 
 The TG8 adjudication logic was extracted byte-for-byte from Nexus-new.  This
@@ -25,9 +26,9 @@ CANONICAL_REPOSITORY = "James3014/nexus-core"
 LEGACY_ACCEPTANCE_REPOSITORY = "James3014/Nexus-new"
 REPOSITORY_CUTOVER_AT = datetime.fromisoformat("2026-09-05T23:38:18+00:00")
 
-_ORIGINAL_VALIDATE_THRESHOLDS = _kernel._validate_thresholds
-_ORIGINAL_ISSUES = _kernel._issues
-_ORIGINAL_REPORT = _kernel._report
+_ORIGINAL_VALIDATE_THRESHOLDS = _kernel._validate_thresholds  # pyright: ignore[reportPrivateUsage]
+_ORIGINAL_ISSUES = _kernel._issues  # pyright: ignore[reportPrivateUsage]
+_ORIGINAL_REPORT = _kernel._report  # pyright: ignore[reportPrivateUsage]
 
 
 def _repository_for_observed_at(value: Any) -> str | None:
@@ -54,7 +55,7 @@ def _validate_thresholds(value: Mapping[str, Any], sha_file: Path) -> list[str]:
     if expected_repository is not None and value.get("repository") != expected_repository:
         errors.append("THRESHOLDS:REPOSITORY")
 
-    if not _kernel._hashok(value, "threshold_hash"):
+    if not _kernel._hashok(value, "threshold_hash"):  # pyright: ignore[reportPrivateUsage]
         errors.append("THRESHOLDS:HASH")
 
     try:
@@ -73,7 +74,7 @@ def _validate_thresholds(value: Mapping[str, Any], sha_file: Path) -> list[str]:
     normalized = dict(value)
     normalized["repository"] = LEGACY_ACCEPTANCE_REPOSITORY
     normalized.pop("threshold_hash", None)
-    normalized["threshold_hash"] = _kernel._digest(normalized)
+    normalized["threshold_hash"] = _kernel._digest(normalized)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
     kernel_errors = _ORIGINAL_VALIDATE_THRESHOLDS(normalized, sha_file)
     filtered = {
         "THRESHOLDS:REPOSITORY",
@@ -92,13 +93,13 @@ def _issues(value: Mapping[str, Any]) -> list[str]:
     expected_repository = _repository_for_observed_at(value.get("observed_at"))
     if expected_repository is not None and value.get("repository") != expected_repository:
         errors.append("OPEN_ISSUES:SCHEMA")
-    if not _kernel._hashok(value, "snapshot_hash"):
+    if not _kernel._hashok(value, "snapshot_hash"):  # pyright: ignore[reportPrivateUsage]
         errors.append("OPEN_ISSUES:HASH")
 
     normalized = dict(value)
     normalized["repository"] = LEGACY_ACCEPTANCE_REPOSITORY
     normalized.pop("snapshot_hash", None)
-    normalized["snapshot_hash"] = _kernel._digest(normalized)
+    normalized["snapshot_hash"] = _kernel._digest(normalized)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
     kernel_errors = _ORIGINAL_ISSUES(normalized)
     filtered = {"OPEN_ISSUES:SCHEMA", "OPEN_ISSUES:HASH"}
     errors.extend(error for error in kernel_errors if error not in filtered)
@@ -136,7 +137,7 @@ def _report(
     report = dict(report)
     report.pop("report_hash", None)
     report["repository"] = CANONICAL_REPOSITORY
-    report["report_hash"] = _kernel._digest(report)
+    report["report_hash"] = _kernel._digest(report)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
     path.write_text(
         _kernel.json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
@@ -147,9 +148,9 @@ def _report(
 # Patch only the repository-aware seams used by the extracted adjudicator.  All
 # substantive compatibility/conformance/upgrade/TG7/stable logic remains in the
 # byte-identical kernel blob.
-_kernel._validate_thresholds = _validate_thresholds
-_kernel._issues = _issues
-_kernel._report = _report
+_kernel._validate_thresholds = _validate_thresholds  # pyright: ignore[reportPrivateUsage]
+_kernel._issues = _issues  # pyright: ignore[reportPrivateUsage]
+_kernel._report = _report  # pyright: ignore[reportPrivateUsage]
 
 adjudicate = _kernel.adjudicate
 main = _kernel.main
