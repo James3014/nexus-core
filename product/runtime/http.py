@@ -142,7 +142,7 @@ def create_app(
                     status=413,
                 )
             payload = json.loads(body.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             return web.json_response(
                 make_http_error(
                     code="MALFORMED_REQUEST",
@@ -205,7 +205,7 @@ def create_app(
                     status=413,
                 )
             payload = json.loads(body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             return web.json_response(
                 make_http_error(
                     code="MALFORMED_REQUEST",
@@ -243,7 +243,7 @@ def create_app(
                     status=413,
                 )
             payload = json.loads(body.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             return web.json_response(
                 make_http_error(
                     code="MALFORMED_REQUEST",

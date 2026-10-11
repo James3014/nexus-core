@@ -361,13 +361,23 @@ def verify_handoff_evidence(
             integrity=IntegrityStatus.MALFORMED,
         )
     declared_body_hash = envelope.get("body_content_hash")
+    try:
+        recomputed_body_hash = _hash(body) if isinstance(body, dict) else None
+        recomputed_envelope_hash = _hash(
+            {k: v for k, v in envelope.items() if k != "envelope_hash"}
+        )
+    except (TypeError, ValueError, RecursionError):
+        return _result(
+            HandoffVerdict.INVALID,
+            ["INVALID:envelope_not_canonical"],
+            input_binding_hash=input_binding_hash,
+            integrity=IntegrityStatus.MALFORMED,
+        )
     if isinstance(body, dict):
-        recomputed_body_hash = _hash(body)
         if declared_body_hash != recomputed_body_hash:
             tamper_reasons.append("TAMPERED:body_content_hash")
     elif declared_body_hash not in (None, ""):
         tamper_reasons.append("TAMPERED:body_content_hash")
-    recomputed_envelope_hash = _hash({k: v for k, v in envelope.items() if k != "envelope_hash"})
     if envelope.get("envelope_hash") != recomputed_envelope_hash:
         tamper_reasons.append("TAMPERED:envelope_hash")
     if tamper_reasons:

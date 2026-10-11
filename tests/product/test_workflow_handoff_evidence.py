@@ -276,3 +276,15 @@ def test_no_second_orchestration_state_machine_is_exported():
     assert is_trustworthy(HandoffVerdict.INVALID) is False
     assert is_trustworthy(HandoffVerdict.VALID) is True
     assert identity_binding(_current()).to_dict() == _current().to_dict()
+
+
+def test_non_canonical_float_in_envelope_or_body_is_invalid_not_raised():
+    """Issue #164: canonical hashing rejects floats; the verdict must be INVALID."""
+    with_extra_key = dict(_envelope())
+    with_extra_key["extra"] = 1.5
+    body_float = dict(_envelope())
+    body_float["body"] = {**body_float["body"], "duration": 1.5}
+    for envelope in (with_extra_key, body_float):
+        result = verify_handoff_evidence(envelope, current_identity=_current())
+        assert result.verdict is HandoffVerdict.INVALID
+        assert result.integrity is IntegrityStatus.MALFORMED

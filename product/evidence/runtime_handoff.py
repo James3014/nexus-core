@@ -174,7 +174,10 @@ def validate_handoff_evidence_envelope(
     if not is_sha256_hash(receipt_hash):
         reasons.append("INVALID_RECEIPT_HASH")
     else:
-        expected_hash = runtime_handoff_receipt_hash(payload)
+        try:
+            expected_hash = runtime_handoff_receipt_hash(payload)
+        except (TypeError, ValueError, RecursionError):
+            return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
         if receipt_hash != expected_hash:
             reasons.append("RECEIPT_HASH_MISMATCH")
 
