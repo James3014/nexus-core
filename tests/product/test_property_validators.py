@@ -169,11 +169,6 @@ _HANDOFF_IDENTITY = HandoffIdentity(
     runtime_identity="runtime-sha:0000000000000000",
 )
 
-_NEW_ISSUE_DISPOSITION = (
-    "#176: certify_changeset raises TypeError 'unhashable type: list' when `disposition` "
-    "(or a verifier `status`) is a list (`x not in <set>` on unhashable JSON values)"
-)
-
 # ---------------------------------------------------- a. validator totality
 
 
@@ -255,9 +250,9 @@ def _check_changeset_total(payload):
         assert adapter.validate_changeset_certification(result.to_dict()) == ()
 
 
-def test_certify_changeset_is_total_excluding_known_gap():
+def test_certify_changeset_is_total():
     base = _changeset_payload()
-    check_all(lambda r: make_input(r, base, scalar_only=True), _check_changeset_total)
+    check_all(lambda r: make_input(r, base), _check_changeset_total)
 
 
 def test_certified_changeset_results_round_trip():
@@ -272,13 +267,12 @@ def test_certified_changeset_results_round_trip():
             assert adapter.validate_changeset_certification(result) == ()
             assert adapter.validate_changeset_certification(result.to_dict()) == ()
 
-    check_all(lambda r: mutate(r, base, scalar_only=True), check)
+    check_all(lambda r: mutate(r, base), check)
     # control: the unmutated fixture certifies and round-trips
     check(base)
     assert certified >= 1
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_DISPOSITION)
 def test_certify_changeset_list_disposition_known_gap():
     _check_changeset_total({**_changeset_payload(), "disposition": []})
 
