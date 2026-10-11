@@ -28,6 +28,7 @@ from product.acquisition.github import (
 )
 from product.certification.receipt import CLAIM_CEILING
 from product.evidence import _hash
+from product.execution.python_runner import PythonOCIRunner
 from product.protocol import (
     CERTIFICATION_RECEIPT_SCHEMA,
     IMPLEMENTATION_SCHEMA,
@@ -317,6 +318,20 @@ async def test_deterministic_pr635_tracer_full_journey(test_setup):
             assert v_data["status"] == "VALID"
 
             # 4. POST /v1/receipts/verify (FULL with original inputs) -> 200 VALID
+            # The deterministic executor lets the test recompute the exact evidence
+            # the service bound into the receipt.
+            runner = PythonOCIRunner()
+            runner_result = runner.run(
+                {
+                    "source_revision": gh_port.head_sha,
+                    "source_tree": gh_port.head_tree_sha,
+                    "contract_hash": _hash(req_payload["acceptance_contract"]),
+                    "plan_hash": _hash(req_payload["verification_plan"]),
+                    "environment_hash": runner.profile.hash,
+                    "attempt_id": f"att-{request_id}",
+                },
+                executor,
+            )
             change_set_dict = {
                 "change_set_id": "pr-635",
                 "source_revision": gh_port.base_sha,
@@ -329,8 +344,8 @@ async def test_deterministic_pr635_tracer_full_journey(test_setup):
                 "observations": [
                     {
                         "method": "pytest",
-                        "artifact_id": f"att-{request_id}",
-                        "artifact_hash": _hash("none"),
+                        "artifact_id": runner_result.attempt_ids[0],
+                        "artifact_hash": runner_result.artifact_hashes[0],
                         "status": "PASS",
                     }
                 ],
@@ -348,7 +363,22 @@ async def test_deterministic_pr635_tracer_full_journey(test_setup):
             v_full_resp = await client.post(
                 "/v1/receipts/verify", headers=headers, json=verify_full
             )
-            assert v_full_resp.status_code in {200, 422}
+            assert v_full_resp.status_code == 200
+            v_full = v_full_resp.json()
+            assert v_full["scope"] == "FULL_RECOMPUTED"
+            assert v_full["status"] == "VALID", v_full
+
+            # 4b. Substituted evidence must not verify (#205).
+            tampered = json.loads(json.dumps(verify_full))
+            tampered["original_inputs"]["evidence"]["observations"][0]["artifact_hash"] = _hash(
+                "substituted"
+            )
+            v_tampered_resp = await client.post(
+                "/v1/receipts/verify", headers=headers, json=tampered
+            )
+            assert v_tampered_resp.status_code == 200
+            assert v_tampered_resp.json()["status"] == "INVALID"
+            assert "RECOMPUTED_HASH_MISMATCH" in v_tampered_resp.json()["reason_codes"]
 
             # 5. Exact Replay -> 200 with stored receipt
             replay_resp = await client.post("/v1/certifications", headers=headers, json=req_payload)

@@ -1,14 +1,17 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from product.certification import CertificationPolicy, certify_result
 from product.certification.receipt import (
-    _SEALED_RECEIPT_CORE_HASH,
+    _SEALED_RECEIPT_CORE_HASH,  # pyright: ignore[reportPrivateUsage] -- sealed kernel wiring
     CLAIM_CEILING,
     CertificationResult,
     Receipt,
-    _create_certification_result,
-    _create_receipt,
-    _validate_receipt_envelope,
+    _create_certification_result,  # pyright: ignore[reportPrivateUsage] -- sealed kernel wiring
+    _create_receipt,  # pyright: ignore[reportPrivateUsage] -- sealed kernel wiring
+    _validate_receipt_envelope,  # pyright: ignore[reportPrivateUsage] -- sealed kernel wiring
 )
 from product.evidence import (
     AcceptanceContract,
@@ -32,8 +35,10 @@ class CertificationInput:
     signing_present: bool | None = None
 
 
-def _make_policy_factory(policy_type):
-    def create(accepted, authority_present, approval_present, signing_present):
+def _make_policy_factory(policy_type: type[Any]) -> Callable[[Any, Any, Any, Any], Any]:
+    def create(
+        accepted: Any, authority_present: Any, approval_present: Any, signing_present: Any
+    ) -> Any:
         policy = object.__new__(policy_type)
         for name, value in (
             ("accepted", accepted),
@@ -51,33 +56,37 @@ _SEALED_POLICY_FACTORY = _make_policy_factory(CertificationPolicy)
 
 
 def _make_kernel(
-    certification_input_type,
-    contract_type,
-    change_set_type,
-    plan_type,
-    evidence_type,
-    receipt_type,
-    result_type,
-    verify_fn,
-    subject_validator,
-    policy_type,
-    result_certifier,
-    receipt_envelope_validator,
-    contract_hash,
-    change_hash,
-    plan_hash,
-    evidence_hash,
-    policy_factory,
-    receipt_factory,
-    result_factory,
-):
-    def validate_input(value):
+    certification_input_type: type[Any],
+    contract_type: type[Any],
+    change_set_type: type[Any],
+    plan_type: type[Any],
+    evidence_type: type[Any],
+    receipt_type: type[Any],
+    result_type: type[Any],
+    verify_fn: Callable[..., Any],
+    subject_validator: Callable[..., Any],
+    policy_type: type[Any],
+    result_certifier: Callable[..., Any],
+    receipt_envelope_validator: Callable[..., Any],
+    contract_hash: Callable[..., Any],
+    change_hash: Callable[..., Any],
+    plan_hash: Callable[..., Any],
+    evidence_hash: Callable[..., Any],
+    policy_factory: Callable[..., Any],
+    receipt_factory: Callable[..., Any],
+    result_factory: Callable[..., Any],
+) -> tuple[
+    Callable[[object], CertificationResult],
+    Callable[[object, object], bool],
+    Callable[[dict[str, Any], object], tuple[str, ...]],
+]:
+    def validate_input(value: object) -> tuple[str, ...]:
         if type(value) is not certification_input_type:
             return ("MALFORMED:input",)
-        data = vars(value)
+        data: dict[str, Any] = vars(value)
         if set(data) != set(certification_input_type.__dataclass_fields__):
             return ("MALFORMED:input",)
-        errors = subject_validator(
+        errors: tuple[str, ...] = subject_validator(
             data["contract"], data["change_set"], data["plan"], data["evidence"]
         )
         if type(data["contract"]) is not contract_type:
@@ -102,7 +111,7 @@ def _make_kernel(
         errors = validate_input(value)
         if errors:
             raise ValueError("invalid_certification_input:" + ",".join(errors))
-        data = vars(value)
+        data: dict[str, Any] = vars(value)
         result = verify_fn(data["contract"], data["change_set"], data["plan"], data["evidence"])
         policy = policy_factory(
             data["policy_accepted"],
@@ -122,11 +131,11 @@ def _make_kernel(
         )
         return result_factory(result, disposition, receipt)
 
-    def validate_receipt(receipt, value):
+    def validate_receipt(receipt: object, value: object) -> bool:
         if type(receipt) is not receipt_type or validate_input(value):
             return False
         expected = certify(value).receipt
-        fields = vars(receipt)
+        fields: dict[str, Any] = vars(receipt)
         if set(fields) != set(receipt_type.__dataclass_fields__):
             return False
         claimed = fields["claimed_receipt_hash"]
@@ -134,7 +143,7 @@ def _make_kernel(
             claimed is None or claimed == _SEALED_RECEIPT_CORE_HASH(receipt)
         )
 
-    def validate_serialized_receipt(payload, value):
+    def validate_serialized_receipt(payload: dict[str, Any], value: object) -> tuple[str, ...]:
         if validate_input(value):
             return ("MALFORMED:input",)
         return receipt_envelope_validator(payload, certify(value).receipt)
@@ -155,10 +164,10 @@ certify, validate_receipt, validate_serialized_receipt = _make_kernel(
     CertificationPolicy,
     certify_result,
     _validate_receipt_envelope,
-    AcceptanceContract.hash.fget,
-    ChangeSet.hash.fget,
-    VerificationPlan.hash.fget,
-    EvidenceBundle.hash.fget,
+    AcceptanceContract.hash.fget,  # pyright: ignore[reportArgumentType] -- fget is non-None for property
+    ChangeSet.hash.fget,  # pyright: ignore[reportArgumentType] -- fget is non-None for property
+    VerificationPlan.hash.fget,  # pyright: ignore[reportArgumentType] -- fget is non-None for property
+    EvidenceBundle.hash.fget,  # pyright: ignore[reportArgumentType] -- fget is non-None for property
     _SEALED_POLICY_FACTORY,
     _create_receipt,
     _create_certification_result,
