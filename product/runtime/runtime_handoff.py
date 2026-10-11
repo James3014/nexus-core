@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Runtime facade for handoff evidence validation.
 
 This module exposes handoff evidence validation to carrying layers and client shells

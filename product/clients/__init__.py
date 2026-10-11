@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Nexus Core V1 Thin Clients package.
 
 Intentionally exports nothing eagerly: the Golden Path commands must import with

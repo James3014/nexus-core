@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 PUBLIC_PROTOCOL_VERSION = "0.1.0-experimental"
 IMPLEMENTATION_SCHEMA = "nexus.changeset_certification.v2"
 EVIDENCE_BUNDLE_SCHEMA = "nexus.evidence_bundle.v1-experimental"

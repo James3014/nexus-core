@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Credential-free acquisition ports for externally owned source systems.
 
 Acquisition is deliberately separate from :mod:`product.adapters`: ports are

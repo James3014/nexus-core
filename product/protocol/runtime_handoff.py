@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Transport-neutral public protocol for runtime and manual handoff readiness.
 
 This module defines wire schemas, canonical hashing rules, and claim ceilings
