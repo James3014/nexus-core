@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Canonical aiohttp loopback server implementation for Nexus Core HTTP runtime (TG-5)."""
 
 from __future__ import annotations
@@ -335,7 +336,7 @@ async def start_runtime(
     # If port=0 was passed, query the assigned port from server socket
     assigned_port = port
     if port == 0:
-        server = site._server
+        server = site._server  # pyright: ignore[reportPrivateUsage]
         sockets = getattr(server, "sockets", None)
         if server and sockets:
             assigned_port = sockets[0].getsockname()[1]
