@@ -826,6 +826,40 @@ def test_nonempty_metadata_entry_hash_is_unchanged(test_db_path: Path, sample_pa
     assert verify_chain(db_path=test_db_path).valid
 
 
+def test_signature_and_key_id_are_unauthenticated_metadata(test_db_path: Path, sample_payloads):
+    """Pin #163: signature/key id/algorithm are not covered by the entry hash (documented)."""
+    res = append_or_replay(
+        _signed_request(sample_payloads, MockSigner(), "unauth"), db_path=test_db_path
+    )
+    assert res.entry is not None
+    original = res.entry
+    head = verify_chain(db_path=test_db_path)
+    assert head.valid
+
+    conn = sqlite3.connect(str(test_db_path))
+    try:
+        conn.execute("DROP TRIGGER prevent_ledger_update;")
+        conn.execute(
+            "UPDATE ledger_entries SET signature = ?, signer_key_id = ?, signer_algorithm = ?;",
+            (b"forged-signature", "attacker-key", "None"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    fetched = get_by_request_id("req-unauth", db_path=test_db_path)
+    assert fetched.found and fetched.entry is not None
+    changed = fetched.entry
+    assert changed.signature == b"forged-signature"
+    assert changed.signer_key_id == "attacker-key"
+    assert changed.signature != original.signature
+    assert changed.entry_hash == original.entry_hash
+
+    after = verify_chain(db_path=test_db_path)
+    assert after.valid, after.error_reason
+    assert after.head_hash == head.head_hash
+
+
 def _receipt_variant(rec_bytes: bytes, **overrides) -> bytes:
     from product.evidence import _hash
 

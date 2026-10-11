@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -227,7 +228,7 @@ def _require_paths(values, field):
             raise ValueError(f"{field} must contain relative paths")
 
 
-def validate_normalized_paths(values, field="paths"):
+def validate_normalized_paths(values: Sequence[str], field: str = "paths") -> Sequence[str]:
     """Validate a normalized tuple of repository-relative POSIX paths."""
     _require_paths(values, field)
     return values
