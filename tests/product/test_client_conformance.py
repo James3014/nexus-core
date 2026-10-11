@@ -10,6 +10,7 @@ Tests:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import hashlib
 import json
@@ -26,6 +27,7 @@ import pytest
 from product.certification.receipt import CLAIM_CEILING
 from product.clients.cli import (
     DEFAULT_URL,
+    _map_http_status_to_exit_code,
     build_parser,
     cmd_receipt,
     cmd_status,
@@ -335,6 +337,36 @@ def test_client_exit_code_matrix(test_env, capsys):
     with pytest.raises(Exception) as exc_info:
         cmd_submit(args_bad)
     assert getattr(exc_info.value, "exit_code", 2) == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(200, 0), (201, 0), (202, 0), (400, 2), (401, 3), (403, 3), (404, 4), (409, 5)]
+    + [(413, 2), (415, 2), (500, 7), (502, 7)],
+)
+def test_http_status_exit_code_existing_mappings(status, expected):
+    assert _map_http_status_to_exit_code(status, {}) == expected
+
+
+@pytest.mark.parametrize("status", [302, 405, 408, 422, 429, 500, 503])
+def test_http_status_exit_code_non_2xx_is_nonzero(status):
+    assert _map_http_status_to_exit_code(status, {}) != 0
+
+
+@pytest.mark.parametrize("status", [302, 405, 408, 422, 429, 503])
+def test_status_and_receipt_nonzero_on_unmapped_http_status(status, monkeypatch):
+    import product.clients.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "_require_runtime", lambda: None)
+    monkeypatch.setattr(cli_module, "_get_token", lambda _token_file: "t")
+    monkeypatch.setattr(
+        cli_module,
+        "_make_http_request",
+        lambda **_kwargs: (status, {"error": {"code": "X"}}),
+    )
+    args = argparse.Namespace(token_file=None, url="http://x", request_id="r")
+    assert cmd_status(args) != 0
+    assert cmd_receipt(args) != 0
 
 
 CONTROLLER_PREDECESSOR = Path(
