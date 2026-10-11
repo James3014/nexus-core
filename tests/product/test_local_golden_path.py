@@ -2084,6 +2084,7 @@ def test_transition_stale_or_unknown_fails_closed_before_verifiers(
     assert raised.value.reason_code == reason
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["evidence_artifacts"] == []
+    assert receipt["inputs"]["material_transitions"] == [transition]
 
 
 def test_transition_with_untrusted_worktree_config_fails_closed(external_repo: Path):
