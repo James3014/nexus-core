@@ -860,3 +860,166 @@ def test_validate_handoff_envelope_rejects_float_duration_without_raising():
     payload["handoff_verifier"]["duration_ms"] = 1.5
     result = validate_handoff_evidence_envelope(payload)
     assert result == {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+
+
+def _valid_envelope() -> dict[str, Any]:
+    from product.protocol.runtime_handoff import (
+        RUNTIME_HANDOFF_RECEIPT_KIND,
+        RUNTIME_HANDOFF_SCHEMA_ID,
+        runtime_handoff_receipt_hash,
+    )
+
+    digest = "sha256:" + "1" * 64
+    tree = "git-tree:" + "2" * 40
+    payload: dict[str, Any] = {
+        "schema": RUNTIME_HANDOFF_SCHEMA_ID,
+        "receipt_kind": RUNTIME_HANDOFF_RECEIPT_KIND,
+        "claim_ceiling": HANDOFF_CLAIM_CEILING,
+        "non_claims": list(HANDOFF_NON_CLAIMS),
+        "handoff_id": "h",
+        "handoff_config_hash": digest,
+        "prerequisite_repository": {
+            "receipt_file": "r.json",
+            "receipt_hash": digest,
+            "target_tree": tree,
+        },
+        "source_binding": {
+            "target_commit": "git-commit:" + "3" * 40,
+            "target_tree": tree,
+            "worktree_clean": True,
+        },
+        "runtime_binding": {
+            "services": [
+                {
+                    "service_id": "web",
+                    "endpoint": "http://127.0.0.1:1",
+                    "reachable": True,
+                    "pid": 5,
+                    "listener_pid": 5,
+                    "process_start_time": "t",
+                    "identity_matches_endpoint": True,
+                    "process_identity_bound": True,
+                }
+            ]
+        },
+        "handoff_verifier": {
+            "command": ["t"],
+            "exit_code": 0,
+            "stdout_sha256": digest,
+            "stderr_sha256": digest,
+            "duration_ms": 3,
+        },
+        "verdict": "HANDOFF_READY",
+    }
+    payload["receipt_hash"] = runtime_handoff_receipt_hash(payload)
+    return payload
+
+
+def _reseal(payload: dict[str, Any]) -> dict[str, Any]:
+    from product.protocol.runtime_handoff import runtime_handoff_receipt_hash
+
+    payload["receipt_hash"] = runtime_handoff_receipt_hash(payload)
+    return payload
+
+
+def test_valid_envelope_control():
+    from product.evidence.runtime_handoff import validate_handoff_evidence_envelope
+
+    assert validate_handoff_evidence_envelope(_valid_envelope()) == {
+        "valid": True,
+        "reason_codes": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "reason"),
+    [
+        ("handoff_verifier", "stdout_sha256", "sha256:" + "1" * 64 + "\n", "INVALID_STDOUT_HASH"),
+        ("handoff_verifier", "stderr_sha256", "sha256:" + "1" * 64 + "\n", "INVALID_STDERR_HASH"),
+        ("source_binding", "target_commit", "git-commit:" + "3" * 40 + "\n", "INVALID_TARGET_COMMIT"),
+        ("source_binding", "target_tree", "git-tree:" + "2" * 40 + "\n", "INVALID_TARGET_TREE"),
+        (
+            "prerequisite_repository",
+            "target_tree",
+            "git-tree:" + "2" * 40 + "\n",
+            "PREREQUISITE_REPOSITORY_RECEIPT_INVALID",
+        ),
+    ],
+)
+def test_envelope_rejects_trailing_newline_identifiers(section, key, value, reason):
+    """Issue #160(a): `$` with re.match accepted a trailing newline."""
+    from product.evidence.runtime_handoff import validate_handoff_evidence_envelope
+
+    payload = _valid_envelope()
+    payload[section][key] = value
+    result = validate_handoff_evidence_envelope(_reseal(payload))
+    assert result["valid"] is False
+    assert reason in result["reason_codes"]
+
+
+def test_envelope_rejects_trailing_newline_receipt_and_config_hash():
+    from product.evidence.runtime_handoff import validate_handoff_evidence_envelope
+
+    payload = _valid_envelope()
+    payload["receipt_hash"] += "\n"
+    assert "INVALID_RECEIPT_HASH" in validate_handoff_evidence_envelope(payload)["reason_codes"]
+    payload = _valid_envelope()
+    payload["handoff_config_hash"] += "\n"
+    result = validate_handoff_evidence_envelope(_reseal(payload))
+    assert "HANDOFF_CONFIG_HASH_INVALID" in result["reason_codes"]
+
+
+@pytest.mark.parametrize("bad", [False, True])
+def test_envelope_rejects_boolean_exit_code(bad):
+    """Issue #160(b): JSON false must not pass as exit code 0."""
+    from product.evidence.runtime_handoff import validate_handoff_evidence_envelope
+
+    payload = _valid_envelope()
+    payload["handoff_verifier"]["exit_code"] = bad
+    result = validate_handoff_evidence_envelope(_reseal(payload))
+    assert result["valid"] is False
+    assert "HANDOFF_VERIFIER_FAILED" in result["reason_codes"]
+
+
+def test_envelope_rejects_prerequisite_tree_differing_from_source_tree():
+    """Issue #160(c): docs require the prerequisite target tree to equal the product tree."""
+    from product.evidence.runtime_handoff import validate_handoff_evidence_envelope
+
+    payload = _valid_envelope()
+    payload["prerequisite_repository"]["target_tree"] = "git-tree:" + "9" * 40
+    result = validate_handoff_evidence_envelope(_reseal(payload))
+    assert result["valid"] is False
+    assert "PREREQUISITE_REPOSITORY_RECEIPT_STALE" in result["reason_codes"]
+    payload["verdict"] = "HANDOFF_BLOCKED"
+    result = validate_handoff_evidence_envelope(_reseal(payload))
+    assert result["reason_codes"] == ["PREREQUISITE_REPOSITORY_RECEIPT_STALE"]
+
+
+def test_identifier_predicates_reject_trailing_newline_per_kind():
+    from product.protocol.runtime_handoff import (
+        is_git_commit_ref,
+        is_git_tree_ref,
+        is_sha256_hash,
+    )
+
+    assert is_sha256_hash("sha256:" + "a" * 64)
+    assert not is_sha256_hash("sha256:" + "a" * 64 + "\n")
+    assert is_git_commit_ref("git-commit:" + "a" * 40)
+    assert not is_git_commit_ref("git-commit:" + "a" * 40 + "\n")
+    assert is_git_tree_ref("git-tree:" + "a" * 40)
+    assert not is_git_tree_ref("git-tree:" + "a" * 40 + "\n")
+
+
+def test_local_config_identifier_patterns_reject_trailing_newline():
+    from product.clients.local_golden_path import (
+        _validate_env_passthrough,
+        _validate_isolation,
+    )
+
+    _validate_env_passthrough(["HOME"])
+    with pytest.raises(LocalCheckError):
+        _validate_env_passthrough(["HOME\n"])
+    digest = "reg/img@sha256:" + "a" * 64
+    _validate_isolation({"mode": "container", "image": digest})
+    with pytest.raises(LocalCheckError):
+        _validate_isolation({"mode": "container", "image": digest + "\n"})
