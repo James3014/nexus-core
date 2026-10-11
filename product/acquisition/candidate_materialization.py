@@ -913,12 +913,14 @@ def acquire_and_verify_candidate(
             )
         _validate_receipt_material_crossbind(existing, request)
         core_resp = existing.get("core_response") or {}
-        verif = core_resp.get("verification") or {}
+        # Replay the stored outcome (written for every receipt kind, including
+        # FAILED_CLOSED receipts whose core_response carries only an error).
+        stored_outcome = existing.get("outcome") or {}
         return CandidateAcquisitionResult(
             request_id=request.acquisition_request_id,
             request_hash=request.request_hash,
-            status=verif.get("status", "UNKNOWN"),
-            reason_codes=list(verif.get("reason_codes", [])),
+            status=stored_outcome.get("status", "UNKNOWN"),
+            reason_codes=list(stored_outcome.get("reason_codes", [])),
             core_response=core_resp,
             receipt_path=request.receipt_directory
             / _receipt_path_for(existing),
