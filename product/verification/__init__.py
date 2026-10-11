@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 from weakref import WeakValueDictionary
 
 from product.evidence import (
@@ -275,10 +275,12 @@ def _validate_reasons(reasons):
         raise ValueError("reasons must be unique and sorted")
 
 
-def _make_reducer():
-    registry = WeakValueDictionary()
+def _make_reducer() -> tuple[Callable[..., VerificationResult], Callable[[object], bool]]:
+    registry: WeakValueDictionary[int, VerificationResult] = WeakValueDictionary()
 
-    def reduce_verification(condition, observations=(), reasons=(), coverage=None):
+    def reduce_verification(
+        condition: Any, observations: Any = (), reasons: Any = (), coverage: Any = None
+    ) -> VerificationResult:
         if not isinstance(condition, IntegrityStatus):
             raise TypeError("condition must be IntegrityStatus")
         _validate_reasons(reasons)
