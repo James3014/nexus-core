@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Nexus Core V1 GitHub Action Wrapper.
 
 Supports the legacy loopback HTTP request mode and a repository Golden Path mode.
@@ -16,9 +17,13 @@ import sys
 import tempfile
 import urllib.parse
 from pathlib import Path
-from typing import Any, Mapping, NoReturn
+from typing import Any, Mapping, NoReturn, cast
 
-from product.clients.cli import _get_token, _make_http_request, _map_http_status_to_exit_code
+from product.clients.cli import (
+    _get_token,  # pyright: ignore[reportPrivateUsage]
+    _make_http_request,  # pyright: ignore[reportPrivateUsage]
+    _map_http_status_to_exit_code,  # pyright: ignore[reportPrivateUsage]
+)
 from product.clients.local_golden_path import LocalCheckError, check_repository
 from product.runtime.schemas import (
     validate_certification_request,
@@ -93,7 +98,7 @@ def _nested_repository_identity(payload: Mapping[str, Any], *keys: str) -> str |
     for key in keys:
         if not isinstance(value, Mapping):
             return None
-        value = value.get(key)
+        value = cast("Mapping[str, Any]", value).get(key)  # pyright: ignore[reportUnnecessaryCast]
     return _repository_identity(value)
 
 
@@ -121,6 +126,7 @@ def validate_repository_check_environment() -> dict[str, str]:
         _reject_repository_context(f"event payload is unavailable or malformed: {exc}")
     if not isinstance(event, Mapping):
         _reject_repository_context("event payload must be an object")
+    event = cast("Mapping[str, Any]", event)
 
     payload_repository = _nested_repository_identity(event, "repository", "full_name")
     if payload_repository != repository:
@@ -134,9 +140,19 @@ def validate_repository_check_environment() -> dict[str, str]:
             event, "pull_request", "head", "repo", "full_name"
         )
         pull_request = event.get("pull_request")
-        head = pull_request.get("head") if isinstance(pull_request, Mapping) else None
-        head_repo = head.get("repo") if isinstance(head, Mapping) else None
-        fork = head_repo.get("fork") if isinstance(head_repo, Mapping) else None
+        head = (
+            cast("Mapping[str, Any]", pull_request).get("head")
+            if isinstance(pull_request, Mapping)
+            else None
+        )
+        head_repo = (
+            cast("Mapping[str, Any]", head).get("repo") if isinstance(head, Mapping) else None
+        )
+        fork = (
+            cast("Mapping[str, Any]", head_repo).get("fork")
+            if isinstance(head_repo, Mapping)
+            else None
+        )
         if base_repository != repository or head_repository != repository or fork is not False:
             _reject_repository_context("fork or ambiguous pull request repository identity")
 

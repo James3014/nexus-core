@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Runtime facade for candidate acquisition (nexus-core-issue1312).
 
 This module is the **only** production wiring point allowed to import from both:
@@ -24,7 +25,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from product.acquisition.candidate_materialization import (
     CandidateAcquisitionError,
@@ -130,13 +131,13 @@ def _require_nonempty_list_of_nonempty_strings(value: Any, field: str) -> list[s
             "PARSE_ERROR",
             f"{field} must be a non-empty list",
         )
-    for i, item in enumerate(value):
+    for i, item in enumerate(cast("list[Any]", value)):
         if not isinstance(item, str) or not item.strip():
             raise CandidateAcquisitionError(
                 "PARSE_ERROR",
                 f"{field}[{i}] must be a non-empty string",
             )
-    return [str(s) for s in value]
+    return [str(s) for s in cast("list[Any]", value)]
 
 
 def parse_acquisition_request(doc: Any) -> CandidateAcquisitionRequest:
@@ -153,6 +154,7 @@ def parse_acquisition_request(doc: Any) -> CandidateAcquisitionRequest:
         raise CandidateAcquisitionError(
             "PARSE_ERROR", "request document must be a JSON object"
         )
+    doc = cast("dict[str, Any]", doc)
 
     # Reject unknown top-level keys.
     unknown = set(doc.keys()) - _TOP_LEVEL_KEYS
@@ -196,6 +198,7 @@ def parse_acquisition_request(doc: Any) -> CandidateAcquisitionRequest:
             "PARSE_ERROR",
             "acceptance_contract must be a JSON object",
         )
+    acceptance_contract = cast("dict[str, Any]", acceptance_contract)
 
     repo_path_str = _require_str(doc["repo_path"], "repo_path")
     receipt_directory_str = _require_str(doc["receipt_directory"], "receipt_directory")
@@ -207,6 +210,7 @@ def parse_acquisition_request(doc: Any) -> CandidateAcquisitionRequest:
             "PARSE_ERROR",
             "verification_profile must be a JSON object",
         )
+    profile_doc = cast("dict[str, Any]", profile_doc)
     unknown_profile = set(profile_doc.keys()) - _PROFILE_KEYS
     if unknown_profile:
         raise CandidateAcquisitionError(
@@ -240,6 +244,7 @@ def parse_acquisition_request(doc: Any) -> CandidateAcquisitionRequest:
             "PARSE_ERROR",
             "verification_profile.verifier_commands must be a non-empty list",
         )
+    verifier_commands_raw = cast("list[Any]", verifier_commands_raw)
     verifier_commands: list[tuple[str, ...]] = []
     for i, cmd in enumerate(verifier_commands_raw):
         if not isinstance(cmd, list) or not cmd:
@@ -248,7 +253,7 @@ def parse_acquisition_request(doc: Any) -> CandidateAcquisitionRequest:
                 f"verification_profile.verifier_commands[{i}] must be a non-empty list (argv)",
             )
         argv: list[str] = []
-        for j, arg in enumerate(cmd):
+        for j, arg in enumerate(cast("list[Any]", cmd)):
             if not isinstance(arg, str) or not arg:
                 raise CandidateAcquisitionError(
                     "PARSE_ERROR",

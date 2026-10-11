@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Read-only ChatGPT/Codex-facing evidence verification tool contract.
 
 This module is a thin carrying layer. It acquires the current GitHub pull-request
@@ -10,7 +11,7 @@ authority.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence, cast
 
 from product.clients.local_golden_path import validate_verification_receipt_payload
 from product.runtime.nexus_verify import (
@@ -186,7 +187,12 @@ def _validate_arguments(arguments: Mapping[str, Any]) -> tuple[str, str, int, di
     receipt = values.get("receipt")
     if receipt is not None and not isinstance(receipt, Mapping):
         raise ValueError("receipt must be an object or null")
-    return owner, repository, pr_number, dict(receipt) if receipt is not None else None
+    return (
+        owner,
+        repository,
+        pr_number,
+        dict(cast("Mapping[str, Any]", receipt)) if receipt is not None else None,
+    )
 
 
 def _public_subject(subject: Mapping[str, Any]) -> dict[str, Any]:
@@ -245,7 +251,7 @@ _SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 def _normalize_subject_paths(value: object, field: str) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field} must be a path list")
-    result = tuple(str(item) for item in value)
+    result = tuple(str(item) for item in cast("Sequence[object]", value))
     if len(result) != len(set(result)):
         raise ValueError(f"{field} contains duplicates")
     for path in result:
@@ -341,6 +347,7 @@ def evaluate_code_change_evidence_subject(
     if not isinstance(receipt, Mapping):
         raise ValueError("receipt must be an object or null")
     receipt = dict(receipt)
+    validation: dict[str, Any]
     try:
         validation = validate_verification_receipt_payload(receipt)
     except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
@@ -376,7 +383,7 @@ def evaluate_code_change_evidence_subject(
     config_source = receipt.get("config_source")
     if not (
         isinstance(config_source, Mapping)
-        and config_source.get("kind") == "base-ref"
+        and config_source.get("kind") == "base-ref"  # pyright: ignore[reportUnknownMemberType]
     ):
         # The unkeyed receipt hash proves self-consistency only; evidence produced
         # from a worktree/candidate-controlled config is not trusted evidence.
@@ -406,7 +413,10 @@ def evaluate_code_change_evidence_subject(
             reason_codes=("RECEIPT_SOURCE_DOES_NOT_MATCH_CURRENT_PR",),
         )
 
-    if config_source.get("commit") != acquired_subject["current_base_sha"]:
+    if (
+        config_source.get("commit")  # pyright: ignore[reportUnknownMemberType]
+        != acquired_subject["current_base_sha"]
+    ):
         return _result(
             subject=public_subject,
             receipt_integrity="VALID",
@@ -471,6 +481,7 @@ def verify_code_change_evidence(
             core_verification = "NOT_AVAILABLE"
             receipt_reasons: tuple[str, ...] = ()
         else:
+            validation: dict[str, Any]
             try:
                 validation = validate_verification_receipt_payload(receipt)
             except (KeyError, TypeError, ValueError, RecursionError, OverflowError):

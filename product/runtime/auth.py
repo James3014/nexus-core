@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Secure loopback bearer token authentication for Nexus Core HTTP runtime (TG-5)."""
 
 from __future__ import annotations
