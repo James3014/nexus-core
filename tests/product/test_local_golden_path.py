@@ -18,6 +18,7 @@ from product.clients.local_golden_path import (
     evaluate_receipt_expectations,
     init_repository,
     validate_verification_receipt,
+    validate_verification_receipt_payload,
 )
 from product.protocol.generic_verification import (
     acceptance_contract_hash,
@@ -2183,3 +2184,43 @@ def test_config_base_ref_option_shaped_is_rejected(tmp_path: Path) -> None:
             verifier_command=["true"],
         )
     assert "INVALID_CONFIG" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("product",), 0.0),
+        (("inputs", "config", "version"), 1.5),
+        (("inputs", "request", "change_set"), {"x": float("nan")}),
+        (("config_source", "kind"), []),
+        (("config_source", "kind"), {}),
+        (("config_source", "kind"), [["x"]]),
+        (("config_source", "config_drift"), 0.0),
+    ],
+)
+def test_receipt_malformed_untrusted_values_are_rejected_not_raised(
+    valid_receipt: dict[str, Any], path: tuple[str, ...], value: Any
+) -> None:
+    valid_receipt.setdefault("config_source", {"kind": "worktree", "config_drift": False})
+    target = valid_receipt
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    validation = validate_verification_receipt_payload(valid_receipt)
+
+    assert validation["valid"] is False
+    assert validation["reason_codes"]
+
+
+def test_receipt_deeply_nested_value_is_rejected_not_raised(
+    valid_receipt: dict[str, Any],
+) -> None:
+    nested: Any = []
+    for _ in range(100_000):
+        nested = [nested]
+    valid_receipt["product"] = nested
+
+    validation = validate_verification_receipt_payload(valid_receipt)
+
+    assert validation == {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
