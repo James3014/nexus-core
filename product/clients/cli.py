@@ -109,7 +109,9 @@ def _map_http_status_to_exit_code(status_code: int, payload: dict[str, Any]) -> 
         return 2
     if status_code >= 500:
         return 7
-    return 0
+    if 200 <= status_code < 300:
+        return 0
+    return 1
 
 
 def _get_token(token_file: str | None) -> str:
