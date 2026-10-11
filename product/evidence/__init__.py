@@ -1,18 +1,23 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 import hashlib
 import json
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, cast
 
 from product.protocol import EVIDENCE_BUNDLE_SCHEMA
-from product.protocol._function_freeze import _freeze_function_globals
+from product.protocol._function_freeze import (
+    _freeze_function_globals,  # pyright: ignore[reportPrivateUsage]  # sealed-closure helper
+)
 
 
-def _make_canonical_json(dumps):
-    def canonical_json(value):
-        active = set()
+def _make_canonical_json(dumps: Callable[..., Any]) -> Callable[[object], Any]:
+    def canonical_json(value: object) -> Any:
+        active: set[int] = set()
 
-        def clean(v):
+        def clean(v: Any) -> Any:
             if v is None or type(v) in (str, int, bool):
                 return v
             if type(v) in (tuple, list):
@@ -24,6 +29,7 @@ def _make_canonical_json(dumps):
                 active.remove(marker)
                 return result
             if type(v) is dict:
+                v = cast("dict[str, Any]", v)
                 marker = id(v)
                 if marker in active:
                     raise ValueError("cyclic canonical value")
@@ -43,7 +49,9 @@ def _make_canonical_json(dumps):
 canonical_json = _make_canonical_json(json.dumps)
 
 
-def _make_hash(canonical, sha256):
+def _make_hash(
+    canonical: Callable[[object], Any], sha256: Callable[..., Any]
+) -> Callable[[object], str]:
     def hash_value(value: object) -> str:
         return "sha256:" + sha256(canonical(value).encode()).hexdigest()
 
@@ -53,8 +61,10 @@ def _make_hash(canonical, sha256):
 _hash = _make_hash(canonical_json, hashlib.sha256)
 
 
-def _make_identity_property(hash_fn, value_fn):
-    def identity(self):
+def _make_identity_property(
+    hash_fn: Callable[[Any], str], value_fn: Callable[[Any], object]
+) -> property:
+    def identity(self: Any) -> str:
         return hash_fn(value_fn(self))
 
     return property(identity)
@@ -107,7 +117,7 @@ class ExpectedEvidenceSubject:
     requirement_mode: RequirementMode
     applicability: Applicability = Applicability.APPLICABLE
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_text(self.logical_subject_id, "logical_subject_id")
         _require_text(self.evidence_kind, "evidence_kind")
         if type(self.requirement_mode) is not RequirementMode:
@@ -126,7 +136,7 @@ class ExpectedEvidenceSubject:
             raise ValueError("NOT_APPLICABLE subjects require NOT_APPLICABLE applicability")
 
     @property
-    def canonical_value(self):
+    def canonical_value(self) -> tuple[str, str, str, str]:
         return (
             self.logical_subject_id,
             self.evidence_kind,
@@ -146,8 +156,8 @@ def _require_text(value: object, field: str) -> None:
         raise ValueError(f"{field} must be non-empty and normalized")
 
 
-def _make_require_hash(fullmatch):
-    def require_hash(value, field):
+def _make_require_hash(fullmatch: Callable[[str], object]) -> Callable[[object, str], None]:
+    def require_hash(value: object, field: str) -> None:
         if type(value) is not str:
             raise TypeError(f"{field} must be a string")
         if not value or value != value.strip() or "\x00" in value:
@@ -161,8 +171,10 @@ def _make_require_hash(fullmatch):
 _require_hash = _make_require_hash(_SEALED_HASH_RE_FULLMATCH)
 
 
-def _make_sealed_require_hash(require_text, fullmatch):
-    def require_hash(value, field):
+def _make_sealed_require_hash(
+    require_text: Callable[[object, str], None], fullmatch: Callable[[str], object]
+) -> Callable[[Any, str], None]:
+    def require_hash(value: Any, field: str) -> None:
         require_text(value, field)
         if fullmatch(value) is None:
             raise ValueError(f"{field} must be sha256:<64 lowercase hex>")
@@ -173,10 +185,13 @@ def _make_sealed_require_hash(require_text, fullmatch):
 _VALIDATOR_REQUIRE_HASH = _make_sealed_require_hash(_require_text, _SEALED_HASH_RE_FULLMATCH)
 
 
-def _make_sealed_require_ids(require_text):
-    def require_ids(values, field):
+def _make_sealed_require_ids(
+    require_text: Callable[[object, str], None],
+) -> Callable[[Any, str], None]:
+    def require_ids(values: Any, field: str) -> None:
         if type(values) is not tuple:
             raise TypeError(f"{field} must be a tuple")
+        values = cast("tuple[Any, ...]", values)
         for value in values:
             require_text(value, field)
         if len(values) != len(set(values)):
@@ -187,8 +202,10 @@ def _make_sealed_require_ids(require_text):
     return require_ids
 
 
-def _make_sealed_require_paths(require_ids):
-    def require_paths(values, field):
+def _make_sealed_require_paths(
+    require_ids: Callable[[Any, str], None],
+) -> Callable[[Any, str], None]:
+    def require_paths(values: Any, field: str) -> None:
         require_ids(values, field)
         for value in values:
             if (
@@ -205,9 +222,10 @@ _VALIDATOR_REQUIRE_IDS = _make_sealed_require_ids(_require_text)
 _VALIDATOR_REQUIRE_PATHS = _make_sealed_require_paths(_VALIDATOR_REQUIRE_IDS)
 
 
-def _require_ids(values, field):
+def _require_ids(values: Any, field: str) -> None:
     if not isinstance(values, tuple):
         raise TypeError(f"{field} must be a tuple")
+    values = cast("tuple[Any, ...]", values)
     for value in values:
         _require_text(value, field)
     if len(values) != len(set(values)):
@@ -216,7 +234,7 @@ def _require_ids(values, field):
         raise ValueError(f"{field} must be non-empty")
 
 
-def _require_paths(values, field):
+def _require_paths(values: Any, field: str) -> None:
     _require_ids(values, field)
     for value in values:
         if (
@@ -227,7 +245,7 @@ def _require_paths(values, field):
             raise ValueError(f"{field} must contain relative paths")
 
 
-def validate_normalized_paths(values, field="paths"):
+def validate_normalized_paths(values: Sequence[str], field: str = "paths") -> Sequence[str]:
     """Validate a normalized tuple of repository-relative POSIX paths."""
     _require_paths(values, field)
     return values
@@ -243,7 +261,7 @@ class AcceptanceContract:
     expected_subjects: tuple[ExpectedEvidenceSubject, ...] = ()
     universe_generation: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_text(self.contract_id, "contract_id")
         _require_hash(self.requirements_hash, "requirements_hash")
         _require_ids(self.required_verifier_ids, "required_verifier_ids")
@@ -279,7 +297,7 @@ class AcceptanceContract:
         )
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         value = (
             self.contract_id,
             self.requirements_hash,
@@ -304,7 +322,7 @@ class ChangeSet:
     paths: tuple[str, ...]
     deleted_paths: tuple[str, ...] = ()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_text(self.change_set_id, "change_set_id")
         _require_text(self.source_revision, "source_revision")
         _require_text(self.target_revision, "target_revision")
@@ -326,7 +344,7 @@ class ChangeSet:
             raise ValueError("deleted_paths must be a subset of paths")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         canonical = (
             self.change_set_id,
             self.source_revision,
@@ -346,14 +364,14 @@ class VerificationPlan:
     change_set_hash: str
     required_verifier_ids: tuple[str, ...]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_text(self.plan_id, "plan_id")
         _require_hash(self.acceptance_contract_hash, "acceptance_contract_hash")
         _require_hash(self.change_set_hash, "change_set_hash")
         _require_ids(self.required_verifier_ids, "required_verifier_ids")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _VP_HASH(
             (
                 self.plan_id,
@@ -373,7 +391,7 @@ class Observation:
     logical_subject_id: str | None = None
     evidence_kind: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_text(self.verifier_id, "verifier_id")
         _require_text(self.artifact_id, "artifact_id")
         _require_hash(self.artifact_hash, "artifact_hash")
@@ -392,7 +410,7 @@ class Observation:
         return (self.logical_subject_id, self.evidence_kind)
 
 
-def _observation_row(observation):
+def _observation_row(observation: Any) -> list[Any]:
     """Canonical row for an observation.
 
     Logical identity participates only when present, so legacy observation rows
@@ -419,7 +437,7 @@ class EvidenceBundle:
     observations: tuple[Observation, ...]
     claimed_bundle_hash: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_text(self.bundle_id, "bundle_id")
         _require_hash(self.acceptance_contract_hash, "acceptance_contract_hash")
         _require_hash(self.change_set_hash, "change_set_hash")
@@ -432,7 +450,7 @@ class EvidenceBundle:
             _require_hash(self.claimed_bundle_hash, "claimed_bundle_hash")
 
     @property
-    def canonical_value(self):
+    def canonical_value(self) -> tuple[Any, ...]:
         return (
             self.bundle_id,
             self.acceptance_contract_hash,
@@ -447,15 +465,17 @@ class EvidenceBundle:
         )
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _EB_HASH(self.canonical_value)
 
     @property
-    def envelope_hash(self):
+    def envelope_hash(self) -> str:
         """Hash of the native serialized envelope (distinct from ``hash``)."""
         return self.to_dict()["bundle_hash"]
 
-    def integrity(self, contract, change_set, plan):
+    def integrity(
+        self, contract: AcceptanceContract, change_set: ChangeSet, plan: VerificationPlan
+    ) -> IntegrityStatus:
         if self.claimed_bundle_hash is not None and self.claimed_bundle_hash != self.hash:
             return IntegrityStatus.TAMPERED
         if self.acceptance_contract_hash != contract.hash:
@@ -481,14 +501,14 @@ class EvidenceBundle:
             return IntegrityStatus.DUPLICATE
         return IntegrityStatus.VALID
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         if self.claimed_bundle_hash is not None and self.claimed_bundle_hash != self.hash:
             raise ValueError("claimed_bundle_hash does not match computed hash")
-        observations = []
+        observations: list[dict[str, str]] = []
         for observation in sorted(
             self.observations, key=lambda x: (x.verifier_id, x.artifact_id)
         ):
-            row = {
+            row: dict[str, str] = {
                 "verifier_id": observation.verifier_id,
                 "artifact_id": observation.artifact_id,
                 "artifact_hash": observation.artifact_hash,
@@ -501,7 +521,7 @@ class EvidenceBundle:
                 row["logical_subject_id"] = observation.logical_subject_id
                 row["evidence_kind"] = observation.evidence_kind
             observations.append(row)
-        body = {
+        body: dict[str, Any] = {
             "evidence_bundle_schema": EVIDENCE_BUNDLE_SCHEMA,
             "bundle_id": self.bundle_id,
             "acceptance_contract_hash": self.acceptance_contract_hash,
@@ -522,12 +542,12 @@ _SEALED_EB_ENVELOPE_HASH = _EB_ENVELOPE_HASH
 _VALIDATOR_EB_ENVELOPE_HASH = _SEALED_EB_ENVELOPE_HASH
 
 
-def _make_bundle_core_serializer():
-    def serialize(bundle):
+def _make_bundle_core_serializer() -> Callable[[object], tuple[Any, ...]]:
+    def serialize(bundle: object) -> tuple[Any, ...]:
         observations = tuple(
             tuple(_observation_row(o))
             for o in sorted(
-                vars(bundle)["observations"],
+                cast("list[object]", vars(bundle)["observations"]),
                 key=lambda x: (vars(x)["verifier_id"], vars(x)["artifact_id"]),
             )
         )
@@ -545,8 +565,10 @@ def _make_bundle_core_serializer():
 _SEALED_BUNDLE_CORE_SERIALIZER = _make_bundle_core_serializer()
 
 
-def _make_bundle_core_hash(serializer, hash_fn):
-    def compute(bundle):
+def _make_bundle_core_hash(
+    serializer: Callable[[object], object], hash_fn: Callable[[object], str]
+) -> Callable[[object], str]:
+    def compute(bundle: object) -> str:
         return hash_fn(serializer(bundle))
 
     return compute
@@ -555,11 +577,13 @@ def _make_bundle_core_hash(serializer, hash_fn):
 _SEALED_BUNDLE_CORE_HASH = _make_bundle_core_hash(_SEALED_BUNDLE_CORE_SERIALIZER, _EB_HASH)
 
 
-def _make_bundle_serializer(envelope_hash, schema, core_hash):
-    def serialize(self):
+def _make_bundle_serializer(
+    envelope_hash: Callable[[object], str], schema: str, core_hash: Callable[[object], str]
+) -> Callable[[Any], dict[str, Any]]:
+    def serialize(self: Any) -> dict[str, Any]:
         if self.claimed_bundle_hash is not None and self.claimed_bundle_hash != core_hash(self):
             raise ValueError("claimed_bundle_hash does not match computed hash")
-        body = {
+        body: dict[str, Any] = {
             "evidence_bundle_schema": schema,
             "bundle_id": self.bundle_id,
             "acceptance_contract_hash": self.acceptance_contract_hash,
@@ -592,11 +616,11 @@ def _make_bundle_serializer(envelope_hash, schema, core_hash):
 _SEALED_BUNDLE_SERIALIZER = _make_bundle_serializer(
     _SEALED_EB_ENVELOPE_HASH, EVIDENCE_BUNDLE_SCHEMA, _SEALED_BUNDLE_CORE_HASH
 )
-EvidenceBundle.to_dict = _SEALED_BUNDLE_SERIALIZER
+EvidenceBundle.to_dict = _SEALED_BUNDLE_SERIALIZER  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def _make_envelope_hash_property(serializer):
-    def envelope_hash(self):
+def _make_envelope_hash_property(serializer: Callable[[Any], dict[str, Any]]) -> property:
+    def envelope_hash(self: Any) -> Any:
         return serializer(self)["bundle_hash"]
 
     return property(envelope_hash)
@@ -652,29 +676,31 @@ EvidenceBundle.hash = _make_identity_property(  # pyright: ignore[reportAttribut
 
 
 def _make_subject_validator(
-    contract_type,
-    change_set_type,
-    plan_type,
-    evidence_type,
-    observation_type,
-    observation_status_type,
-    require_text,
-    require_hash,
-    require_ids,
-    require_paths,
-):
+    contract_type: type[Any],
+    change_set_type: type[Any],
+    plan_type: type[Any],
+    evidence_type: type[Any],
+    observation_type: type[Any],
+    observation_status_type: type[Any],
+    require_text: Callable[[Any, str], None],
+    require_hash: Callable[[Any, str], None],
+    require_ids: Callable[[Any, str], None],
+    require_paths: Callable[[Any, str], None],
+) -> Callable[[object, object, object, object], tuple[str, ...]]:
     """Build an input validator whose dependencies cannot be rebound later."""
 
-    def validate(contract, change_set, plan, evidence):
-        errors = []
+    def validate(
+        contract: object, change_set: object, plan: object, evidence: object
+    ) -> tuple[str, ...]:
+        errors: list[str] = []
 
-        def check(expected, value, name):
+        def check(expected: type[Any], value: object, name: str) -> bool:
             if type(value) is not expected:
                 errors.append(f"MALFORMED:{name}")
                 return False
             return True
 
-        def fields(value, expected, name):
+        def fields(value: object, expected: type[Any], name: str) -> dict[str, Any] | None:
             if not check(expected, value, name):
                 return None
             data = vars(value)
@@ -688,14 +714,14 @@ def _make_subject_validator(
         p = fields(plan, plan_type, "plan")
         e = fields(evidence, evidence_type, "evidence")
 
-        def text(data, key, prefix):
+        def text(data: dict[str, Any] | None, key: str, prefix: str) -> None:
             if data is not None:
                 try:
                     require_text(data[key], key)
                 except (TypeError, ValueError, KeyError):
                     errors.append(f"MALFORMED:{prefix}.{key}")
 
-        def hash_value(data, key, prefix):
+        def hash_value(data: dict[str, Any] | None, key: str, prefix: str) -> None:
             if data is not None:
                 try:
                     require_hash(data[key], key)
@@ -718,7 +744,7 @@ def _make_subject_validator(
                 "ALLOW",
             }:
                 errors.append("MALFORMED:contract.deletion_policy")
-            subjects = c.get("expected_subjects")
+            subjects: tuple[Any, ...] | None = c.get("expected_subjects")
             try:
                 if type(subjects) is not tuple or any(
                     type(subject) is not ExpectedEvidenceSubject for subject in subjects
@@ -738,7 +764,7 @@ def _make_subject_validator(
                 require_paths(cs["paths"], "paths")
             except (TypeError, ValueError, KeyError):
                 errors.append("MALFORMED:change_set.paths")
-            deleted_paths = cs.get("deleted_paths")
+            deleted_paths: tuple[Any, ...] | None = cs.get("deleted_paths")
             if deleted_paths:
                 try:
                     require_paths(deleted_paths, "deleted_paths")
@@ -766,7 +792,7 @@ def _make_subject_validator(
                 hash_value(e, key, "evidence")
             if e.get("claimed_bundle_hash") is not None:
                 hash_value(e, "claimed_bundle_hash", "evidence")
-            observations = e.get("observations")
+            observations: tuple[Any, ...] | None = e.get("observations")
             if type(observations) is not tuple or not observations:
                 errors.append("MALFORMED:evidence.observations")
             else:
@@ -799,19 +825,19 @@ validate_evidence_subjects = _make_subject_validator(
 
 
 def _make_integrity_deriver(
-    contract_type,
-    change_set_type,
-    plan_type,
-    evidence_type,
-    observation_type,
-    status_type,
-    hash_contract,
-    hash_change_set,
-    hash_plan,
-    hash_evidence,
-    subject_validator,
-):
-    def derive(contract, change_set, plan, evidence):
+    contract_type: type[Any],
+    change_set_type: type[Any],
+    plan_type: type[Any],
+    evidence_type: type[Any],
+    observation_type: type[Any],
+    status_type: type[Any],
+    hash_contract: Callable[[object], str],
+    hash_change_set: Callable[[object], str],
+    hash_plan: Callable[[object], str],
+    hash_evidence: Callable[[object], str],
+    subject_validator: Callable[[object, object, object, object], tuple[str, ...]],
+) -> Callable[[object, object, object, object], Any]:
+    def derive(contract: object, change_set: object, plan: object, evidence: object) -> Any:
         if (
             type(contract) is not contract_type
             or type(change_set) is not change_set_type
@@ -858,7 +884,7 @@ def _make_integrity_deriver(
                 tuple(sorted(p["required_verifier_ids"])),
             )
         )
-        observations = e["observations"]
+        observations: list[object] = e["observations"]
         canonical = (
             e["bundle_id"],
             e["acceptance_contract_hash"],
@@ -916,8 +942,14 @@ derive_evidence_integrity = _make_integrity_deriver(
 
 
 def validate_evidence_bundle_envelope(
-    payload, contract, change_set, plan, *, expected_bundle=None, expected_envelope_hash=None
-):
+    payload: Any,
+    contract: Any,
+    change_set: Any,
+    plan: Any,
+    *,
+    expected_bundle: Any = None,
+    expected_envelope_hash: Any = None,
+) -> tuple[str, ...]:
     if (expected_bundle is None) == (expected_envelope_hash is None):
         raise TypeError(
             "exactly one independently supplied expected bundle or envelope hash is required"
@@ -935,10 +967,11 @@ def validate_evidence_bundle_envelope(
         raise TypeError("change_set must be ChangeSet")
     if type(plan) is not VerificationPlan:
         raise TypeError("plan must be VerificationPlan")
-    errors = []
+    errors: list[str] = []
     try:
         if type(payload) is not dict:
             return ("MALFORMED:payload",)
+        payload = cast("dict[str, Any]", payload)
         expected_keys = {
             "evidence_bundle_schema",
             "bundle_id",
@@ -971,10 +1004,11 @@ def validate_evidence_bundle_envelope(
         ):
             if isinstance(payload.get(field), str):
                 _VALIDATOR_REQUIRE_HASH(payload[field], field)
-        observations = payload.get("observations")
+        observations: list[Any] = payload.get("observations")
         if not isinstance(observations, list) or not observations:
             errors.append("MALFORMED:observations")
-        rows = []
+        rows: list[tuple[Any, ...]] = []
+        row: dict[str, Any]
         if type(observations) is list:
             for i, row in enumerate(observations):
                 base_keys = {"verifier_id", "artifact_id", "artifact_hash", "status"}
@@ -1046,8 +1080,14 @@ def validate_evidence_bundle_envelope(
 
 
 def load_evidence_bundle_envelope(
-    payload, contract, change_set, plan, *, expected_bundle=None, expected_envelope_hash=None
-):
+    payload: Any,
+    contract: Any,
+    change_set: Any,
+    plan: Any,
+    *,
+    expected_bundle: Any = None,
+    expected_envelope_hash: Any = None,
+) -> EvidenceBundle | None:
     errors = validate_evidence_bundle_envelope(
         payload,
         contract,

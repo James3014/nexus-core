@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Local-first product shell over the canonical generic verification adapter.
 
 This module acquires Git identity and verifier evidence. It deliberately delegates
@@ -25,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Mapping, NoReturn, Sequence
+from typing import Any, Mapping, NoReturn, Sequence, cast
 
 from product.adapters.generic_verification import verify_generic_changeset
 from product.protocol import PUBLIC_PROTOCOL_VERSION
@@ -196,10 +197,13 @@ def _validate_command(value: Any, field: str) -> list[str]:
     if (
         not isinstance(value, list)
         or not value
-        or any(not isinstance(item, str) or not item or "\x00" in item for item in value)
+        or any(
+            not isinstance(item, str) or not item or "\x00" in item
+            for item in cast("list[Any]", value)
+        )
     ):
         raise LocalCheckError("INVALID_CONFIG", f"{field} must be a non-empty array")
-    return value
+    return cast("list[str]", value)
 
 
 def _validate_timeout(value: Any, field: str) -> int:
@@ -237,8 +241,11 @@ def _validate_subject_fields(item: Mapping[str, Any], field: str) -> None:
 def _validate_env_passthrough(value: Any) -> None:
     if (
         not isinstance(value, list)
-        or any(not isinstance(item, str) or not _ENV_NAME_RE.fullmatch(item) for item in value)
-        or len(value) != len(set(value))
+        or any(
+            not isinstance(item, str) or not _ENV_NAME_RE.fullmatch(item)
+            for item in cast("list[Any]", value)
+        )
+        or len(cast("list[Any]", value)) != len(set(cast("list[Any]", value)))
     ):
         raise LocalCheckError(
             "INVALID_CONFIG", "env_passthrough must be unique names matching ^[A-Z_][A-Z0-9_]*$"
@@ -246,8 +253,9 @@ def _validate_env_passthrough(value: Any) -> None:
 
 
 def _validate_isolation(value: Any) -> None:
-    if not isinstance(value, dict) or not set(value) <= _ISOLATION_KEYS:
+    if not isinstance(value, dict) or not set(cast("dict[str, Any]", value)) <= _ISOLATION_KEYS:
         raise LocalCheckError("INVALID_CONFIG", "isolation has unexpected fields")
+    value = cast("dict[str, Any]", value)
     mode = value.get("mode", "process")
     network = value.get("network", "bridge")
     if mode not in {"process", "container"}:
@@ -267,6 +275,7 @@ def _validate_isolation(value: Any) -> None:
 def _validate_config(value: Any) -> dict[str, Any]:
     if type(value) is not dict:
         raise LocalCheckError("INVALID_CONFIG", "config must be a table")
+    value = cast("dict[str, Any]", value)
     version_value = value.get("version")
     if version_value == CONFIG_VERSION:
         if set(value) != _CONFIG_V1_KEYS:
@@ -292,7 +301,7 @@ def _validate_config(value: Any) -> dict[str, Any]:
             or item.startswith("/")
             or "\\" in item
             or "\x00" in item
-            for item in patterns
+            for item in cast("list[Any]", patterns)
         )
     ):
         raise LocalCheckError("INVALID_CONFIG", "allowed_patterns must be relative globs")
@@ -339,10 +348,13 @@ def _validate_config(value: Any) -> dict[str, Any]:
     producer_ids: list[str] = []
     subject_ids: list[str] = []
     material_ids: list[str] = []
-    for index, item in enumerate(materials):
+    for index, item in enumerate(cast("list[Any]", materials)):
         field = f"materials[{index}]"
-        if not isinstance(item, dict) or not set(item).issubset(allowed_material_keys):
+        if not isinstance(item, dict) or not set(cast("dict[str, Any]", item)).issubset(
+            allowed_material_keys
+        ):
             raise LocalCheckError("INVALID_CONFIG", f"{field} has unexpected fields")
+        item = cast("dict[str, Any]", item)
         required = {
             "id",
             "observe_command",
@@ -371,10 +383,13 @@ def _validate_config(value: Any) -> dict[str, Any]:
         material_ids.append(item["id"])
 
     material_id_set = set(material_ids)
-    for index, item in enumerate(verifiers):
+    for index, item in enumerate(cast("list[Any]", verifiers)):
         field = f"verifiers[{index}]"
-        if not isinstance(item, dict) or not set(item).issubset(allowed_verifier_keys):
+        if not isinstance(item, dict) or not set(cast("dict[str, Any]", item)).issubset(
+            allowed_verifier_keys
+        ):
             raise LocalCheckError("INVALID_CONFIG", f"{field} has unexpected fields")
+        item = cast("dict[str, Any]", item)
         required = {"id", "command", "timeout_seconds", "logical_subject_id", "evidence_kind"}
         if not required.issubset(item):
             raise LocalCheckError("INVALID_CONFIG", f"{field} is missing required fields")
@@ -388,9 +403,10 @@ def _validate_config(value: Any) -> dict[str, Any]:
                 not isinstance(material_id, str)
                 or not material_id
                 or material_id not in material_id_set
-                for material_id in required_material_ids
+                for material_id in cast("list[Any]", required_material_ids)
             )
-            or len(required_material_ids) != len(set(required_material_ids))
+            or len(cast("list[Any]", required_material_ids))
+            != len(set(cast("list[Any]", required_material_ids)))
         ):
             raise LocalCheckError(
                 "INVALID_CONFIG",
@@ -405,7 +421,7 @@ def _validate_config(value: Any) -> dict[str, Any]:
         raise LocalCheckError("INVALID_CONFIG", "logical_subject_id values must be unique")
     if not any(
         item.get("requirement_mode", "REQUIRED") == "REQUIRED"
-        for item in [*verifiers, *materials]
+        for item in [*cast("list[Any]", verifiers), *cast("list[Any]", materials)]
     ):
         raise LocalCheckError("INVALID_CONFIG", "version 2 requires at least one REQUIRED producer")
     return value
@@ -420,7 +436,7 @@ _MATERIAL_IDENTITY_RE = re.compile(r"[a-z][a-z0-9-]*:[A-Za-z0-9._/+-]{1,200}")
 def _valid_transition_authorization(value: Any) -> bool:
     return (
         isinstance(value, Mapping)
-        and set(value) == {"login", "author_association"}
+        and set(cast("Mapping[str, Any]", value)) == {"login", "author_association"}
         and isinstance(value["login"], str)
         and bool(value["login"].strip())
         and isinstance(value["author_association"], str)
@@ -445,8 +461,11 @@ def _normalize_material_transitions(value: Any) -> list[dict[str, Any]]:
         raise LocalCheckError("ISSUE_MATERIAL_TRANSITION_MALFORMED", "transitions must be a list")
     normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for item in value:
-        if not isinstance(item, Mapping) or set(item) - {"authorized_by"} != _MATERIAL_TRANSITION_KEYS:
+    for item in cast("Sequence[Any]", value):
+        if (
+            not isinstance(item, Mapping)
+            or set(cast("Mapping[str, Any]", item)) - {"authorized_by"} != _MATERIAL_TRANSITION_KEYS
+        ):
             raise LocalCheckError(
                 "ISSUE_MATERIAL_TRANSITION_MALFORMED", "transition has unexpected fields"
             )
@@ -456,7 +475,7 @@ def _normalize_material_transitions(value: Any) -> list[dict[str, Any]]:
                 raise LocalCheckError(
                     "ISSUE_MATERIAL_TRANSITION_MALFORMED", "authorized_by is malformed"
                 )
-            entry["authorized_by"] = dict(item["authorized_by"])
+            entry["authorized_by"] = dict(cast("Mapping[str, Any]", item["authorized_by"]))
         if entry["source"] != MATERIAL_TRANSITION_SOURCE or any(
             not isinstance(entry[key], str)
             or not entry[key]
@@ -838,7 +857,7 @@ def _manifest_from_trees(repo: Path, source_tree: str, target_tree: str) -> dict
 RESIDUE_POLICY = "sandbox-only"
 
 
-def _check_ignored_residue(repo: Path) -> None:
+def _check_ignored_residue(repo: Path) -> None:  # pyright: ignore[reportUnusedFunction] -- imported by runtime_handoff
     ignored_paths = _list_ignored_residue(repo)
     if ignored_paths:
         raise LocalCheckError("IGNORED_RESIDUE", ", ".join(ignored_paths))
@@ -857,7 +876,7 @@ def _list_ignored_residue(repo: Path) -> list[str]:
     if ignored.returncode != 0:
         raise LocalCheckError("GIT_COMMAND_FAILED", "failed to list ignored files")
 
-    ignored_paths = []
+    ignored_paths: list[str] = []
     if ignored.stdout:
         for p in ignored.stdout.split(b"\0"):
             if not p:
@@ -909,7 +928,7 @@ def _verifier_artifact(
             "stderr_sha256": _sha256_bytes(stderr),
         }
     )
-    artifact = {
+    artifact: dict[str, Any] = {
         "command": list(command),
         "exit_code": returncode,
         "stdout": stdout.decode("utf-8", errors="replace"),
@@ -990,7 +1009,7 @@ def _cleanup_verifier_sandbox(path: Path) -> None:
 
 
 def _isolation_settings(config: Mapping[str, Any]) -> dict[str, Any]:
-    raw = config.get("isolation") or {}
+    raw: dict[str, Any] = config.get("isolation") or {}
     mode = raw.get("mode", "process")
     settings: dict[str, Any] = {"mode": mode}
     if mode == "container":
@@ -1546,8 +1565,12 @@ def derive_issue_verification(
 
 
 def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
-    if not isinstance(value, dict) or set(value) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS:
+    if (
+        not isinstance(value, dict)
+        or set(cast("dict[str, Any]", value)) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS
+    ):
         return False
+    value = cast("dict[str, Any]", value)
     if "material_transitions" in value:
         try:
             if not value["material_transitions"] or _normalize_material_transitions(
@@ -1769,7 +1792,7 @@ def check_repository(
         )
 
     if config["version"] == CONFIG_VERSION:
-        producers = [
+        producers: list[dict[str, Any]] = [
             {
                 "id": "local-command",
                 "kind": "verifier",
@@ -2052,6 +2075,7 @@ def _validate_artifact_payload(
     reasons: list[str] = []
     if not isinstance(artifact, dict):
         return ["VERIFIER_ARTIFACT_MISMATCH"]
+    artifact = cast("dict[str, Any]", artifact)
     artifact_body = {key: value for key, value in artifact.items() if key != "artifact_hash"}
     if artifact.get("artifact_hash") != canonical_hash(artifact_body):
         reasons.append("VERIFIER_ARTIFACT_MISMATCH")
@@ -2138,13 +2162,15 @@ def evaluate_receipt_expectations(
 
     if not isinstance(payload, Mapping):
         payload = {}
-    outcome = payload.get("outcome")
-    source = payload.get("config_source")
+    outcome: Mapping[str, Any] | None = payload.get("outcome")
+    source: Mapping[str, Any] | None = payload.get("config_source")
     source = source if isinstance(source, Mapping) else {}
-    inputs = payload.get("inputs")
-    context = inputs.get("requirements_context") if isinstance(inputs, Mapping) else None
+    inputs: Mapping[str, Any] | None = payload.get("inputs")
+    context: Mapping[str, Any] | None = (
+        inputs.get("requirements_context") if isinstance(inputs, Mapping) else None
+    )
     context = context if isinstance(context, Mapping) else {}
-    issue_verification = payload.get("issue_verification")
+    issue_verification: Mapping[str, Any] | None = payload.get("issue_verification")
     expectations: dict[str, str] = {}
     reasons: list[str] = []
 
@@ -2251,14 +2277,14 @@ def _validate_verification_receipt_payload(
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     payload = dict(payload)
     reasons: list[str] = []
-    product = payload.get("product")
-    inputs = payload.get("inputs")
+    product: dict[str, Any] | None = payload.get("product")
+    inputs: dict[str, Any] | None = payload.get("inputs")
     if not isinstance(inputs, dict):
         reasons.append("MALFORMED_RECEIPT")
         return {"valid": False, "reason_codes": sorted(set(reasons))}
-    config = inputs.get("config")
-    requirements_context = inputs.get("requirements_context")
-    request = inputs.get("request")
+    config: dict[str, Any] | None = inputs.get("config")
+    requirements_context: dict[str, Any] | None = inputs.get("requirements_context")
+    request: dict[str, Any] | None = inputs.get("request")
     config_version = config.get("version") if isinstance(config, dict) else None
     v2_config: Mapping[str, Any] | None = config if isinstance(config, dict) else None
     expected_schema_version = (
@@ -2294,7 +2320,7 @@ def _validate_verification_receipt_payload(
     if "residue_policy" in payload and payload["residue_policy"] != RESIDUE_POLICY:
         reasons.append("MALFORMED_RECEIPT")
     if "config_source" in payload:
-        source = payload["config_source"]
+        source: dict[str, Any] | None = payload["config_source"]
         if (
             not isinstance(source, dict)
             or not isinstance(source.get("kind"), str)
@@ -2318,8 +2344,8 @@ def _validate_verification_receipt_payload(
         transitions = _normalize_material_transitions(inputs.get("material_transitions", []))
     except LocalCheckError:
         reasons.append("MALFORMED_RECEIPT")
-    bound = payload.get("issue_verification")
-    bound_transitions = bound.get("material_transitions", []) if isinstance(bound, dict) else []
+    bound: dict[str, Any] | None = payload.get("issue_verification")
+    bound_transitions: list[Any] = bound.get("material_transitions", []) if isinstance(bound, dict) else []
     if transitions or bound_transitions:
         if not isinstance(bound, dict) or bound_transitions != transitions:
             reasons.append("MATERIAL_TRANSITION_UNBOUND")
@@ -2356,7 +2382,7 @@ def _validate_verification_receipt_payload(
             reasons.append("CONFIG_BINDING_MISMATCH")
             producers = []
             producers_by_id = {}
-        raw_artifacts = payload.get("evidence_artifacts")
+        raw_artifacts: list[dict[str, Any]] | None = payload.get("evidence_artifacts")
         if not isinstance(raw_artifacts, list):
             reasons.append("VERIFIER_ARTIFACT_MISMATCH")
             raw_artifacts = []
@@ -2388,7 +2414,7 @@ def _validate_verification_receipt_payload(
         reasons.append("CONFIG_BINDING_MISMATCH")
 
     if isinstance(request, dict):
-        manifest = request.get("change_manifest")
+        manifest: dict[str, Any] | None = request.get("change_manifest")
         manifest_hash = change_manifest_hash(manifest) if isinstance(manifest, dict) else None
         if manifest_hash is None or payload.get("manifest_hash") != manifest_hash:
             reasons.append("MANIFEST_HASH_MISMATCH")
@@ -2514,7 +2540,7 @@ def validate_verification_receipt(
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
     if not isinstance(payload, dict):
         return {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
-    return validate_verification_receipt_payload(payload, repo=repo)
+    return validate_verification_receipt_payload(cast("dict[str, Any]", payload), repo=repo)
 
 
 __all__ = [
