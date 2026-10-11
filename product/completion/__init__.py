@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Completion Core - completion evidence applicability and freshness contract.
 
 Deterministic, advisory analysis that binds a completion claim to the exact
@@ -34,9 +35,10 @@ the public protocol schema, protocol version, or existing Core authority.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Callable, cast
 from weakref import WeakValueDictionary
 
 from product.evidence import (
@@ -46,7 +48,7 @@ from product.evidence import (
     IntegrityStatus,
     ObservationStatus,
     VerificationPlan,
-    _hash,
+    _hash,  # pyright: ignore[reportPrivateUsage]  # shared hash helper
 )
 from product.verification import VerificationStatus, verify
 
@@ -72,13 +74,14 @@ class EvidenceDisposition(str, Enum):
     REJECTED_FAILED = "REJECTED_FAILED"
 
 
-def _require_normalized_text(value, field):
+def _require_normalized_text(value: object, field: str) -> None:
     if type(value) is not str or not value or value != value.strip() or "\x00" in value:
         raise ValueError(f"{field} must be a non-empty normalized string")
 
 
-def _require_hash(value, field):
+def _require_hash(value: object, field: str) -> None:
     _require_normalized_text(value, field)
+    value = cast(str, value)
     if not value.startswith(_HASH_RE_PREFIX):
         raise ValueError(f"{field} must be a sha256:<hex> content hash")
     tail = value[len(_HASH_RE_PREFIX) :]
@@ -86,7 +89,7 @@ def _require_hash(value, field):
         raise ValueError(f"{field} must be a sha256:<64 lowercase hex> content hash")
 
 
-def _sorted_paths(paths):
+def _sorted_paths(paths: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted(set(paths)))
 
 
@@ -106,7 +109,7 @@ class CompletionClaim:
     asserted_by: str
     claimed_complete: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_normalized_text(self.claim_id, "claim_id")
         _require_normalized_text(self.target_revision, "target_revision")
         _require_normalized_text(self.asserted_by, "asserted_by")
@@ -114,7 +117,7 @@ class CompletionClaim:
             raise TypeError("claimed_complete must be a bool")
         if type(self.content_hashes) is not tuple or not self.content_hashes:
             raise ValueError("content_hashes must be a non-empty tuple")
-        paths = []
+        paths: list[str] = []
         for index, (path, content_hash) in enumerate(self.content_hashes):
             _require_normalized_text(path, f"content_hashes[{index}].path")
             if (
@@ -131,7 +134,7 @@ class CompletionClaim:
             raise ValueError("content_hashes paths must be unique and sorted")
         if type(self.verified_artifacts) is not tuple:
             raise TypeError("verified_artifacts must be a tuple")
-        bindings = []
+        bindings: list[tuple[str, str]] = []
         for index, (verifier_id, artifact_id, path) in enumerate(self.verified_artifacts):
             _require_normalized_text(verifier_id, f"verified_artifacts[{index}].verifier_id")
             _require_normalized_text(artifact_id, f"verified_artifacts[{index}].artifact_id")
@@ -149,7 +152,7 @@ class CompletionClaim:
             raise ValueError("verified_artifacts must be unique and sorted")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             (
                 self.claim_id,
@@ -173,7 +176,7 @@ class VerifierEvidenceReport:
     disposition: EvidenceDisposition
     reason_codes: tuple[str, ...] = ()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_normalized_text(self.verifier_id, "verifier_id")
         if not isinstance(self.disposition, EvidenceDisposition):
             raise TypeError("disposition must be EvidenceDisposition")
@@ -193,7 +196,9 @@ class VerifierEvidenceReport:
             raise ValueError("reason_codes must be unique and sorted")
 
 
-def _coverage_line(claim, change_set):
+def _coverage_line(
+    claim: CompletionClaim | None, change_set: ChangeSet
+) -> tuple[bool, tuple[str, ...]]:
     """Return (revision_bound, missing_paths) for the claim against the change set."""
     if claim is None:
         return False, tuple(path for path in change_set.paths if path not in change_set.deleted_paths)
@@ -204,7 +209,12 @@ def _coverage_line(claim, change_set):
     return revision_bound, missing
 
 
-def _dispositions_for(claim, change_set, plan, evidence):
+def _dispositions_for(
+    claim: CompletionClaim | None,
+    change_set: ChangeSet,
+    plan: VerificationPlan,
+    evidence: EvidenceBundle,
+) -> tuple[VerifierEvidenceReport, ...]:
     """Deterministic per-required-verifier evidence dispositions."""
     expected_by_path = (
         {path: content_hash for path, content_hash in claim.content_hashes}
@@ -223,7 +233,7 @@ def _dispositions_for(claim, change_set, plan, evidence):
         obs.verifier_id: obs for obs in evidence.observations
     }
     changed = set(change_set.paths) - set(change_set.deleted_paths)
-    reports = []
+    reports: list[VerifierEvidenceReport] = []
     for verifier_id in sorted(plan.required_verifier_ids):
         observation = observations_by_verifier.get(verifier_id)
         if observation is None:
@@ -312,8 +322,11 @@ def _dispositions_for(claim, change_set, plan, evidence):
     return tuple(reports)
 
 
-def _make_analyzer():
-    registry = WeakValueDictionary()
+def _make_analyzer() -> tuple[
+    Callable[..., CompletionEvidenceAnalysis],
+    WeakValueDictionary[int, CompletionEvidenceAnalysis],
+]:
+    registry: WeakValueDictionary[int, CompletionEvidenceAnalysis] = WeakValueDictionary()
 
     def analyze_completion_evidence(
         claim: CompletionClaim | None,
@@ -343,7 +356,7 @@ def _make_analyzer():
         reports = _dispositions_for(claim, change_set, plan, evidence)
 
         revision_bound, coverage_missing = _coverage_line(claim, change_set)
-        reasons = []
+        reasons: list[str] = []
         if claim is None:
             reasons.append("CLAIM:missing")
         elif not revision_bound:
@@ -412,10 +425,10 @@ class CompletionEvidenceAnalysis:
     reason_codes: tuple[str, ...]
     integrity: IntegrityStatus
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("CompletionEvidenceAnalysis is created by analyze_completion_evidence")
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if type(self.claims_complete) is not bool:
             raise TypeError("claims_complete must be a bool")
         if type(self.claims_verified) is not bool:
@@ -463,7 +476,7 @@ class CompletionEvidenceAnalysis:
             raise ValueError("CLAIMS_VERIFIED requires VALID evidence integrity")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             (
                 self.claims_complete,
@@ -488,7 +501,7 @@ class CompletionEvidenceAnalysis:
             )
         )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {
             "claims_complete": self.claims_complete,
             "claims_verified": self.claims_verified,
@@ -519,7 +532,7 @@ def is_completion_evidence_analysis(analysis: Any) -> bool:
     )
 
 
-def _make_analysis_validator():
+def _make_analysis_validator() -> Callable[..., bool]:
     def validate_completion_evidence_analysis(
         analysis: CompletionEvidenceAnalysis,
         claim: CompletionClaim | None,

@@ -1,9 +1,11 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Deterministic evidence-sufficiency projection (nexus-core#58)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Callable, cast
 from weakref import WeakValueDictionary
 
 from product.evidence import (
@@ -14,7 +16,7 @@ from product.evidence import (
     Observation,
     ObservationStatus,
     VerificationPlan,
-    _hash,
+    _hash,  # pyright: ignore[reportPrivateUsage]  # shared hash helper
 )
 from product.verification import VerificationStatus, verify
 
@@ -43,7 +45,7 @@ class EvidenceSufficiency(str, Enum):
     INAPPLICABLE = "INAPPLICABLE"
 
 
-def _require_normalized_text(value, field):
+def _require_normalized_text(value: object, field: str) -> str:
     if type(value) is not str:
         raise TypeError(f"{field} must be a string")
     if not value or value != value.strip() or "\x00" in value:
@@ -51,7 +53,7 @@ def _require_normalized_text(value, field):
     return value
 
 
-def _require_hash(value, field):
+def _require_hash(value: object, field: str) -> str:
     text = _require_normalized_text(value, field)
     if not text.startswith(_HASH_PREFIX):
         raise ValueError(f"{field} must be a sha256:<hex> content hash")
@@ -69,9 +71,9 @@ class SufficiencySubjectReport:
     expected_content_hash: str
     status: ObservationStatus
     sufficiency: EvidenceSufficiency
-    reason_codes: tuple = ()
+    reason_codes: tuple[str, ...] = ()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_normalized_text(self.verifier_id, "verifier_id")
         if type(self.artifact_id) is not str:
             raise TypeError("artifact_id must be a string")
@@ -98,7 +100,7 @@ class SufficiencyRequest:
     subject_scope: str
     applicable: bool = True
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_normalized_text(self.request_id, "request_id")
         _require_normalized_text(self.subject_scope, "subject_scope")
         if type(self.applicable) is not bool:
@@ -108,11 +110,11 @@ class SufficiencyRequest:
 def _project_subject(
     verifier_id: str,
     observation: Observation | None,
-    expected_hash,
-    core_integrity,
-    stale_evidence,
-    core_status=VerificationStatus.VERIFIED,
-):
+    expected_hash: str,
+    core_integrity: IntegrityStatus,
+    stale_evidence: bool,
+    core_status: VerificationStatus = VerificationStatus.VERIFIED,
+) -> SufficiencySubjectReport:
     if observation is None:
         return SufficiencySubjectReport(
             verifier_id=verifier_id,
@@ -198,12 +200,20 @@ def _project_subject(
     )
 
 
-def _make_analyzer():
-    registry = WeakValueDictionary()
+def _make_analyzer() -> tuple[
+    Callable[..., EvidenceSufficiencyAnalysis],
+    WeakValueDictionary[int, EvidenceSufficiencyAnalysis],
+]:
+    registry: WeakValueDictionary[int, EvidenceSufficiencyAnalysis] = WeakValueDictionary()
 
     def analyze_evidence_sufficiency(
-        request, contract, change_set, plan, evidence, expected_by_verifier=None
-    ):
+        request: object,
+        contract: object,
+        change_set: object,
+        plan: object,
+        evidence: object,
+        expected_by_verifier: dict[str, str] | None = None,
+    ) -> EvidenceSufficiencyAnalysis:
         if type(request) is not SufficiencyRequest:
             raise TypeError("request must be SufficiencyRequest")
         if type(contract) is not AcceptanceContract:
@@ -233,7 +243,7 @@ def _make_analyzer():
             EvidenceSufficiencyAnalysis.__post_init__(result)
             registry[id(result)] = result
             return result
-        expected_map = {}
+        expected_map: dict[str, str] = {}
         if expected_by_verifier:
             for vid, ch in expected_by_verifier.items():
                 _require_normalized_text(vid, "expected_by_verifier.verifier_id")
@@ -253,7 +263,7 @@ def _make_analyzer():
             if len({(obs.artifact_id, obs.artifact_hash, obs.status)
                     for obs in evidence.observations if obs.verifier_id == vid}) > 1
         }
-        reports = []
+        reports: list[SufficiencySubjectReport] = []
         for vid in sorted(plan.required_verifier_ids):
             reports.append(
                 _project_subject(
@@ -266,7 +276,7 @@ def _make_analyzer():
                 )
             )
         report_tuple = tuple(reports)
-        reasons = []
+        reasons: list[str] = []
         kinds = {r.sufficiency for r in report_tuple}
         if not report_tuple:
             overall = EvidenceSufficiency.MISSING
@@ -306,17 +316,17 @@ del _make_analyzer
 @dataclass(frozen=True, init=False)
 class EvidenceSufficiencyAnalysis:
     sufficiency: EvidenceSufficiency
-    subject_reports: tuple
-    reason_codes: tuple
+    subject_reports: tuple[SufficiencySubjectReport, ...]
+    reason_codes: tuple[str, ...]
     integrity: IntegrityStatus
     schema: str
     claim_ceiling: str
     input_binding_hash: str
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("EvidenceSufficiencyAnalysis is created by analyze_evidence_sufficiency")
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         _require_hash(self.input_binding_hash, "input_binding_hash")
         if type(self.sufficiency) is not EvidenceSufficiency:
             raise TypeError("sufficiency must be EvidenceSufficiency")
@@ -339,7 +349,7 @@ class EvidenceSufficiencyAnalysis:
             raise ValueError("claim_ceiling must be the sufficiency projection ceiling")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             (
                 self.sufficiency.value,
@@ -363,7 +373,7 @@ class EvidenceSufficiencyAnalysis:
             )
         )
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
             "claim_ceiling": self.claim_ceiling,
@@ -386,17 +396,23 @@ class EvidenceSufficiencyAnalysis:
         }
 
 
-def is_evidence_sufficiency_analysis(analysis):
+def is_evidence_sufficiency_analysis(analysis: object) -> bool:
     return (
         isinstance(analysis, EvidenceSufficiencyAnalysis)
         and _sufficiency_registry.get(id(analysis)) is analysis
     )
 
 
-def _make_analysis_validator():
+def _make_analysis_validator() -> Callable[..., bool]:
     def validate_evidence_sufficiency_analysis(
-        analysis, request, contract, change_set, plan, evidence, expected_by_verifier=None
-    ):
+        analysis: object,
+        request: object,
+        contract: object,
+        change_set: object,
+        plan: object,
+        evidence: object,
+        expected_by_verifier: dict[str, str] | None = None,
+    ) -> bool:
         if not is_evidence_sufficiency_analysis(analysis):
             return False
         try:
@@ -410,7 +426,7 @@ def _make_analysis_validator():
             )
         except (TypeError, ValueError):
             return False
-        return recomputed.hash == analysis.hash
+        return recomputed.hash == cast(EvidenceSufficiencyAnalysis, analysis).hash
 
     return validate_evidence_sufficiency_analysis
 
