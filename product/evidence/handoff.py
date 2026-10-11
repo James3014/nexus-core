@@ -396,9 +396,14 @@ def verify_handoff_evidence(
             for name in ("repository", "source_revision")
             if getattr(identity, name) != getattr(current, name)
         ]
-        if identity.runtime_identity and current.runtime_identity:
-            if identity.runtime_identity != current.runtime_identity:
-                stale_fields.append("runtime_identity")
+        # A current identity that carries a value must be matched by the
+        # envelope's own observed value; absence never matches (expected
+        # configuration cannot fill a missing observed identity). When the
+        # current side declares none, there is nothing to bind against.
+        for name in ("runtime_identity", "target_revision"):
+            expected = getattr(current, name)
+            if expected and getattr(identity, name) != expected:
+                stale_fields.append(name)
         if stale_fields:
             return _result(
                 HandoffVerdict.STALE,

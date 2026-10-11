@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -589,3 +590,83 @@ async def test_live_pr635_authenticated_controller_e2e(request, test_setup):
             assert token not in json.dumps(receipt_data)
     finally:
         await handle.stop()
+
+
+@pytest.mark.asyncio
+async def test_blocking_pipeline_steps_do_not_stall_event_loop(test_setup):
+    """Slow GitHub read and runner executor must run off the event loop (#165)."""
+    import time
+
+    gh_port = MockGitHubPort()
+    inner_read = gh_port.read_pull_request
+    inner_executor = make_mock_executor(exit_code=0)
+    threads: list[int] = []
+
+    def slow_read(locator: GitHubPullRequestLocator) -> dict[str, Any]:
+        time.sleep(0.8)
+        return inner_read(locator)
+
+    def slow_executor(
+        profile: Any, request: Mapping[str, object], index: int
+    ) -> Mapping[str, object]:
+        threads.append(threading.get_ident())
+        time.sleep(0.8)
+        return inner_executor(profile, request, index)
+
+    gh_port.read_pull_request = slow_read  # type: ignore[method-assign]
+    service = RuntimeCertificationService(
+        db_path=test_setup["db_path"],
+        github_port=gh_port,
+        runner_executor=slow_executor,
+    )
+    payload = {
+        "protocol_version": PUBLIC_PROTOCOL_VERSION,
+        "implementation_schema": IMPLEMENTATION_SCHEMA,
+        "repository": {
+            "owner": "James3014",
+            "name": "Nexus-new",
+            "pr_number": 635,
+            "expected_base_sha": gh_port.base_sha,
+            "expected_head_sha": gh_port.head_sha,
+        },
+        "acceptance_contract": {
+            "contract_id": "ac-635",
+            "requirements_hash": _hash("reqs"),
+            "required_verifier_ids": ["pytest"],
+            "allowed_paths": ["src/a.py"],
+            "deletion_policy": "FORBID",
+        },
+        "verification_plan": {
+            "plan_id": "plan-635",
+            "acceptance_contract_hash": _hash("ac"),
+            "change_set_hash": _hash("cs"),
+            "required_verifier_ids": ["pytest"],
+        },
+        "profile_id": "python-oci-pytest-v1",
+        "idempotency_key": "loop-stall-1",
+        "expected_generation": 0,
+    }
+
+    stalls: list[float] = []
+    stop = asyncio.Event()
+
+    async def ticker() -> None:
+        last = time.monotonic()
+        while not stop.is_set():
+            await asyncio.sleep(0.02)
+            now = time.monotonic()
+            stalls.append(now - last)
+            last = now
+
+    tick_task = asyncio.create_task(ticker())
+    status, resp = await service.submit_certification(payload)
+    assert status == 202
+    job = service._in_flight[resp["request_id"]]
+    assert job.task is not None
+    await asyncio.wait_for(job.task, timeout=30)
+    stop.set()
+    await tick_task
+
+    assert job.state == "COMPLETED", job.error_message
+    assert threads and all(t != threading.get_ident() for t in threads)
+    assert max(stalls) < 0.5, f"event loop stalled for {max(stalls):.2f}s"

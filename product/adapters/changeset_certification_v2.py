@@ -519,9 +519,11 @@ def _validate(
         if (
             not isinstance(factual, Mapping)
             or not _exact(factual, {"status", "reason_codes"})
-            or factual.get("status") not in {item.value for item in VerificationStatus}
+            or not isinstance(factual.get("status"), str)
+            or factual["status"] not in {item.value for item in VerificationStatus}
             or not isinstance(factual.get("reason_codes"), list)
             or len(factual["reason_codes"]) > _MAX_REASONS
+            or any(not isinstance(reason, str) for reason in factual["reason_codes"])
             or len(set(factual["reason_codes"])) != len(factual["reason_codes"])
             or any(reason not in _REASONS for reason in factual["reason_codes"])
         ):
@@ -562,7 +564,8 @@ def _validate(
         not isinstance(scope, Mapping)
         or not _exact(scope, {"paths", "deletion_policy"})
         or not _paths(scope.get("paths"))
-        or scope.get("deletion_policy") not in {"FORBID", "ALLOW"}
+        or not isinstance(scope.get("deletion_policy"), str)
+        or scope["deletion_policy"] not in {"FORBID", "ALLOW"}
     ):
         return ("scope_malformed",)
     if not set(diff["paths"]).issubset(scope["paths"]):
@@ -660,7 +663,10 @@ def _validate(
             return ("artifact_duplicate",)
         verifier_ids.add(verifier["verifier_id"])
         artifact_ids.add(verifier["artifact_id"])
-        if verifier.get("status") not in _VERIFIER_STATUSES:
+        if (
+            not isinstance(verifier.get("status"), str)
+            or verifier["status"] not in _VERIFIER_STATUSES
+        ):
             return ("verifier_artifact_malformed",)
         if verifier["artifact_id"] != f"{verifier['verifier_id']}:{task['attempt_id']}":
             return ("cross_binding_mismatch",)
@@ -673,7 +679,7 @@ def _validate(
         return ("reason_invalid",)
     if len(set(reasons)) != len(reasons):
         return ("reason_invalid",)
-    if payload.get("disposition") not in _STATUSES:
+    if not isinstance(payload.get("disposition"), str) or payload["disposition"] not in _STATUSES:
         return ("status_invalid",)
     if payload["disposition"] == "CERTIFIED" and candidate is None:
         return ("candidate_missing",)
