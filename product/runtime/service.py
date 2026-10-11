@@ -332,7 +332,10 @@ class RuntimeCertificationService:
             if self.github_port is None:
                 raise RuntimeError("GitHub read port is not configured")
 
-            snapshot = acquire_github_pull_request(self.github_port, locator)
+            # Blocking network I/O: keep it off the event loop.
+            snapshot = await asyncio.to_thread(
+                acquire_github_pull_request, self.github_port, locator
+            )
             if snapshot.base_sha != exp_base_sha or snapshot.head_sha != exp_head_sha:
                 job.state = "UNVERIFIABLE"
                 job.error_code = "STALE_SOURCE"
@@ -363,7 +366,11 @@ class RuntimeCertificationService:
                 "environment_hash": runner.profile.hash,
                 "attempt_id": f"att-{job.request_id}",
             }
-            runner_result: RunnerResult = runner.run(run_req, self.runner_executor)
+            # Executor may block for minutes; the runner (and its replay cache) is
+            # created per pipeline, so it is only touched from one worker thread.
+            runner_result: RunnerResult = await asyncio.to_thread(
+                runner.run, run_req, self.runner_executor
+            )
 
             # 3. Acceptance Contract, ChangeSet, Plan, Evidence
             raw_contract = job.payload["acceptance_contract"]
