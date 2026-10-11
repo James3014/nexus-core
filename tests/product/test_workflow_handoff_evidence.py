@@ -314,3 +314,49 @@ def test_verification_rejects_non_string_schema_without_type_error(schema):
     }
     with pytest.raises(HandoffEvidenceError):
         HandoffVerification(schema=schema, **fields)
+
+
+def test_target_revision_mismatch_is_stale():
+    envelope = _envelope()
+    current = HandoffIdentity(
+        repository="James3014/nexus-runtime",
+        source_revision="git-commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        runtime_identity="runtime-sha:0000000000000000",
+        target_revision="git-commit:" + "c" * 40,
+    )
+    result = verify_handoff_evidence(envelope, current_identity=current)
+    assert result.verdict is HandoffVerdict.STALE
+    assert "STALE:identity:target_revision" in result.reason_codes
+    matching = HandoffIdentity(
+        repository=current.repository,
+        source_revision=current.source_revision,
+        runtime_identity=current.runtime_identity,
+        target_revision="git-commit:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    )
+    assert (
+        verify_handoff_evidence(envelope, current_identity=matching).verdict is HandoffVerdict.VALID
+    )
+
+
+def test_missing_observed_runtime_identity_is_stale_against_current_runtime():
+    fixture = {
+        **RUNTIME_CHECKPOINT_FIXTURE,
+        "identity": {
+            k: v
+            for k, v in RUNTIME_CHECKPOINT_FIXTURE["identity"].items()
+            if k != "runtime_identity"
+        },
+    }
+    envelope = project_workflow_checkpoint_envelope(
+        fixture, producer_identity="agent:session-a", observed_identity="agent:session-a"
+    )
+    result = verify_handoff_evidence(envelope, current_identity=_current())
+    assert result.verdict is HandoffVerdict.STALE
+    assert "STALE:identity:runtime_identity" in result.reason_codes
+    # Envelope carries a runtime identity but current declares none: unchanged.
+    bare = HandoffIdentity(
+        repository=_current().repository, source_revision=_current().source_revision
+    )
+    assert (
+        verify_handoff_evidence(_envelope(), current_identity=bare).verdict is HandoffVerdict.VALID
+    )
