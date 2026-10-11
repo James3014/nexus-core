@@ -114,6 +114,15 @@ def _map_http_status_to_exit_code(status_code: int, payload: dict[str, Any]) -> 
     return 1
 
 
+def _exit_code_for_terminal_state(state: Any) -> int:
+    """FAILED -> 1 and UNVERIFIABLE -> 6, matching github_action.exit_code_for_state."""
+    if state == "FAILED":
+        return 1
+    if state == "UNVERIFIABLE":
+        return 6
+    return 0
+
+
 def _get_token(token_file: str | None) -> str:
     from product.runtime.auth import AuthSecurityError, read_bearer_token
 
@@ -167,9 +176,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     # If already terminal (e.g. 200 replayed or terminal)
     if status_code == 200 or state in ("COMPLETED", "FAILED", "UNVERIFIABLE"):
         print(json.dumps(resp, indent=2))
-        if state == "UNVERIFIABLE":
-            return 6
-        return 0
+        return _exit_code_for_terminal_state(state)
 
     if not req_id:
         raise CertifyCLIError("missing request_id in submit response", exit_code=7)
@@ -193,9 +200,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         cur_state = st_resp.get("state")
         if cur_state in ("COMPLETED", "FAILED", "UNVERIFIABLE"):
             print(json.dumps(st_resp, indent=2))
-            if cur_state == "UNVERIFIABLE":
-                return 6
-            return 0
+            return _exit_code_for_terminal_state(cur_state)
 
     sys.stderr.write(f"certification timed out after {CERTIFICATION_WAIT_TIMEOUT_SECONDS}s\n")
     return 7
@@ -222,9 +227,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         return err_code
 
     print(json.dumps(resp, indent=2))
-    if resp.get("state") == "UNVERIFIABLE":
-        return 6
-    return 0
+    return _exit_code_for_terminal_state(resp.get("state"))
 
 
 def cmd_receipt(args: argparse.Namespace) -> int:
