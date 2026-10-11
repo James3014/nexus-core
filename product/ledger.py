@@ -24,7 +24,11 @@ from typing import Protocol, runtime_checkable
 
 from product.evidence import _hash, canonical_json
 from product.evidence.ingestion import IDENTITY_ENVELOPE_SCHEMA
-from product.protocol import CERTIFICATION_RECEIPT_SCHEMA
+from product.protocol import (
+    CERTIFICATION_RECEIPT_SCHEMA,
+    IMPLEMENTATION_SCHEMA,
+    PUBLIC_PROTOCOL_VERSION,
+)
 
 LEDGER_SCHEMA_VERSION = "nexus.ledger-entry.v1"
 GENESIS_PREVIOUS_HASH = "sha256:" + "0" * 64
@@ -372,6 +376,38 @@ def compute_entry_hash(
     return _hash(payload)
 
 
+# Mirrors product.certification (CertificationDisposition, receipt CLAIM_CEILING); the
+# ledger may not import product.certification (architecture boundary), so they are pinned here.
+_RECEIPT_DISPOSITIONS = frozenset({"CERTIFIED", "REJECTED", "BLOCKED"})
+_RECEIPT_CLAIM_CEILING = [
+    "NO_MERGE_AUTHORIZATION",
+    "NO_DEPLOYMENT_TRUTH",
+    "NO_OUTCOME_TRUTH",
+    "NO_PRODUCTION_READINESS",
+    "NO_PUBLIC_PROTOCOL_STABILITY",
+]
+
+
+def _validate_receipt_semantics(rec_dict: dict[str, object]) -> None:
+    """Reject receipts whose carried fields are not a valid Completion Receipt.
+
+    The ledger has no certification inputs (and may not import product.certification),
+    so the recomputing kernel validator is unavailable; this applies the input-independent checks of the receipt envelope
+    validator to the fields the ledger persists and indexes.
+    """
+    certification = rec_dict.get("certification")
+    if not isinstance(certification, dict):
+        raise ValueError("completion receipt certification must be an object")
+    if certification.get("disposition") not in _RECEIPT_DISPOSITIONS:
+        raise ValueError("completion receipt disposition is not a valid disposition")
+    if rec_dict.get("claim_ceiling") != _RECEIPT_CLAIM_CEILING:
+        raise ValueError("completion receipt claim_ceiling does not match protocol ceiling")
+    if rec_dict.get("protocol_version") != PUBLIC_PROTOCOL_VERSION:
+        raise ValueError("completion receipt protocol_version is stale")
+    if rec_dict.get("implementation_schema") != IMPLEMENTATION_SCHEMA:
+        raise ValueError("completion receipt implementation_schema is stale")
+
+
 def _row_to_entry(row: tuple) -> LedgerEntry:
     (
         seq,
@@ -462,6 +498,7 @@ def append_or_replay(
         computed_rec_hash = _hash(receipt_body)
         if computed_rec_hash != embedded_rec_hash:
             raise ValueError("completion receipt hash mismatch")
+        _validate_receipt_semantics(rec_dict)
         factual_disposition = rec_dict["certification"]["disposition"]
         claim_ceiling = tuple(rec_dict["claim_ceiling"])
     except Exception as exc:
@@ -599,8 +636,9 @@ def append_or_replay(
                 signer_algo, signer_kid, res_meta, signature_bytes = request.signer.sign_entry(
                     digest
                 )
-                signer_meta = res_meta
-                if signer_meta != meta:
+                # Canonical form: empty metadata is None for hashing and storage alike.
+                signer_meta = res_meta or None
+                if signer_meta != (meta or None):
                     # Final entry hash recomputation with signed metadata
                     entry_hash = compute_entry_hash(
                         schema=LEDGER_SCHEMA_VERSION,
@@ -915,7 +953,9 @@ def verify_chain(
                         head_hash=entry.entry_hash,
                         error_reason=f"receipt hash {entry.receipt_hash} tampered",
                     )
-                receipt_body = {key: value for key, value in rec_dict.items() if key != "receipt_hash"}
+                receipt_body = {
+                    key: value for key, value in rec_dict.items() if key != "receipt_hash"
+                }
                 recomputed_receipt_hash = _hash(receipt_body)
                 if recomputed_receipt_hash != entry.receipt_hash:
                     return LedgerVerificationResult(
@@ -955,6 +995,24 @@ def verify_chain(
                 previous_entry_hash=entry.previous_entry_hash,
                 signer_public_metadata=entry.signer_public_metadata,
             )
+            if recomputed_entry_hash != entry.entry_hash and entry.signer_public_metadata == {}:
+                # Legacy rows stored empty metadata as "{}" while hashing it as None.
+                recomputed_entry_hash = compute_entry_hash(
+                    schema=entry.schema,
+                    ledger_id=entry.ledger_id,
+                    sequence=entry.sequence,
+                    committed_generation=entry.committed_generation,
+                    request_id=entry.request_id,
+                    idempotency_key=entry.idempotency_key,
+                    request_hash=entry.request_hash,
+                    envelope_hash=entry.envelope_hash,
+                    receipt_hash=entry.receipt_hash,
+                    factual_disposition=entry.factual_disposition,
+                    claim_ceiling=entry.claim_ceiling,
+                    source_snapshot_hash=entry.source_snapshot_hash,
+                    previous_entry_hash=entry.previous_entry_hash,
+                    signer_public_metadata=None,
+                )
             if recomputed_entry_hash != entry.entry_hash:
                 return LedgerVerificationResult(
                     valid=False,

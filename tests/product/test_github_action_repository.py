@@ -294,3 +294,65 @@ def test_action_modes_are_mutually_exclusive_and_legacy_still_requires_token_fil
     with pytest.raises(SystemExit) as raised:
         main(["--request-file", str(tmp_path / "request.json")])
     assert raised.value.code == 2
+
+
+def _legacy_main(monkeypatch, tmp_path, responses):
+    """Run legacy main() with mocked HTTP; ``responses`` are returned in call order."""
+    request_file = tmp_path / "request.json"
+    request_file.write_text("{}", encoding="utf-8")
+    token_file = tmp_path / "token"
+    token_file.write_text("t", encoding="utf-8")
+    queue = list(responses)
+
+    def fake_http(**_kwargs):
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "gh_output"))
+    monkeypatch.setattr(github_action, "validate_certification_request", lambda _p: [])
+    monkeypatch.setattr(github_action, "_get_token", lambda _p: "t")
+    monkeypatch.setattr(github_action, "_make_http_request", fake_http)
+    monkeypatch.setattr(github_action, "POLL_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(github_action, "CERTIFICATION_WAIT_TIMEOUT_SECONDS", 0.05)
+    return main(
+        [
+            "--request-file",
+            str(request_file),
+            "--token-file",
+            str(token_file),
+            "--receipt-output-file",
+            str(tmp_path / "receipt.json"),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [("COMPLETED", 0), ("FAILED", 1), ("UNVERIFIABLE", 6)],
+)
+def test_legacy_action_exit_code_follows_final_state(monkeypatch, tmp_path, state, expected):
+    # Immediate terminal response and the polled-to-terminal path must agree.
+    immediate = _legacy_main(monkeypatch, tmp_path, [(200, {"request_id": "r1", "state": state})])
+    assert immediate == expected
+    polled = _legacy_main(
+        monkeypatch,
+        tmp_path,
+        [
+            (202, {"request_id": "r1", "state": "PENDING"}),
+            (200, {"request_id": "r1", "state": state}),
+        ],
+    )
+    assert polled == expected
+
+
+def test_legacy_action_pending_timeout_exits_nonzero(monkeypatch, tmp_path, capsys):
+    code = _legacy_main(
+        monkeypatch,
+        tmp_path,
+        [
+            (202, {"request_id": "r1", "state": "PENDING"}),
+            (200, {"request_id": "r1", "state": "RUNNING"}),
+        ],
+    )
+    assert code == github_action.EXIT_TIMEOUT == 7
+    assert "did not reach a final state" in capsys.readouterr().err

@@ -169,16 +169,6 @@ _HANDOFF_IDENTITY = HandoffIdentity(
     runtime_identity="runtime-sha:0000000000000000",
 )
 
-_NEW_ISSUE_DISPOSITION = (
-    "#176: certify_changeset raises TypeError 'unhashable type: list' when `disposition` "
-    "(or a verifier `status`) is a list (`x not in <set>` on unhashable JSON values)"
-)
-_NEW_ISSUE_FLOAT = (
-    "#177: validate_verification_receipt_payload raises TypeError on a float field "
-    "(product=0.0: 'unsupported canonical value: float') or a list config_source.kind "
-    "('unhashable type: list') instead of returning valid=False"
-)
-
 # ---------------------------------------------------- a. validator totality
 
 
@@ -260,9 +250,9 @@ def _check_changeset_total(payload):
         assert adapter.validate_changeset_certification(result.to_dict()) == ()
 
 
-def test_certify_changeset_is_total_excluding_known_gap():
+def test_certify_changeset_is_total():
     base = _changeset_payload()
-    check_all(lambda r: make_input(r, base, scalar_only=True), _check_changeset_total)
+    check_all(lambda r: make_input(r, base), _check_changeset_total)
 
 
 def test_certified_changeset_results_round_trip():
@@ -277,13 +267,12 @@ def test_certified_changeset_results_round_trip():
             assert adapter.validate_changeset_certification(result) == ()
             assert adapter.validate_changeset_certification(result.to_dict()) == ()
 
-    check_all(lambda r: mutate(r, base, scalar_only=True), check)
+    check_all(lambda r: mutate(r, base), check)
     # control: the unmutated fixture certifies and round-trips
     check(base)
     assert certified >= 1
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_DISPOSITION)
 def test_certify_changeset_list_disposition_known_gap():
     _check_changeset_total({**_changeset_payload(), "disposition": []})
 
@@ -307,12 +296,9 @@ def _check_verification_receipt_total(payload):
     assert isinstance(result, dict) and isinstance(result["valid"], bool)
 
 
-def test_validate_verification_receipt_payload_is_total_excluding_known_gap():
+def test_validate_verification_receipt_payload_is_total():
     base = _verification_receipt()
-    check_all(
-        lambda r: make_input(r, base, scalar_only=True, floats=False),
-        _check_verification_receipt_total,
-    )
+    check_all(lambda r: make_input(r, base), _check_verification_receipt_total)
 
 
 def _receipt_with(**fields: Any) -> dict[str, Any]:
@@ -325,13 +311,11 @@ def _receipt_with(**fields: Any) -> dict[str, Any]:
     return payload
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_FLOAT)
-def test_verification_receipt_list_kind_known_gap():
+def test_verification_receipt_list_kind_is_total():
     _check_verification_receipt_total(_receipt_with(kind=[]))
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_FLOAT)
-def test_verification_receipt_float_field_known_gap():
+def test_verification_receipt_float_field_is_total():
     _check_verification_receipt_total(_receipt_with(product=0.0))
 
 
@@ -372,7 +356,6 @@ def test_accepted_identifiers_equal_canonical_form_except_newline():
             assert isinstance(fn(value), bool)
             if fn(value):
                 body = value[len(prefix) :]
-                body = body[:-1] if body.endswith("\n") else body  # known #160
                 assert value.startswith(prefix) and len(body) == n
                 assert all(c in _HEX for c in body)
 
@@ -387,11 +370,6 @@ def test_accepted_identifiers_equal_canonical_form_except_newline():
     check_all(gen, check, 300)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#160: re.match + '$' accepts a trailing newline "
-    "(https://github.com/James3014/nexus-core/issues/160)",
-)
 def test_identifiers_reject_trailing_newline():
     def check(seed):
         rng = random.Random(seed)
