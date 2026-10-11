@@ -171,3 +171,67 @@ def test_to_dict_round_trip():
     body = a.to_dict()
     assert body["sufficiency"] == "SUFFICIENT"
     assert body["claim_ceiling"] == SUFFICIENCY_CLAIM_CEILING
+
+
+def _core_failed_case(change_set_kwargs=None, contract=None):
+    c, cs, p = _subjects()
+    c = contract or c
+    if change_set_kwargs is not None:
+        cs = ChangeSet(
+            change_set_id="cs-1",
+            source_revision=cs.source_revision,
+            target_revision=cs.target_revision,
+            diff_hash=cs.diff_hash,
+            **change_set_kwargs,
+        )
+    p = VerificationPlan(
+        plan_id="vp-1",
+        acceptance_contract_hash=c.hash,
+        change_set_hash=cs.hash,
+        required_verifier_ids=("unit",),
+    )
+    return c, cs, p, _bundle(c, cs, p, [_obs()])
+
+
+def _assert_core_failure_not_sufficient(c, cs, p, e):
+    from product.verification import VerificationStatus, verify
+
+    core = verify(c, cs, p, e)
+    assert core.integrity is IntegrityStatus.VALID
+    assert core.status is not VerificationStatus.VERIFIED
+    a = analyze_evidence_sufficiency(_req(), c, cs, p, e)
+    assert a.sufficiency is not EvidenceSufficiency.SUFFICIENT
+    assert a.sufficiency is EvidenceSufficiency.FAILED
+    assert f"FAILED:core:{core.status.value}" in a.reason_codes
+
+
+def test_scope_escape_not_sufficient():
+    _assert_core_failure_not_sufficient(
+        *_core_failed_case({"paths": ("src/a.py", "secrets/evil.py")})
+    )
+
+
+def test_forbidden_deletion_not_sufficient():
+    _assert_core_failure_not_sufficient(
+        *_core_failed_case({"paths": ("src/a.py",), "deleted_paths": ("src/a.py",)})
+    )
+
+
+def test_unresolved_coverage_not_sufficient():
+    from product.evidence import (
+        AcceptanceContract,
+        Applicability,
+        ExpectedEvidenceSubject,
+        RequirementMode,
+        _hash,
+    )
+
+    subj = (
+        ExpectedEvidenceSubject(
+            "lint-clean", "lint", RequirementMode.CONDITIONALLY_REQUIRED, Applicability.UNRESOLVED
+        ),
+    )
+    c = AcceptanceContract(
+        "ac-1", _hash("requirements"), ("unit",), ("src/a.py",), "FORBID", subj, 1
+    )
+    _assert_core_failure_not_sufficient(*_core_failed_case(contract=c))
