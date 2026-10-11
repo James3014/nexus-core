@@ -55,7 +55,17 @@ class UnknownEffectError(RuntimeError):
 
 @runtime_checkable
 class ExternalSignerPort(Protocol):
-    """External signing port. Receives only canonical digest; never private keys."""
+    """External signing port. Receives only canonical digest; never private keys.
+
+    Trust model (issue #163): this port only *produces* a signature; nothing in this
+    module verifies it. The signature, algorithm and key id returned here are stored
+    as unauthenticated metadata: they are not covered by the entry hash, and
+    `verify_chain` neither checks them nor authenticates the signer. The returned
+    `public_metadata` is free-form and is covered by the entry hash (so the chain is
+    tamper-evident for it), but its content is likewise never authenticated.
+    Consumers that need signer authentication must verify signatures out of band
+    with their own key material.
+    """
 
     def sign_entry(self, digest: bytes) -> tuple[str, str, dict[str, object], bytes]:
         """Sign entry digest.
@@ -96,6 +106,21 @@ class LedgerAppendRequest:
 
 @dataclass(frozen=True)
 class LedgerEntry:
+    """One stored ledger row.
+
+    Covered by `entry_hash` (see `compute_entry_hash`): schema, ledger_id, sequence,
+    committed_generation, request_id, idempotency_key, request_hash, envelope_hash,
+    receipt_hash, factual_disposition, claim_ceiling, source_snapshot_hash,
+    previous_entry_hash and signer_public_metadata.
+
+    Unauthenticated metadata, NOT covered by `entry_hash`: signer_algorithm,
+    signer_key_id, signature, created_at, attempt and expected_generation. Altering
+    them does not change the entry hash and `verify_chain` will not detect it.
+    `signer_public_metadata` is hash-covered (tamper-evident) but its content is
+    free-form and not authenticated. Signer authenticity is therefore not
+    guaranteed; verify signatures out of band with your own key material.
+    """
+
     schema: str
     ledger_id: str
     sequence: int
@@ -356,6 +381,10 @@ def compute_entry_hash(
     Canonical domain: (schema, ledger_id, sequence, committed_generation, request_id,
     idempotency_key, request_hash, envelope_hash, receipt_hash, factual_disposition,
     claim_ceiling, source_snapshot_hash, previous_entry_hash, signer_public_metadata).
+
+    The signature, signer algorithm, signer key id, created_at, attempt and
+    expected_generation are deliberately NOT part of this domain (unauthenticated
+    metadata; see `LedgerEntry`). Changing the domain would change persisted hashes.
     """
     payload = (
         schema,
@@ -819,7 +848,14 @@ def verify_chain(
 ) -> LedgerVerificationResult:
     """Verify hash chaining, contiguous sequence, generation monotonicity, and payloads.
 
-    Fails closed on any corruption, truncation, gap, or tampering.
+    Fails closed on any corruption, truncation, gap, or tampering of the hash-covered
+    fields (see `LedgerEntry` and `compute_entry_hash`).
+
+    This proves hash-chain integrity only. It does NOT authenticate signers: the
+    signature, signer_algorithm, signer_key_id, created_at, attempt and
+    expected_generation are not covered by the entry hash and are not checked here, so
+    a VALID result says nothing about who signed an entry. Consumers needing signer
+    authentication must verify signatures out of band with their own key material.
     """
     target_path = resolve_ledger_path(db_path)
     if not target_path.exists():
