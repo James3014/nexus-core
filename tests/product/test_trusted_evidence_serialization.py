@@ -509,6 +509,17 @@ def test_reference_signature_binds_issuer_payload_and_revocation():
         verification_receipt=receipt,
         observed_at="2026-08-29T12:00:00+00:00",
     )
+    # Expiry boundary fails closed: observed_at == expires_at is expired.
+    assert not verify_trust_reference_signature(
+        reference,
+        verifier,
+        expected_issuer_id="issuer-1",
+        key_id="key-1",
+        payload=payload,
+        signature=b"s" * 64,
+        verification_receipt=receipt,
+        observed_at="2026-08-29T13:00:00+00:00",
+    )
     assert not verify_trust_reference_signature(
         reference,
         verifier,

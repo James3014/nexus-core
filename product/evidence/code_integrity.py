@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Mapping
 
 from product.evidence import ChangeSet, Observation, ObservationStatus, _hash, canonical_json
+from product.evidence.ingestion import _non_utf8_xml_prolog
 
 VERIFIER_ID = "code_integrity_v1"
 PROFILE_ID = "python-code-integrity-v1"
@@ -410,7 +411,7 @@ def _local_name(tag: str) -> str:
 
 
 def _junit_cases(data: bytes) -> list[tuple[str, str, bool]]:
-    if not data or b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+    if not data or b"<!DOCTYPE" in data or b"<!ENTITY" in data or _non_utf8_xml_prolog(data):
         raise ValueError("unsafe or missing JUnit")
     root = ET.fromstring(data)
     cases: list[tuple[str, str, bool]] = []

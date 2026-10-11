@@ -144,7 +144,7 @@ def _repo_root(path: str | Path) -> Path:
 
 
 def _toml_string(value: str) -> str:
-    return json.dumps(value, ensure_ascii=True)
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
 def _toml_array(values: Sequence[str]) -> str:
@@ -1675,6 +1675,7 @@ def _raise_with_receipt(
         requirements_context=requirements_context,
         config_source=config_source,
         issue_verification=issue_verification,
+        material_transitions=material_transitions,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path)
