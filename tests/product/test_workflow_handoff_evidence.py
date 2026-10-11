@@ -10,6 +10,7 @@ from product.evidence import IntegrityStatus, _hash
 from product.evidence.handoff import (
     HANDOFF_CLAIM_CEILING,
     HANDOFF_SCHEMA,
+    HandoffEvidenceError,
     HandoffIdentity,
     HandoffVerdict,
     HandoffVerification,
@@ -288,3 +289,28 @@ def test_non_canonical_float_in_envelope_or_body_is_invalid_not_raised():
         result = verify_handoff_evidence(envelope, current_identity=_current())
         assert result.verdict is HandoffVerdict.INVALID
         assert result.integrity is IntegrityStatus.MALFORMED
+
+
+@pytest.mark.parametrize("schema", [[], {}, ["x"], {"a": 1}, None, 1, 1.5, True, b"x"])
+def test_non_string_schema_is_invalid_not_raised(schema):
+    envelope = _envelope()
+    envelope["schema"] = schema
+    result = verify_handoff_evidence(envelope, current_identity=_current())
+    assert result.verdict is HandoffVerdict.INVALID
+    assert result.reason_codes == ("INVALID:schema",)
+    assert result.integrity is IntegrityStatus.MALFORMED
+    assert not result.trustworthy
+
+
+@pytest.mark.parametrize("schema", [[], {}, None, 1])
+def test_verification_rejects_non_string_schema_without_type_error(schema):
+    good = verify_handoff_evidence(_envelope(), current_identity=_current())
+    fields = {
+        "verdict": good.verdict,
+        "reason_codes": good.reason_codes,
+        "integrity": good.integrity,
+        "input_binding_hash": good.input_binding_hash,
+        "claim_ceiling": good.claim_ceiling,
+    }
+    with pytest.raises(HandoffEvidenceError):
+        HandoffVerification(schema=schema, **fields)
