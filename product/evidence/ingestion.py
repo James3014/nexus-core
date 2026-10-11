@@ -112,8 +112,20 @@ def _native_text(value: object, field: str) -> None:
         raise ValueError(f"{field} must be a normalized string")
 
 
+_UNICODE_BOMS = (
+    b"\xff\xfe",
+    b"\xfe\xff",
+    b"\x00\x00\xfe\xff",
+)
+
+
+def _non_utf8_xml_prolog(data: bytes) -> bool:
+    """Fail closed on UTF-16/UTF-32 XML, which would hide DOCTYPE/ENTITY bytes."""
+    return data.startswith(_UNICODE_BOMS) or b"\x00" in data[:64]
+
+
 def _native_junit_counts(data: bytes, exit_code: int) -> tuple[int, int, int]:
-    if not data or b"<!DOCTYPE" in data or b"<!ENTITY" in data:
+    if not data or b"<!DOCTYPE" in data or b"<!ENTITY" in data or _non_utf8_xml_prolog(data):
         raise ValueError("missing or unsafe junit oracle")
     try:
         root = ET.fromstring(data)
@@ -1908,7 +1920,7 @@ def derive_runtime_freshness(runtime, observed_at):
     )
     if not now or not at or not expiry:
         return FreshnessStatus.CONVERGENCE_UNKNOWN
-    if at > now or expiry < now or runtime.observed_generation != runtime.desired_generation:
+    if at > now or expiry <= now or runtime.observed_generation != runtime.desired_generation:
         return FreshnessStatus.STALE_OBSERVATION
     if not _valid_revision(runtime.desired_source_revision) or not _valid_revision(
         runtime.loaded_source_revision

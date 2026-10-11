@@ -213,8 +213,8 @@ def _dispositions_for(claim, change_set, plan, evidence):
     )
     binding_by_artifact = (
         {
-            artifact_id: path
-            for _, artifact_id, path in claim.verified_artifacts
+            (verifier_id, artifact_id): path
+            for verifier_id, artifact_id, path in claim.verified_artifacts
         }
         if claim is not None
         else {}
@@ -240,7 +240,7 @@ def _dispositions_for(claim, change_set, plan, evidence):
                 )
             )
             continue
-        path = binding_by_artifact.get(observation.artifact_id)
+        path = binding_by_artifact.get((verifier_id, observation.artifact_id))
         if path is None or path not in changed:
             reports.append(
                 VerifierEvidenceReport(
