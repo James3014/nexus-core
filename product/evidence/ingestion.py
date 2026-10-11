@@ -125,12 +125,7 @@ def _non_utf8_xml_prolog(data: bytes) -> bool:
 
 
 def _native_junit_counts(data: bytes, exit_code: int) -> tuple[int, int, int]:
-    if (
-        not data
-        or b"<!DOCTYPE" in data
-        or b"<!ENTITY" in data
-        or _non_utf8_xml_prolog(data)
-    ):
+    if not data or b"<!DOCTYPE" in data or b"<!ENTITY" in data or _non_utf8_xml_prolog(data):
         raise ValueError("missing or unsafe junit oracle")
     try:
         root = ET.fromstring(data)

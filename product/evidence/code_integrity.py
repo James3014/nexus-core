@@ -411,12 +411,7 @@ def _local_name(tag: str) -> str:
 
 
 def _junit_cases(data: bytes) -> list[tuple[str, str, bool]]:
-    if (
-        not data
-        or b"<!DOCTYPE" in data
-        or b"<!ENTITY" in data
-        or _non_utf8_xml_prolog(data)
-    ):
+    if not data or b"<!DOCTYPE" in data or b"<!ENTITY" in data or _non_utf8_xml_prolog(data):
         raise ValueError("unsafe or missing JUnit")
     root = ET.fromstring(data)
     cases: list[tuple[str, str, bool]] = []
