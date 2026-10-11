@@ -474,7 +474,7 @@ def check_issue(
 ) -> dict[str, Any]:
     repo = _repo_root(path)
     binding = load_issue_binding(repo, issue_number)
-    github_repo = binding["github_repository"]
+    github_repo = _resolve_github_repo(repo, binding["github_repository"])
     raw = (issue_reader or _default_issue_reader)(github_repo, issue_number)
     current = _issue_contract(github_repo, issue_number, raw)
     if current["state"] != "open":

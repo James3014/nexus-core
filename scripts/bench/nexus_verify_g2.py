@@ -172,7 +172,6 @@ def _make_receipts(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
     _git(repo, "add", "app.py")
     _git(repo, "commit", "-m", "base")
-    _git(repo, "checkout", "-b", "feature")
 
     init_repository(
         repo,
@@ -180,6 +179,10 @@ def _make_receipts(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         allowed_patterns=("*.py",),
         verifier_command=(sys.executable, "-c", "print('verified')"),
     )
+    # Trusted evidence requires the config to be committed on the base ref.
+    _git(repo, "add", ".nexus-core/config.toml")
+    _git(repo, "commit", "-m", "trusted config")
+    _git(repo, "checkout", "-b", "feature")
 
     (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
     _git(repo, "add", "app.py")

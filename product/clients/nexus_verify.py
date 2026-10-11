@@ -373,6 +373,21 @@ def evaluate_code_change_evidence_subject(
             reason_codes=("MALFORMED_RECEIPT_BINDING",),
         )
 
+    config_source = receipt.get("config_source")
+    if not (
+        isinstance(config_source, Mapping)
+        and config_source.get("kind") == "base-ref"
+    ):
+        # The unkeyed receipt hash proves self-consistency only; evidence produced
+        # from a worktree/candidate-controlled config is not trusted evidence.
+        return _result(
+            subject=public_subject,
+            receipt_integrity="VALID",
+            evidence_applicability="UNVERIFIABLE",
+            core_verification="NOT_AVAILABLE",
+            reason_codes=("RECEIPT_CONFIG_SOURCE_UNTRUSTED",),
+        )
+
     expected_source_revision = f"git-commit:{acquired_subject['current_base_sha']}"
     expected_source_tree = f"git-tree:{acquired_subject['current_base_tree']}"
     expected_target_tree = f"git-tree:{acquired_subject['current_head_tree']}"
@@ -389,6 +404,15 @@ def evaluate_code_change_evidence_subject(
             evidence_applicability="STALE_SOURCE",
             core_verification=core_verification,
             reason_codes=("RECEIPT_SOURCE_DOES_NOT_MATCH_CURRENT_PR",),
+        )
+
+    if config_source.get("commit") != acquired_subject["current_base_sha"]:
+        return _result(
+            subject=public_subject,
+            receipt_integrity="VALID",
+            evidence_applicability="UNVERIFIABLE",
+            core_verification="NOT_AVAILABLE",
+            reason_codes=("RECEIPT_CONFIG_SOURCE_UNTRUSTED",),
         )
 
     if (

@@ -963,3 +963,29 @@ def test_transition_receipt_requires_authorized_by(pin_issue_repo: tuple[Path, s
         holder["material_transitions"][0]["authorized_by"]["author_association"] = "NONE"
     verdict = validate_verification_receipt_payload(_rehash(downgraded))
     assert "MATERIAL_TRANSITION_UNAUTHORIZED_AUTHOR" in verdict["reason_codes"]
+
+
+def test_issue_check_rejects_binding_repository_that_differs_from_origin(
+    issue_repo: Path,
+) -> None:
+    def reader(repo: str, number: int) -> dict[str, object]:
+        return _issue()
+
+    binding_path = init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    payload = json.loads(binding_path.read_text(encoding="utf-8"))
+    payload["github_repository"] = "attacker/elsewhere"
+    payload["issue_contract"] = issue_gp._issue_contract("attacker/elsewhere", 85, _issue())
+    payload["issue_contract_hash"] = canonical_hash(payload["issue_contract"])
+    payload["binding_hash"] = issue_gp._hash_without_binding(payload)
+    binding_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    seen: list[str] = []
+
+    def spy(repo: str, number: int) -> dict[str, object]:
+        seen.append(repo)
+        return _issue()
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(issue_repo, issue_number=85, issue_reader=spy)
+    assert raised.value.reason_code == "GITHUB_REPOSITORY_MISMATCH"
+    assert seen == []

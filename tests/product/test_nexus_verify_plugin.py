@@ -42,16 +42,18 @@ def verified_repo_and_receipt(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
     _git(repo, "add", "app.py")
     _git(repo, "commit", "-m", "base")
-    _git(repo, "checkout", "-b", "feature")
-    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
-    _git(repo, "add", "app.py")
-    _git(repo, "commit", "-m", "feature")
     init_repository(
         repo,
         base_ref="main",
         allowed_patterns=("*.py",),
         verifier_command=(sys.executable, "-c", "print('verified')"),
     )
+    _git(repo, "add", ".nexus-core/config.toml")
+    _git(repo, "commit", "-m", "trusted config")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "feature")
     result = check_repository(repo)
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     return repo, receipt
@@ -387,3 +389,48 @@ def test_adapter_has_no_execution_or_github_mutation_surface():
         "os.system",
     ):
         assert forbidden not in source
+
+
+def test_untrusted_worktree_config_receipt_is_unverifiable(tmp_path: Path):
+    repo = tmp_path / "untrusted"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "external@example.test")
+    _git(repo, "config", "user.name", "External User")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "feature")
+    # Never-committed, caller-chosen config with a no-op verifier.
+    init_repository(
+        repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        verifier_command=(sys.executable, "-c", "pass"),
+    )
+    receipt = json.loads(check_repository(repo)["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["config_source"]["kind"] == "worktree"
+
+    result = verify_code_change_evidence(_args(receipt), github_port=FakeGitHubPort(repo, receipt))
+
+    assert result["evidence_applicability"] == "UNVERIFIABLE"
+    assert result["core_verification"] != "VERIFIED"
+    assert result["reason_codes"] == ["RECEIPT_CONFIG_SOURCE_UNTRUSTED"]
+
+
+def test_forged_base_ref_config_source_with_wrong_commit_is_unverifiable(
+    verified_repo_and_receipt,
+):
+    from product.clients.local_golden_path import _receipt_hash
+
+    repo, receipt = verified_repo_and_receipt
+    receipt["config_source"] = {**receipt["config_source"], "commit": "0" * 40}
+    receipt["receipt_hash"] = _receipt_hash(receipt)
+
+    result = verify_code_change_evidence(_args(receipt), github_port=FakeGitHubPort(repo, receipt))
+
+    assert result["evidence_applicability"] == "UNVERIFIABLE"
+    assert result["core_verification"] == "NOT_AVAILABLE"

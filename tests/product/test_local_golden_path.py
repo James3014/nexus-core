@@ -2225,3 +2225,28 @@ def test_receipt_deeply_nested_value_is_rejected_not_raised(
     validation = validate_verification_receipt_payload(valid_receipt)
 
     assert validation == {"valid": False, "reason_codes": ["MALFORMED_RECEIPT"]}
+
+
+def test_require_trusted_config_rejects_candidate_chosen_base_ref_expression(
+    external_repo: Path,
+):
+    """A worktree config may not mint base-ref trust by naming a candidate commit."""
+
+    _commit_config_on_main(external_repo, '["*.py"]')
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(external_repo, "commit", "-am", "change")
+    # Honest control: base_ref names a real branch.
+    assert check_repository(external_repo, require_trusted_config=True)["status"] == "VERIFIED"
+
+    # Candidate commit F1 names HEAD~1 (itself candidate-only after F2) as base_ref.
+    _v2_config(external_repo, [sys.executable, "-c", "pass"], base_ref="HEAD~1")
+    _git(external_repo, "commit", "-am", "F1 weak config")
+    (external_repo / "app.py").write_text("VALUE = 3\n", encoding="utf-8")
+    _git(external_repo, "commit", "-am", "F2 payload")
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo, require_trusted_config=True)
+    assert raised.value.reason_code == "CONFIG_UNTRUSTED"
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["config_source"]["kind"] == "worktree"

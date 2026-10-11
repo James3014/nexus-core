@@ -242,7 +242,7 @@ config: trusted (main@<commit>)
 config: untrusted (not committed on main)
 ```
 
-To refuse the untrusted case, add `--require-trusted-config` (or set `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`). The run then fails with `CONFIG_UNTRUSTED`.
+To refuse the untrusted case, add `--require-trusted-config` (or set `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`). The run then fails with `CONFIG_UNTRUSTED`. `base_ref` must name a branch, remote-tracking ref or tag; a revision expression such as `HEAD~1` or a commit SHA is treated as untrusted because the candidate can choose it. In CI, also pin the config commit with `--expect-config-commit`.
 
 ```bash
 nexus-certify check --require-trusted-config

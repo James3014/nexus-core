@@ -591,6 +591,21 @@ def _load_config(repo: Path) -> dict[str, Any]:
         raise LocalCheckError("INVALID_CONFIG", str(exc)) from exc
 
 
+def _base_ref_is_candidate_controlled(repo: Path, base_ref: str) -> bool:
+    """True when the worktree-chosen ``base_ref`` can only name candidate history.
+
+    ``base_ref`` comes from the untrusted worktree config. A revision expression
+    (``HEAD~1``, ``HEAD``, ``abc123``) is chosen by the candidate commit itself and
+    resolves inside candidate history, so it must not confer ``base-ref`` trust.
+    Only a named branch, remote-tracking ref or tag counts; refs are not created by
+    candidate commits. ``--expect-config-commit`` remains the pin for CI.
+    """
+
+    full = _run_git(repo, "rev-parse", "--verify", "--symbolic-full-name", base_ref)
+    name = full.stdout.strip() if full.returncode == 0 else ""
+    return not name.startswith(("refs/heads/", "refs/remotes/", "refs/tags/"))
+
+
 def _load_effective_config(
     repo: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
@@ -609,6 +624,7 @@ def _load_effective_config(
     source: dict[str, Any] = {"kind": "worktree"}
     if resolved.returncode == 0:
         commit = resolved.stdout.strip()
+        candidate_redirect = _base_ref_is_candidate_controlled(repo, base_ref)
         shown = _run_git(repo, "show", f"{commit}:{config_rel}", text=False)
         if shown.returncode == 0:
             try:
@@ -620,13 +636,14 @@ def _load_effective_config(
                     "CONFIG_BASE_REF_MISMATCH",
                     f"worktree base_ref {base_ref!r} != base-ref config {base_config['base_ref']!r}",
                 )
-            effective = base_config
-            source = {
-                "kind": "base-ref",
-                "ref": base_ref,
-                "commit": commit,
-                "blob": _git_stdout(repo, "rev-parse", f"{commit}:{config_rel}"),
-            }
+            if not candidate_redirect:
+                effective = base_config
+                source = {
+                    "kind": "base-ref",
+                    "ref": base_ref,
+                    "commit": commit,
+                    "blob": _git_stdout(repo, "rev-parse", f"{commit}:{config_rel}"),
+                }
     full_source = {
         "kind": source["kind"],
         "ref": source.get("ref"),
