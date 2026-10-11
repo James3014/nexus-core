@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """TG-9 paired usability/value evidence verifier.
 
 This module is measurement and adjudication tooling only. It does not contact
@@ -18,7 +19,7 @@ import re
 import statistics
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, cast
 
 STUDY_SCHEMA = "nexus.core-v1.tg9-study.v1"
 ELIGIBILITY_SCHEMA = "nexus.core-v1.tg9-eligibility.v1"
@@ -104,11 +105,12 @@ def _canonical(value: Any) -> str:
                 raise ValueError("non-finite float")
             return item
         if isinstance(item, Mapping):
-            if any(type(key) is not str for key in item):
+            mapping = cast("Mapping[Any, Any]", item)
+            if any(type(key) is not str for key in mapping):
                 raise TypeError("mapping keys must be strings")
-            return {key: encode(item[key]) for key in sorted(item)}
+            return {key: encode(mapping[key]) for key in sorted(mapping)}
         if isinstance(item, (list, tuple)):
-            return [encode(entry) for entry in item]
+            return [encode(entry) for entry in cast("Sequence[Any]", item)]
         raise TypeError(type(item).__name__)
 
     return json.dumps(
@@ -362,11 +364,15 @@ def validate_eligibility(eligibility: Mapping[str, Any], manifest: Mapping[str, 
         return errors + ["PARTNERS_NOT_LIST"]
     ids: set[str] = set()
     enrolled = 0
-    for row in partners:
-        if not isinstance(row, Mapping) or set(row) != PARTNER_KEYS:
+    for raw_row in cast("list[Any]", partners):
+        if (
+            not isinstance(raw_row, Mapping)
+            or set(cast("Mapping[Any, Any]", raw_row)) != PARTNER_KEYS
+        ):
             errors.append("INVALID_PARTNER_ROW")
             continue
-        partner_id = row["partner_id"]
+        row = cast("Mapping[str, Any]", raw_row)
+        partner_id: Any = row["partner_id"]
         if not isinstance(partner_id, str) or PSEUDONYM_RE.fullmatch(partner_id) is None:
             errors.append("INVALID_PARTNER_PSEUDONYM")
         elif partner_id in ids:
@@ -388,7 +394,7 @@ def validate_eligibility(eligibility: Mapping[str, Any], manifest: Mapping[str, 
     if not MIN_PARTNERS <= enrolled <= MAX_PARTNERS:
         errors.append("COHORT_SIZE_OUT_OF_RANGE")
     reserve = eligibility["reserve_order"]
-    if not isinstance(reserve, list) or any(item not in ids for item in reserve):
+    if not isinstance(reserve, list) or any(item not in ids for item in cast("list[Any]", reserve)):
         errors.append("INVALID_RESERVE_ORDER")
     return errors
 
@@ -401,20 +407,24 @@ def validate_consent(
         return errors
     if consent["study_id"] != manifest["study_id"]:
         errors.append("CONSENT_STUDY_MISMATCH")
-    partner_rows = {
+    partner_rows: dict[Any, Mapping[str, Any]] = {
         row["partner_id"]: row
-        for row in eligibility["partners"]
+        for row in cast("list[Mapping[str, Any]]", eligibility["partners"])
         if isinstance(row, Mapping) and row.get("eligibility_state") == "ENROLLED"
     }
     receipts = consent["receipts"]
     if not isinstance(receipts, list):
         return errors + ["CONSENT_RECEIPTS_NOT_LIST"]
     seen: set[str] = set()
-    for row in receipts:
-        if not isinstance(row, Mapping) or set(row) != CONSENT_RECEIPT_KEYS:
+    for raw_row in cast("list[Any]", receipts):
+        if (
+            not isinstance(raw_row, Mapping)
+            or set(cast("Mapping[Any, Any]", raw_row)) != CONSENT_RECEIPT_KEYS
+        ):
             errors.append("INVALID_CONSENT_ROW")
             continue
-        partner_id = row["partner_id"]
+        row = cast("Mapping[str, Any]", raw_row)
+        partner_id: Any = row["partner_id"]
         if partner_id not in partner_rows:
             errors.append("CONSENT_FOR_NON_ENROLLED_PARTNER")
         if partner_id in seen:
@@ -484,9 +494,11 @@ def validate_observation(row: Mapping[str, Any], manifest: Mapping[str, Any]) ->
         errors.append("INVALID_ORACLE_RECEIPT")
     if (
         not isinstance(row["attempt_ids"], list)
-        or len(row["attempt_ids"]) != 2
-        or len(set(row["attempt_ids"])) != 2
-        or any(not isinstance(item, str) or not item for item in row["attempt_ids"])
+        or len(cast("list[Any]", row["attempt_ids"])) != 2
+        or len(set(cast("list[Any]", row["attempt_ids"]))) != 2
+        or any(
+            not isinstance(item, str) or not item for item in cast("list[Any]", row["attempt_ids"])
+        )
     ):
         errors.append("INVALID_ATTEMPT_IDENTITIES")
     if type(row["excluded"]) is not bool:
@@ -578,13 +590,13 @@ def validate_signal(
 
 def _privacy_walk(value: Any, path: str, findings: list[str]) -> None:
     if isinstance(value, Mapping):
-        for key, item in value.items():
+        for key, item in cast("Mapping[str, Any]", value).items():
             lowered = key.lower()
             if any(fragment in lowered for fragment in FORBIDDEN_KEY_FRAGMENTS):
                 findings.append(f"FORBIDDEN_KEY:{path}/{key}")
             _privacy_walk(item, f"{path}/{key}", findings)
     elif isinstance(value, list):
-        for index, item in enumerate(value):
+        for index, item in enumerate(cast("list[Any]", value)):
             _privacy_walk(item, f"{path}/{index}", findings)
     elif isinstance(value, str):
         if EMAIL_RE.search(value):
@@ -741,7 +753,7 @@ def adjudicate(
             observation_errors.append(f"OBSERVATION_{index}:NON_ENROLLED_PARTNER")
         attempts = row.get("attempt_ids", [])
         if isinstance(attempts, list):
-            for attempt in attempts:
+            for attempt in cast("list[Any]", attempts):
                 if attempt in seen_attempts:
                     observation_errors.append(f"OBSERVATION_{index}:DUPLICATE_ATTEMPT")
                 if isinstance(attempt, str):
@@ -1105,7 +1117,7 @@ def _load_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain one JSON object")
-    return value
+    return cast("dict[str, Any]", value)
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -1116,7 +1128,7 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
         value = json.loads(line)
         if not isinstance(value, dict):
             raise ValueError(f"{path}:{number} must contain one JSON object")
-        rows.append(value)
+        rows.append(cast("dict[str, Any]", value))
     return rows
 
 
