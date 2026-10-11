@@ -1,27 +1,29 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Trusted certification adapter over the Task-3 evidence authority."""
 
 import hashlib
 import weakref
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, TypeVar, cast
 
 import product.kernel as kernel
-from product.evidence import _hash
+from product.evidence import _hash  # pyright: ignore[reportPrivateUsage]
 from product.evidence.ingestion import (
     EvidenceIdentityEnvelope,  # noqa: F401
-    EvidenceSubmission,  # noqa: F401
+    EvidenceSubmission,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     ExternalEd25519VerifierPort,  # noqa: F401
     ExternalVerificationReceipt,  # noqa: F401
     IngestionResult,  # noqa: F401
     IngestionTrustStatus,  # noqa: F401
-    IssuerGrant,  # noqa: F401
+    IssuerGrant,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     TrustDecision,  # noqa: F401
     TrustedIngestionContext,  # noqa: F401
     TrustReference,  # noqa: F401
     TrustRole,  # noqa: F401
-    _parse_time,  # noqa: F401
+    _parse_time,  # noqa: F401  # pyright: ignore[reportPrivateUsage]
     classify_ingestion_result,  # noqa: F401
-    ingest_evidence,  # noqa: F401
+    ingest_evidence,  # noqa: F401  # pyright: ignore[reportUnusedImport]
     is_trusted_ingestion_result,  # noqa: F401
     load_external_verification_receipt,  # noqa: F401
     load_identity_envelope,  # noqa: F401
@@ -35,9 +37,24 @@ from product.kernel import CertificationInput, CertificationResult
 
 EXTERNAL_RECEIPT_EXPECTATION_SCHEMA = "nexus.external_receipt_expectation.v1-experimental"
 _ROLES = (TrustRole.POLICY, TrustRole.AUTHORITY, TrustRole.APPROVAL, TrustRole.SIGNING)
-_TRUSTED_EXPECTATIONS = weakref.WeakKeyDictionary()
-_TRUSTED_PREREQUISITES = weakref.WeakKeyDictionary()
-_TRUSTED_CERTIFICATIONS = weakref.WeakKeyDictionary()
+_T = TypeVar("_T")
+_TRUSTED_EXPECTATIONS: weakref.WeakKeyDictionary[
+    "ExternalReceiptExpectation",
+    tuple[weakref.ref[TrustedIngestionContext], weakref.ref[IngestionResult], str],
+] = weakref.WeakKeyDictionary()
+_TRUSTED_PREREQUISITES: weakref.WeakKeyDictionary[
+    "ValidatedPrerequisites",
+    tuple[weakref.ref[TrustedIngestionContext], weakref.ref[IngestionResult], str],
+] = weakref.WeakKeyDictionary()
+_TRUSTED_CERTIFICATIONS: weakref.WeakKeyDictionary[
+    "TrustedCertificationResult",
+    tuple[
+        weakref.ref[TrustedIngestionContext],
+        weakref.ref[IngestionResult],
+        weakref.ref["ValidatedPrerequisites"],
+        str,
+    ],
+] = weakref.WeakKeyDictionary()
 
 
 @dataclass(frozen=True, init=False, eq=False)
@@ -53,11 +70,11 @@ class ExternalReceiptExpectation:
     verification_method: str
     external_verification_receipt_hash: str
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("ExternalReceiptExpectation construction is internal")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash((
             EXTERNAL_RECEIPT_EXPECTATION_SCHEMA,
             self.context_hash,
@@ -100,14 +117,14 @@ class ValidatedPrerequisites:
     reference_hashes: tuple[str, ...]
     expectation_hashes: tuple[str, ...]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("ValidatedPrerequisites construction is internal")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash(
             ("nexus.validated_prerequisites.v1-experimental",)
-            + tuple(getattr(self, f) for f in self.__dataclass_fields__)
+            + tuple(getattr(self, f) for f in cast("Any", self).__dataclass_fields__)
         )
 
 
@@ -122,11 +139,11 @@ class TrustedCertificationResult:
     core_receipt_hash: str
     core_result: CertificationResult
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError("TrustedCertificationResult construction is internal")
 
     @property
-    def hash(self):
+    def hash(self) -> str:
         return _hash((
             "nexus.trusted_certification_wrapper.v1-experimental",
             self.context_hash,
@@ -139,26 +156,26 @@ class TrustedCertificationResult:
         ))
 
 
-def _subject(context, ingestion):
+def _subject(context: TrustedIngestionContext, ingestion: IngestionResult) -> str:
     return _hash((
         "nexus.trusted_prerequisite_subject.v1-experimental",
         context.hash,
-        ingestion.bundle.hash,
+        ingestion.bundle.hash,  # pyright: ignore[reportOptionalMemberAccess]  # AttributeError is caught by callers
     ))
 
 
-def _raw_hash(value):
+def _raw_hash(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-def _mint(cls, values):
+def _mint(cls: type[_T], values: tuple[object, ...]) -> _T:
     value = object.__new__(cls)
-    for name, item in zip(cls.__dataclass_fields__, values):
+    for name, item in zip(cast("Any", cls).__dataclass_fields__, values):
         object.__setattr__(value, name, item)
     return value
 
 
-def _role_map(values, expected_type):
+def _role_map(values: tuple[Any, ...], expected_type: type[Any]) -> dict[TrustRole, Any] | None:
     if type(values) is not tuple or len(values) != 4:
         return None
     if any(type(v) is not expected_type for v in values):
@@ -172,7 +189,7 @@ def _role_map(values, expected_type):
     return dict(zip(roles, values))
 
 
-def _valid_reference(value):
+def _valid_reference(value: TrustReference) -> bool:
     try:
         value.__post_init__()
         return True
@@ -184,7 +201,11 @@ def _valid_reference(value):
         return False
 
 
-def _valid_expectation(value, context, ingestion):
+def _valid_expectation(
+    value: ExternalReceiptExpectation,
+    context: TrustedIngestionContext,
+    ingestion: IngestionResult,
+) -> bool:
     try:
         binding = _TRUSTED_EXPECTATIONS[value]
         return binding[0]() is context and binding[1]() is ingestion and value.hash == binding[2]
@@ -192,7 +213,11 @@ def _valid_expectation(value, context, ingestion):
         return False
 
 
-def _registered_prerequisite(value, context, ingestion):
+def _registered_prerequisite(
+    value: ValidatedPrerequisites,
+    context: TrustedIngestionContext,
+    ingestion: IngestionResult,
+) -> bool:
     try:
         binding = _TRUSTED_PREREQUISITES[value]
         if binding[0]() is not context or binding[1]() is not ingestion:
@@ -218,7 +243,7 @@ def _registered_prerequisite(value, context, ingestion):
         ):
             return False
         for name in ("reference_hashes", "expectation_hashes"):
-            items = getattr(value, name)
+            items = cast("tuple[Any, ...]", getattr(value, name))
             if (
                 type(items) is not tuple
                 or len(items) != 4
@@ -229,7 +254,7 @@ def _registered_prerequisite(value, context, ingestion):
             value.subject_hash == _subject(context, ingestion)
             and value.context_hash == context.hash
             and value.profile_hash == context.expected_profile_hash
-            and value.ingestion_bundle_hash == ingestion.bundle.hash
+            and value.ingestion_bundle_hash == ingestion.bundle.hash  # pyright: ignore[reportOptionalMemberAccess]  # AttributeError caught below
             and value.ingestion_receipt_hash == ingestion.receipt.hash
             and value.observed_at == context.observed_at
             and value.hash == binding[2]
@@ -238,7 +263,7 @@ def _registered_prerequisite(value, context, ingestion):
         return False
 
 
-def _prerequisite_shape(value):
+def _prerequisite_shape(value: object) -> bool:  # pyright: ignore[reportUnusedFunction]
     try:
         for name in (
             "subject_hash",
@@ -270,7 +295,7 @@ def _prerequisite_shape(value):
         return False
 
 
-def _bootstrap_external_receipt_expectation(
+def _bootstrap_external_receipt_expectation(  # pyright: ignore[reportUnusedFunction]
     *,
     context: TrustedIngestionContext,
     ingestion: IngestionResult,
@@ -317,7 +342,7 @@ def _bootstrap_external_receipt_expectation(
     return value
 
 
-def _invalid(reason):
+def _invalid(reason: str) -> PrerequisiteValidationResult:
     return PrerequisiteValidationResult(PrerequisiteValidationStatus.INVALID, None, (reason,))
 
 
@@ -360,7 +385,7 @@ def validate_prerequisites(
         return _invalid("ROLE_SET_INVALID")
     subject = _subject(context, ingestion)
     roots = dict(context.prerequisite_payload_hashes)
-    reasons = []
+    reasons: list[str] = []
     for role in _ROLES:
         ref, exp = refmap[role], expmap[role]
         raw_hash = _raw_hash(ref.external_verification_receipt)
