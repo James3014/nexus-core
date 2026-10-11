@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Shared helper that snapshots a function's module globals.
 
 Leaf module: imports nothing from ``product``.
@@ -7,7 +8,7 @@ from types import FunctionType
 from typing import Any
 
 
-def _freeze_function_globals(function: Any) -> Any:
+def _freeze_function_globals(function: Any) -> Any:  # pyright: ignore[reportUnusedFunction]
     frozen = FunctionType(
         function.__code__,
         dict(function.__globals__),
