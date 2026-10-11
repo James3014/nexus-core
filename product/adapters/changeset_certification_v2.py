@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Provider-neutral v2 ChangeSet certification wire contract."""
 
 from __future__ import annotations
@@ -7,13 +8,14 @@ import json
 import math
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping, cast
 
 from product.certification import CertificationDisposition, CertificationPolicy, certify_result
 from product.evidence import EvidenceCondition, ObservationStatus, validate_normalized_paths
 from product.protocol import IMPLEMENTATION_SCHEMA
 from product.verification import VerificationResult, VerificationStatus, reduce_verification
 
+_JsonLike = str | bool | int | float | Mapping[str, Any] | list[Any] | tuple[Any, ...] | None
 LEGACY_CHANGESET_CERTIFICATION_SCHEMA = "nexus.changeset_certification.v1"
 LEGACY_CHANGESET_CERTIFICATION_VERSION = 1
 CHANGESET_CERTIFICATION_SCHEMA = "nexus.changeset_certification.v2"
@@ -175,10 +177,10 @@ def derive_verification_result(
         return reduce_verification(condition, reasons=reasons)
     if payload.get("candidate") is None:
         return reduce_verification(EvidenceCondition.MISSING, reasons=("candidate_missing",))
-    verifiers = manifest.get("verifiers")
+    verifiers = cast("Mapping[str, Any]", manifest).get("verifiers")
     if not isinstance(verifiers, list) or not verifiers:
         return reduce_verification(EvidenceCondition.MISSING, reasons=("verifier_missing",))
-    if any(verifier.get("status") == "FAIL" for verifier in verifiers):
+    if any(verifier.get("status") == "FAIL" for verifier in cast("list[Any]", verifiers)):
         return reduce_verification(
             EvidenceCondition.VALID, (ObservationStatus.FAIL,), ("verifier_failed",)
         )
@@ -219,9 +221,9 @@ def _condition_for_errors(errors: tuple[str, ...]) -> EvidenceCondition:
 
 
 def _missing_prerequisites(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    missing = []
+    missing: list[str] = []
     for key in ("approval", "authority", "signing"):
-        value = payload.get(key)
+        value: Mapping[str, Any] | None = payload.get(key)
         complete = (
             isinstance(value, Mapping)
             and _exact(value, {"complete"})
@@ -233,7 +235,7 @@ def _missing_prerequisites(payload: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _policy_reasons(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    policy = payload.get("policy")
+    policy: Mapping[str, Any] | None = payload.get("policy")
     if policy is None:
         return ("policy_missing",)
     if (
@@ -246,7 +248,7 @@ def _policy_reasons(payload: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _waiver_is_malformed(payload: Mapping[str, Any]) -> bool:
-    waiver = payload.get("waiver")
+    waiver: Mapping[str, Any] | None = payload.get("waiver")
     return waiver is not None and (
         not isinstance(waiver, Mapping)
         or not _exact(waiver, {"approved"})
@@ -515,7 +517,7 @@ def _validate(
     ):
         return ("schema_invalid",)
     if allow_verification_result and "verification_result" in payload:
-        factual = payload["verification_result"]
+        factual: Mapping[str, Any] = payload["verification_result"]
         if (
             not isinstance(factual, Mapping)
             or not _exact(factual, {"status", "reason_codes"})
@@ -528,8 +530,9 @@ def _validate(
             or any(reason not in _REASONS for reason in factual["reason_codes"])
         ):
             return ("evidence_malformed",)
-    task, repo, base, diff, scope = (
-        payload.get(k) for k in ("task", "repository", "base", "diff", "allowed_scope")
+    task, repo, base, diff, scope = cast(
+        "Iterator[Mapping[str, Any] | None]",
+        (payload.get(k) for k in ("task", "repository", "base", "diff", "allowed_scope")),
     )
     if any(v is None for v in (task, repo, base, diff)):
         return ("identity_missing",)
@@ -570,7 +573,7 @@ def _validate(
         return ("scope_malformed",)
     if not set(diff["paths"]).issubset(scope["paths"]):
         return ("scope_escape",)
-    candidate = payload.get("candidate")
+    candidate: Mapping[str, Any] | None = payload.get("candidate")
     if candidate is not None and (
         not isinstance(candidate, Mapping)
         or not _exact(candidate, {"commit", "tree", "diff_hash"})
@@ -580,7 +583,7 @@ def _validate(
         return ("candidate_malformed",)
     if candidate is not None and candidate["diff_hash"] != diff["hash"]:
         return ("cross_binding_mismatch",)
-    manifest = payload.get("verifier_manifest")
+    manifest: Mapping[str, Any] | None = payload.get("verifier_manifest")
     if manifest is None:
         return ("verifier_manifest_missing",)
     mkeys = {
@@ -643,7 +646,7 @@ def _validate(
     )
     if bindings != actual:
         return ("cross_binding_mismatch",)
-    verifiers = manifest.get("verifiers")
+    verifiers: list[Mapping[str, Any]] | None = manifest.get("verifiers")
     if not isinstance(verifiers, list) or not verifiers:
         return ("verifier_missing",)
     verifier_ids: set[str] = set()
@@ -670,7 +673,7 @@ def _validate(
             return ("verifier_artifact_malformed",)
         if verifier["artifact_id"] != f"{verifier['verifier_id']}:{task['attempt_id']}":
             return ("cross_binding_mismatch",)
-    reasons = payload.get("reasons")
+    reasons: list[str] | None = payload.get("reasons")
     if not isinstance(reasons, list):
         return ("reason_invalid",)
     if len(reasons) > _MAX_REASONS or any(
@@ -783,7 +786,7 @@ def _result(
 
 
 def _policy(payload: Mapping[str, Any]) -> CertificationPolicy:
-    policy = payload.get("policy")
+    policy: Mapping[str, Any] | None = payload.get("policy")
     if "policy" not in payload or policy is None:
         return CertificationPolicy()
     if not isinstance(policy, Mapping):
@@ -850,7 +853,7 @@ def _project_verification_result(result: VerificationResult) -> dict[str, Any]:
     return {"status": result.status.value, "reason_codes": list(_project_reasons(result))}
 
 
-def _complete(value: Any) -> bool | None:
+def _complete(value: Mapping[str, Any] | None) -> bool | None:
     if value is None:
         return None
     return (
@@ -858,12 +861,12 @@ def _complete(value: Any) -> bool | None:
     )
 
 
-def _as_mapping(value: Any) -> Mapping[str, Any]:
+def _as_mapping(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
 def _hashes_match(payload: Mapping[str, Any]) -> bool:
-    manifest = payload.get("verifier_manifest")
+    manifest: Mapping[str, Any] | None = payload.get("verifier_manifest")
     return (
         isinstance(manifest, Mapping)
         and payload.get("canonical_payload_hash") == canonical_hash(_payload_input(payload))
@@ -872,8 +875,8 @@ def _hashes_match(payload: Mapping[str, Any]) -> bool:
 
 
 def _hash_errors(payload: Mapping[str, Any]) -> tuple[str, ...]:
-    out = []
-    manifest = payload.get("verifier_manifest")
+    out: list[str] = []
+    manifest: Mapping[str, Any] | None = payload.get("verifier_manifest")
     if not isinstance(manifest, Mapping) or manifest.get("manifest_hash") != canonical_hash(
         _manifest_input(manifest)
     ):
@@ -973,7 +976,7 @@ def _hash(value: Any) -> bool:
     )
 
 
-def _paths(value: Any) -> bool:
+def _paths(value: list[str] | None) -> bool:
     if not isinstance(value, list):
         return False
     try:
@@ -983,7 +986,7 @@ def _paths(value: Any) -> bool:
     return True
 
 
-def _normalize(value: Any, path: tuple[str, ...]) -> Any:
+def _normalize(value: _JsonLike, path: tuple[str, ...]) -> Any:
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
@@ -1006,7 +1009,7 @@ def _normalize(value: Any, path: tuple[str, ...]) -> Any:
     raise TypeError(f"unsupported canonical JSON value: {type(value).__name__}")
 
 
-def _contains_nonfinite(value: Any) -> bool:
+def _contains_nonfinite(value: _JsonLike) -> bool:
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, Mapping):
