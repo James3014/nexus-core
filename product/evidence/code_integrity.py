@@ -1,3 +1,4 @@
+# pyright: strict, reportUnnecessaryIsInstance=false, reportUnnecessaryComparison=false
 """Deterministic Python code-integrity evidence producer for Anti-Stub checks."""
 
 from __future__ import annotations
@@ -7,10 +8,18 @@ import hashlib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from enum import Enum
-from typing import Mapping
+from typing import Mapping, cast
 
-from product.evidence import ChangeSet, Observation, ObservationStatus, _hash, canonical_json
-from product.evidence.ingestion import _non_utf8_xml_prolog
+from product.evidence import (
+    ChangeSet,
+    Observation,
+    ObservationStatus,
+    _hash,  # pyright: ignore[reportPrivateUsage]
+    canonical_json,  # pyright: ignore[reportUnknownVariableType]
+)
+from product.evidence.ingestion import (
+    _non_utf8_xml_prolog,  # pyright: ignore[reportPrivateUsage]
+)
 
 VERIFIER_ID = "code_integrity_v1"
 PROFILE_ID = "python-code-integrity-v1"
@@ -287,7 +296,7 @@ class CodeIntegrityReportV1:
 
     @property
     def canonical_bytes(self) -> bytes:
-        return canonical_json(self.to_dict()).encode("utf-8")
+        return cast(str, canonical_json(self.to_dict())).encode("utf-8")
 
     @property
     def artifact_hash(self) -> str:
