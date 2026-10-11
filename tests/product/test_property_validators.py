@@ -173,10 +173,6 @@ _NEW_ISSUE_DISPOSITION = (
     "#176: certify_changeset raises TypeError 'unhashable type: list' when `disposition` "
     "(or a verifier `status`) is a list (`x not in <set>` on unhashable JSON values)"
 )
-_NEW_ISSUE_HANDOFF = (
-    "#178: verify_handoff_evidence raises TypeError 'unhashable type' when "
-    "envelope `schema` is a list or dict (membership check at product/evidence/handoff.py:283)"
-)
 
 # ---------------------------------------------------- a. validator totality
 
@@ -186,13 +182,12 @@ def _check_verify_handoff(payload):
     assert isinstance(result, HandoffVerification)
 
 
-def test_verify_handoff_evidence_is_total_excluding_known_gap():
+def test_verify_handoff_evidence_is_total():
     base = _envelope()
-    check_all(lambda r: make_input(r, base, scalar_only=True), _check_verify_handoff)
+    check_all(lambda r: make_input(r, base), _check_verify_handoff)
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason=_NEW_ISSUE_HANDOFF)
-def test_verify_handoff_evidence_list_schema_known_gap():
+def test_verify_handoff_evidence_list_schema_is_invalid_not_raised():
     _check_verify_handoff({**_envelope(), "schema": []})
 
 
