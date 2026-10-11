@@ -34,15 +34,15 @@ _TREE_RE = re.compile(_GIT_TREE_PATTERN)
 
 
 def is_sha256_hash(value: Any) -> bool:
-    return isinstance(value, str) and bool(_HASH_RE.match(value))
+    return isinstance(value, str) and bool(_HASH_RE.fullmatch(value))
 
 
 def is_git_commit_ref(value: Any) -> bool:
-    return isinstance(value, str) and bool(_COMMIT_RE.match(value))
+    return isinstance(value, str) and bool(_COMMIT_RE.fullmatch(value))
 
 
 def is_git_tree_ref(value: Any) -> bool:
-    return isinstance(value, str) and bool(_TREE_RE.match(value))
+    return isinstance(value, str) and bool(_TREE_RE.fullmatch(value))
 
 
 def runtime_handoff_receipt_hash(receipt_payload: Mapping[str, Any]) -> str:

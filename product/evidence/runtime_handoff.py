@@ -102,6 +102,14 @@ def validate_handoff_evidence_envelope(
             reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_INVALID")
         if not is_git_tree_ref(prerequisite.get("target_tree")):
             reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_INVALID")
+        elif (
+            isinstance(payload.get("source_binding"), Mapping)
+            and is_git_tree_ref(payload["source_binding"].get("target_tree"))
+            and prerequisite.get("target_tree") != payload["source_binding"].get("target_tree")
+        ):
+            # docs/LOCAL_GOLDEN_PATH.md: the prerequisite receipt's target tree must equal
+            # the handoff product tree.
+            reasons.append("PREREQUISITE_REPOSITORY_RECEIPT_STALE")
 
     # Source binding validation
     source = payload.get("source_binding")
@@ -162,7 +170,7 @@ def validate_handoff_evidence_envelope(
         if not isinstance(command, list) or not command or any(not isinstance(c, str) for c in command):
             reasons.append("INVALID_VERIFIER_COMMAND")
         exit_code = verifier.get("exit_code")
-        if not isinstance(exit_code, int) or exit_code != 0:
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code != 0:
             reasons.append("HANDOFF_VERIFIER_FAILED")
         if not is_sha256_hash(verifier.get("stdout_sha256")):
             reasons.append("INVALID_STDOUT_HASH")
