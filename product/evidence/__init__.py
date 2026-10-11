@@ -1,7 +1,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 
@@ -147,8 +147,8 @@ def _require_text(value: object, field: str) -> None:
         raise ValueError(f"{field} must be non-empty and normalized")
 
 
-def _make_require_hash(fullmatch):
-    def require_hash(value, field):
+def _make_require_hash(fullmatch: Callable[[str], object]) -> Callable[[object, str], None]:
+    def require_hash(value: object, field: str) -> None:
         if type(value) is not str:
             raise TypeError(f"{field} must be a string")
         if not value or value != value.strip() or "\x00" in value:
