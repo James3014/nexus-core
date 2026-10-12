@@ -1,13 +1,13 @@
 # HANDOFF
 
-更新：2026-10-11 · by Claude · HEAD `376b15d`
+更新：2026-10-12 · by Claude · HEAD `90190b9`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
-#203 確認 PR #214、#220（已合併）是否已滿足 #203 / #204 的驗收條件（負向測試在 enforcing sink 斷言被拒），符合就關單——兩張單仍開著，PR 用的是 Refs。
+#205 決定 runtime `verify_receipt` 的部分要不要改（PR #214 刻意沒改，SECURITY.md 已說明 receipt 未經驗證；#220 只補了 HTTP e2e 斷言）。
 
 ## 進行中
-- #205：PR #214 刻意沒有改 runtime `verify_receipt`（SECURITY.md 已說明 receipt 未經驗證）；#220 只補了 HTTP e2e 對 FULL 驗證結果的斷言。runtime 部分仍需另外決定。
+- #231：Nexus Verify 改成必須驗 Sigstore 簽章才回 APPLIES/VERIFIED。屬公開協定＋安全邊界變更，需 Owner 決定才動工；目前限制已在 #204（PR #232）寫進 SECURITY.md 與測試。
 
 ## 待確認（沒有 Issue 號）
 - 無。
