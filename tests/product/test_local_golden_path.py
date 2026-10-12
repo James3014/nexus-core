@@ -2415,3 +2415,149 @@ def test_issue_check_accepts_expect_config_commit():
     assert args.expect_config_commit == "a" * 40
     with pytest.raises(SystemExit):
         build_parser().parse_args(["check", "--expect-config-commit", "main"])
+
+
+# --------------------------------------------------------------------------- NCGF-003
+# SECURITY.md "Verifier sandbox": the sandbox is cloned with --no-hardlinks and
+# objects/info/alternates must be absent. These tests observe the real sandbox on disk
+# just before cleanup (the narrowest seam, ``_cleanup_verifier_sandbox``) and spy on the
+# real ``_run_git`` wrapper without changing what it executes.
+
+_LGP = "product.clients.local_golden_path"
+
+
+def _object_files(git_dir: Path) -> dict[tuple[int, int], tuple[str, int]]:
+    """Map (st_dev, st_ino) -> (path relative to objects/, st_nlink) for every object file."""
+    objects = git_dir / "objects"
+    found: dict[tuple[int, int], tuple[str, int]] = {}
+    for path in objects.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            stat = path.stat()
+            found[(stat.st_dev, stat.st_ino)] = (str(path.relative_to(objects)), stat.st_nlink)
+    return found
+
+
+def _install_sandbox_observers(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    drop_no_hardlinks: bool = False,
+    plant_alternates_from: Path | None = None,
+) -> dict[str, Any]:
+    import product.clients.local_golden_path as lgp
+
+    observed: dict[str, Any] = {"git_calls": [], "sandboxes": []}
+    real_run_git = lgp._run_git  # pyright: ignore[reportPrivateUsage]
+    real_cleanup = lgp._cleanup_verifier_sandbox  # pyright: ignore[reportPrivateUsage]
+
+    def spy_run_git(repo: Path, *args: str, **kwargs: Any) -> Any:
+        if args and args[0] == "clone":
+            observed["git_calls"].append(list(args))
+            if drop_no_hardlinks:
+                args = tuple(arg for arg in args if arg != "--no-hardlinks")
+        result = real_run_git(repo, *args, **kwargs)
+        if args and args[0] == "clone" and plant_alternates_from is not None:
+            info = Path(args[-1]) / ".git" / "objects" / "info"
+            info.mkdir(parents=True, exist_ok=True)
+            (info / "alternates").write_text(
+                f"{plant_alternates_from / '.git' / 'objects'}\n", encoding="utf-8"
+            )
+        return result
+
+    def observing_cleanup(path: Path) -> None:
+        git_dir = path / "repo" / ".git"
+        observed["sandboxes"].append(
+            {
+                "parent": path,
+                "objects": _object_files(git_dir) if git_dir.is_dir() else {},
+                "alternates": (git_dir / "objects" / "info" / "alternates").exists(),
+            }
+        )
+        real_cleanup(path)
+
+    monkeypatch.delenv("NEXUS_CERTIFY_SANDBOX_ROOT", raising=False)
+    monkeypatch.setattr(f"{_LGP}._run_git", spy_run_git)
+    monkeypatch.setattr(f"{_LGP}._cleanup_verifier_sandbox", observing_cleanup)
+    return observed
+
+
+def _same_device_or_skip(external_repo: Path, sandbox_objects: dict[tuple[int, int], Any]) -> None:
+    source_dev = (external_repo / ".git" / "objects").stat().st_dev
+    if sandbox_objects and {dev for dev, _ in sandbox_objects} != {source_dev}:
+        pytest.skip("sandbox and source repository are on different filesystems")
+
+
+def test_sandbox_clone_shares_no_hardlinked_objects_and_has_no_alternates(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Guards SECURITY.md 'Verifier sandbox': --no-hardlinks + no objects/info/alternates."""
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _init(external_repo)
+    observed = _install_sandbox_observers(monkeypatch)
+
+    result = check_repository(external_repo)
+
+    assert result["status"] == "VERIFIED"
+    # The real clone argv carries --no-hardlinks (and is the only clone performed).
+    assert len(observed["git_calls"]) == 1
+    assert "--no-hardlinks" in observed["git_calls"][0]
+    # The prepared sandbox existed on disk at cleanup time and is gone afterwards.
+    assert len(observed["sandboxes"]) == 1
+    sandbox = observed["sandboxes"][0]
+    assert not sandbox["parent"].exists()
+    assert sandbox["alternates"] is False
+    sandbox_objects = sandbox["objects"]
+    assert sandbox_objects, "sandbox clone must carry its own object files"
+    _same_device_or_skip(external_repo, sandbox_objects)
+    source_objects = _object_files(external_repo / ".git")
+    # Behavioral: no sandbox object file is the same inode as a source object file,
+    # and no sandbox object file has a second link anywhere.
+    assert not set(sandbox_objects) & set(source_objects)
+    assert all(nlink == 1 for _, nlink in sandbox_objects.values())
+
+
+def test_sandbox_hardlink_detector_negative_control(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Negative control: dropping --no-hardlinks makes the same inspection detect sharing."""
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _init(external_repo)
+    observed = _install_sandbox_observers(monkeypatch, drop_no_hardlinks=True)
+
+    check_repository(external_repo)
+
+    sandbox_objects = observed["sandboxes"][0]["objects"]
+    _same_device_or_skip(external_repo, sandbox_objects)
+    source_objects = _object_files(external_repo / ".git")
+    shared = set(sandbox_objects) & set(source_objects)
+    assert shared, "without --no-hardlinks a local clone hardlinks objects; detector must see it"
+    assert any(sandbox_objects[key][1] > 1 for key in shared)
+
+
+def test_sandbox_with_object_alternates_fails_closed_before_verifier(
+    external_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Guards SECURITY.md 'Verifier sandbox': alternates present => VERIFIER_SANDBOX_PREPARE_FAILED."""
+    marker = tmp_path / "verifier-ran"
+    init_repository(
+        external_repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        deletion_policy="FORBID",
+        verifier_command=(sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"),
+    )
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    observed = _install_sandbox_observers(monkeypatch, plant_alternates_from=external_repo)
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "VERIFIER_SANDBOX_PREPARE_FAILED"
+    assert "alternates" in raised.value.detail
+    assert not marker.exists(), "verifier must not run in a sandbox with object alternates"
+    # Fail-closed still leaves a receipt and still cleans up the sandbox.
+    assert raised.value.receipt_path is not None
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["outcome"]["status"] == "FAILED_CLOSED"
+    assert receipt["outcome"]["reason_codes"] == ["VERIFIER_SANDBOX_PREPARE_FAILED"]
+    assert observed["sandboxes"][0]["alternates"] is True
+    assert not observed["sandboxes"][0]["parent"].exists()
