@@ -26,7 +26,7 @@ def test_g2_report_reaches_supported_terminal_state(report, gate):
     assert report["claim_ceiling"] == "CONTROLLED_COMPARATIVE_EVIDENCE_ONLY"
 
 
-def test_all_ten_required_cases_are_present(report):
+def test_all_required_cases_are_present(report):
     assert [row["case_id"] for row in report["cases"]] == [
         "G2-01-FRESH-EXACT",
         "G2-02-OLDER-TARGET",
@@ -38,6 +38,8 @@ def test_all_ten_required_cases_are_present(report):
         "G2-08-INCOMPLETE-ACQUISITION",
         "G2-09-VALID-EVIDENCE-CHECK-CHURN",
         "G2-10-GITHUB-NATIVE-SUFFICIENT",
+        "G2-11-REHASHED-FORGED-RECEIPT",
+        "G2-12-UNSIGNED-RECEIPT",
     ]
 
 
@@ -59,6 +61,8 @@ def test_material_incremental_evidence_value_exceeds_threshold(report, gate):
         "G2-05-REQUIRED-VERIFIER-MISSING",
         "G2-06-SCOPE-MISMATCH",
         "G2-09-VALID-EVIDENCE-CHECK-CHURN",
+        "G2-11-REHASHED-FORGED-RECEIPT",
+        "G2-12-UNSIGNED-RECEIPT",
     }
 
 
@@ -88,6 +92,20 @@ def test_tampered_receipt_is_fail_closed(report):
     assert row["assisted"]["evidence_applicability"] == "TAMPERED"
     assert "RECEIPT_HASH_MISMATCH" in row["assisted"]["reason_codes"]
     assert row["observed"]["accept"] is False
+
+
+@pytest.mark.parametrize(
+    "case_id", ["G2-11-REHASHED-FORGED-RECEIPT", "G2-12-UNSIGNED-RECEIPT"]
+)
+def test_unauthenticated_receipt_is_never_accepted(report, case_id):
+    """#231: a self-consistent receipt without an authenticated bundle is UNVERIFIABLE."""
+    row = next(row for row in report["cases"] if row["case_id"] == case_id)
+    assert row["assisted"]["receipt_integrity"] == "VALID"
+    assert row["assisted"]["evidence_applicability"] == "UNVERIFIABLE"
+    assert row["assisted"]["core_verification"] == "NOT_AVAILABLE"
+    assert row["assisted"]["reason_codes"] == ["RECEIPT_NOT_AUTHENTICATED"]
+    assert row["observed"]["accept"] is False
+    assert row["observed"]["false_green"] is False
 
 
 def test_github_native_overlap_is_not_counted_as_nexus_value(report):

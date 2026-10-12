@@ -7,20 +7,33 @@ verification receipt, and compares the two identities. It does not execute code,
 write GitHub state, make merge/release decisions, or create a second verification
 authority.
 
-Integrity here means self-consistency (an unkeyed SHA-256 hash), not authenticity.
-The config-source and base-commit checks only bind what the receipt claims, so a
-caller who can edit and re-hash a receipt can make it APPLY. ``VERIFIED`` from this
-tool is therefore not proof that the receipt came from Nexus CI. The Sigstore-signed
-CI receipt checked by ``receipt-verify`` is the authority (see SECURITY.md);
-signature verification here is tracked in #231.
+``receipt_integrity`` means self-consistency (an unkeyed SHA-256 hash), not
+authenticity. Since #231 a receipt is trusted only when it arrives with the Sigstore
+bundle that CI produced for its exact bytes (``receipt_signature``) and that bundle
+verifies against the expected GitHub Actions workflow identity of the subject
+repository. Without an authenticated bundle the result is ``UNVERIFIABLE`` with
+``RECEIPT_NOT_AUTHENTICATED`` (or ``RECEIPT_AUTHENTICATION_UNAVAILABLE`` when the
+optional ``sigstore`` package or trust root is unavailable), never ``VERIFIED``.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import re
 from typing import Any, Mapping, Sequence, cast
 
 from product.clients.local_golden_path import validate_verification_receipt_payload
+from product.clients.receipt_authentication import (
+    NOT_AUTHENTICATED,
+    UNAVAILABLE,
+    ReceiptAuthentication,
+    ReceiptAuthenticator,
+    ReceiptSignerPolicy,
+    SigstoreReceiptAuthenticator,
+    github_workflow_signer_policy,
+)
 from product.runtime.nexus_verify import (
     read_current_pull_request_subject,
     validate_github_locator,
@@ -28,9 +41,29 @@ from product.runtime.nexus_verify import (
 
 TOOL_NAME = "verify_code_change_evidence"
 TOOL_DESCRIPTION = (
-    "Verify whether supplied Nexus evidence is internally valid and still applies "
-    "to the current exact GitHub pull-request state."
+    "Verify whether supplied Nexus evidence is internally valid, authenticated by its "
+    "Sigstore CI signature, and still applies to the current exact GitHub pull-request state."
 )
+
+RECEIPT_NOT_AUTHENTICATED = "RECEIPT_NOT_AUTHENTICATED"
+RECEIPT_AUTHENTICATION_UNAVAILABLE = "RECEIPT_AUTHENTICATION_UNAVAILABLE"
+
+_RECEIPT_SIGNATURE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["receipt_base64", "sigstore_bundle"],
+    "properties": {
+        "receipt_base64": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Base64 of the exact signed receipt file bytes (<receipt>.json).",
+        },
+        "sigstore_bundle": {
+            "type": "object",
+            "description": "The CI Sigstore bundle for those bytes (<receipt>.json.sigstore.json).",
+        },
+    },
+}
 
 CLAIM_CEILING = (
     "VERIFIED_IS_NOT_MERGE_APPROVAL",
@@ -39,7 +72,7 @@ CLAIM_CEILING = (
 )
 
 INPUT_SCHEMA: dict[str, Any] = {
-    "$id": "nexus.verify-code-change-evidence.input.v1",
+    "$id": "nexus.verify-code-change-evidence.input.v2",
     "type": "object",
     "additionalProperties": False,
     "required": ["repository_owner", "repository_name", "pr_number"],
@@ -50,6 +83,12 @@ INPUT_SCHEMA: dict[str, Any] = {
         "receipt": {
             "anyOf": [
                 {"type": "object"},
+                {"type": "null"},
+            ]
+        },
+        "receipt_signature": {
+            "anyOf": [
+                _RECEIPT_SIGNATURE_SCHEMA,
                 {"type": "null"},
             ]
         },
@@ -82,7 +121,7 @@ _SUBJECT_SCHEMA: dict[str, Any] = {
 }
 
 OUTPUT_SCHEMA: dict[str, Any] = {
-    "$id": "nexus.verify-code-change-evidence.output.v1",
+    "$id": "nexus.verify-code-change-evidence.output.v2",
     "type": "object",
     "additionalProperties": False,
     "required": [
@@ -178,13 +217,21 @@ def _result(
     }
 
 
-def _validate_arguments(arguments: Mapping[str, Any]) -> tuple[str, str, int, dict[str, Any] | None]:
+def _validate_arguments(
+    arguments: Mapping[str, Any],
+) -> tuple[str, str, int, dict[str, Any] | None, dict[str, Any] | None]:
     if not isinstance(arguments, Mapping):
         raise ValueError("arguments must be an object")
     values = dict(arguments)
     if not {"repository_owner", "repository_name", "pr_number"}.issubset(values):
         raise ValueError("repository_owner, repository_name and pr_number are required")
-    if set(values) - {"repository_owner", "repository_name", "pr_number", "receipt"}:
+    if set(values) - {
+        "repository_owner",
+        "repository_name",
+        "pr_number",
+        "receipt",
+        "receipt_signature",
+    }:
         raise ValueError("unexpected tool arguments")
     owner, repository, pr_number = validate_github_locator(
         values["repository_owner"],
@@ -194,11 +241,120 @@ def _validate_arguments(arguments: Mapping[str, Any]) -> tuple[str, str, int, di
     receipt = values.get("receipt")
     if receipt is not None and not isinstance(receipt, Mapping):
         raise ValueError("receipt must be an object or null")
+    signature = _validate_receipt_signature_shape(values.get("receipt_signature"))
+    if signature is not None and receipt is None:
+        raise ValueError("receipt_signature requires receipt")
     return (
         owner,
         repository,
         pr_number,
         dict(cast("Mapping[str, Any]", receipt)) if receipt is not None else None,
+        signature,
+    )
+
+
+def _validate_receipt_signature_shape(value: object) -> dict[str, Any] | None:
+    """Schema-level check of ``receipt_signature``; content is judged later."""
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("receipt_signature must be an object or null")
+    signature = dict(cast("Mapping[str, Any]", value))
+    if set(signature) != {"receipt_base64", "sigstore_bundle"}:
+        raise ValueError("receipt_signature needs exactly receipt_base64 and sigstore_bundle")
+    if not isinstance(signature["receipt_base64"], str) or not signature["receipt_base64"]:
+        raise ValueError("receipt_signature.receipt_base64 must be a non-empty string")
+    if not isinstance(signature["sigstore_bundle"], Mapping):
+        raise ValueError("receipt_signature.sigstore_bundle must be an object")
+    return signature
+
+
+def _bundle_shape_problem(bundle: Mapping[str, Any]) -> str | None:
+    """Reject bundles that cannot be a Sigstore message-signature bundle.
+
+    The authenticator does the cryptographic work; this keeps obviously wrong
+    material (including DSSE envelopes, which sign a statement rather than the
+    receipt bytes) from ever reaching it.
+    """
+
+    media_type = bundle.get("mediaType")
+    if not isinstance(media_type, str) or not media_type.startswith(
+        "application/vnd.dev.sigstore.bundle"
+    ):
+        return "bundle mediaType is not a Sigstore bundle"
+    if not isinstance(bundle.get("verificationMaterial"), Mapping):
+        return "bundle has no verificationMaterial"
+    if "dsseEnvelope" in bundle or not isinstance(bundle.get("messageSignature"), Mapping):
+        return "bundle is not a message signature over the receipt bytes"
+    return None
+
+
+def _canonical_json(value: object) -> str | None:
+    # Type-exact comparison: ``True == 1`` and ``1 == 1.0`` in Python, not in JSON.
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def authenticate_receipt(
+    receipt: Mapping[str, Any],
+    receipt_signature: Mapping[str, Any] | None,
+    *,
+    policy: ReceiptSignerPolicy,
+    authenticator: ReceiptAuthenticator | None = None,
+) -> ReceiptAuthentication:
+    """Decide whether ``receipt`` is the exact payload signed by ``policy``'s workflow.
+
+    Missing, malformed or mismatched signature material is ``NOT_AUTHENTICATED``.
+    The signed bytes must decode to exactly the supplied receipt object, so a
+    caller cannot pair a genuine bundle with an edited receipt.
+    """
+
+    if receipt_signature is None:
+        return ReceiptAuthentication(NOT_AUTHENTICATED, "no receipt_signature supplied")
+    signature = _validate_receipt_signature_shape(receipt_signature)
+    assert signature is not None
+    try:
+        receipt_bytes = base64.b64decode(signature["receipt_base64"], validate=True)
+    except (binascii.Error, ValueError):
+        return ReceiptAuthentication(NOT_AUTHENTICATED, "receipt_base64 is not valid base64")
+    try:
+        signed_receipt = json.loads(receipt_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        return ReceiptAuthentication(NOT_AUTHENTICATED, "signed bytes are not a JSON receipt")
+    if _canonical_json(signed_receipt) != _canonical_json(dict(receipt)) or _canonical_json(
+        signed_receipt
+    ) is None:
+        return ReceiptAuthentication(
+            NOT_AUTHENTICATED, "signed bytes do not encode the supplied receipt"
+        )
+    bundle = cast("Mapping[str, Any]", signature["sigstore_bundle"])
+    problem = _bundle_shape_problem(bundle)
+    if problem is not None:
+        return ReceiptAuthentication(NOT_AUTHENTICATED, problem)
+    try:
+        bundle_json = json.dumps(bundle, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        return ReceiptAuthentication(NOT_AUTHENTICATED, "bundle is not serializable JSON")
+    active = authenticator if authenticator is not None else SigstoreReceiptAuthenticator()
+    try:
+        outcome = active.authenticate(
+            receipt_bytes=receipt_bytes, bundle_json=bundle_json, policy=policy
+        )
+    except Exception as exc:  # noqa: BLE001 - an authenticator crash never authenticates
+        return ReceiptAuthentication(UNAVAILABLE, f"authenticator failed: {type(exc).__name__}")
+    if not isinstance(outcome, ReceiptAuthentication):
+        return ReceiptAuthentication(NOT_AUTHENTICATED, "authenticator returned no verdict")
+    return outcome
+
+
+def _authentication_reason(outcome: ReceiptAuthentication) -> str:
+    return (
+        RECEIPT_AUTHENTICATION_UNAVAILABLE
+        if outcome.status == UNAVAILABLE
+        else RECEIPT_NOT_AUTHENTICATED
     )
 
 
@@ -324,9 +480,29 @@ def _normalize_supplied_subject(subject: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _resolve_signer_policy(
+    owner: str,
+    repository: str,
+    signer_policy: ReceiptSignerPolicy | None,
+) -> ReceiptSignerPolicy:
+    if signer_policy is None:
+        return github_workflow_signer_policy(owner, repository)
+    if not isinstance(signer_policy, ReceiptSignerPolicy):
+        raise ValueError("signer_policy must be a ReceiptSignerPolicy")
+    if signer_policy.repository != f"{owner}/{repository}":
+        # A receipt signed by another repository's workflow never authenticates
+        # evidence for this pull request.
+        raise ValueError("signer_policy repository must be the subject repository")
+    return signer_policy
+
+
 def evaluate_code_change_evidence_subject(
     subject: Mapping[str, Any],
     receipt: Mapping[str, Any] | None,
+    *,
+    receipt_signature: Mapping[str, Any] | None = None,
+    authenticator: ReceiptAuthenticator | None = None,
+    signer_policy: ReceiptSignerPolicy | None = None,
 ) -> dict[str, Any]:
     """Apply canonical Core receipt/applicability semantics to one supplied PR subject.
 
@@ -334,9 +510,24 @@ def evaluate_code_change_evidence_subject(
     already-observed exact subject; when no canonical acquisition freshness CAS is
     supplied, the public ``subject`` field stays null so the result cannot be
     mistaken for an independently acquired GitHub snapshot.
+
+    A self-consistent receipt is evaluated further only when ``receipt_signature``
+    authenticates its exact bytes as signed by ``signer_policy`` (default: the
+    subject repository's ``nexus-core-issue-completion.yml`` on ``refs/heads/main``,
+    issuer GitHub Actions). ``authenticator`` defaults to the optional Sigstore
+    implementation; the caller of the tool never chooses the signer.
     """
 
     acquired_subject = _normalize_supplied_subject(subject)
+    policy = _resolve_signer_policy(
+        acquired_subject["repository_owner"],
+        acquired_subject["repository_name"],
+        signer_policy,
+    )
+    if receipt_signature is not None:
+        _validate_receipt_signature_shape(receipt_signature)
+        if receipt is None:
+            raise ValueError("receipt_signature requires receipt")
     public_subject = (
         _public_subject(acquired_subject)
         if isinstance(acquired_subject.get("freshness_cas"), str)
@@ -375,6 +566,21 @@ def evaluate_code_change_evidence_subject(
             evidence_applicability=applicability,
             core_verification="NOT_AVAILABLE",
             reason_codes=receipt_reasons,
+        )
+
+    authentication = authenticate_receipt(
+        receipt, receipt_signature, policy=policy, authenticator=authenticator
+    )
+    if not authentication.authenticated:
+        # Integrity is only an unkeyed self-hash: without an authenticated CI
+        # signature nothing the receipt claims (config source, base, outcome)
+        # is trusted, so the result can never be APPLIES/VERIFIED (#231).
+        return _result(
+            subject=public_subject,
+            receipt_integrity="VALID",
+            evidence_applicability="UNVERIFIABLE",
+            core_verification="NOT_AVAILABLE",
+            reason_codes=(_authentication_reason(authentication),),
         )
 
     binding = _receipt_binding(receipt)
@@ -471,10 +677,17 @@ def verify_code_change_evidence(
     arguments: Mapping[str, Any],
     *,
     github_port: Any,
+    authenticator: ReceiptAuthenticator | None = None,
+    signer_policy: ReceiptSignerPolicy | None = None,
 ) -> dict[str, Any]:
-    """Verify supplied Nexus evidence against the current exact GitHub PR state."""
+    """Verify supplied Nexus evidence against the current exact GitHub PR state.
 
-    owner, repository, pr_number, receipt = _validate_arguments(arguments)
+    ``authenticator`` and ``signer_policy`` are host-side injection points; tool
+    arguments can supply signature material but never choose the trusted signer.
+    """
+
+    owner, repository, pr_number, receipt, receipt_signature = _validate_arguments(arguments)
+    policy = _resolve_signer_policy(owner, repository, signer_policy)
     acquisition = read_current_pull_request_subject(
         owner,
         repository,
@@ -496,6 +709,13 @@ def verify_code_change_evidence(
             receipt_reasons = tuple(validation["reason_codes"])
             receipt_integrity = "VALID" if validation["valid"] else "INVALID"
             core_verification = _core_status(receipt) if validation["valid"] else "NOT_AVAILABLE"
+            if validation["valid"]:
+                authentication = authenticate_receipt(
+                    receipt, receipt_signature, policy=policy, authenticator=authenticator
+                )
+                if not authentication.authenticated:
+                    core_verification = "NOT_AVAILABLE"
+                    receipt_reasons = (*receipt_reasons, _authentication_reason(authentication))
         return _result(
             subject=None,
             receipt_integrity=receipt_integrity,
@@ -506,16 +726,25 @@ def verify_code_change_evidence(
                 reason if isinstance(reason, str) else "GITHUB_ACQUISITION_INVALID",
             ),
         )
-    return evaluate_code_change_evidence_subject(acquisition["subject"], receipt)
+    return evaluate_code_change_evidence_subject(
+        acquisition["subject"],
+        receipt,
+        receipt_signature=receipt_signature,
+        authenticator=authenticator,
+        signer_policy=policy,
+    )
 
 
 __all__ = [
     "CLAIM_CEILING",
     "INPUT_SCHEMA",
     "OUTPUT_SCHEMA",
+    "RECEIPT_AUTHENTICATION_UNAVAILABLE",
+    "RECEIPT_NOT_AUTHENTICATED",
     "TOOL_DEFINITION",
     "TOOL_DESCRIPTION",
     "TOOL_NAME",
+    "authenticate_receipt",
     "evaluate_code_change_evidence_subject",
     "verify_code_change_evidence",
 ]

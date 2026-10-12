@@ -15,7 +15,8 @@ The service may receive:
 - GitHub repository owner;
 - GitHub repository name;
 - pull-request number;
-- an optional Nexus verification receipt supplied by the caller.
+- an optional Nexus verification receipt supplied by the caller;
+- optionally, that receipt's exact bytes and its public Sigstore signature bundle (a short-lived signing certificate naming the GitHub Actions workflow that produced the receipt, and a public Rekor transparency-log entry).
 
 The tool does not request passwords, API keys, access tokens, MFA/OTP codes, payment-card information, health information, government identifiers, precise location, or a full chat transcript.
 
@@ -38,7 +39,7 @@ The production hosting layer may process limited operational metadata needed for
 
 We process the above data only to:
 
-1. verify receipt integrity;
+1. verify receipt integrity and check the receipt's Sigstore signature against the public Sigstore trust root;
 2. compare evidence with the exact current pull-request state;
 3. return a bounded factual result;
 4. protect service availability and investigate operational failures.
@@ -57,7 +58,7 @@ OpenAI/ChatGPT or Codex may transmit tool arguments to the MCP service as the cl
 
 The v0 production policy is:
 
-- raw Nexus receipt bodies: not written to durable application logs;
+- raw Nexus receipt bodies and signature bundles: not written to durable application logs;
 - raw GitHub diff bodies: not written to durable application logs;
 - tool inputs/results: not persisted as application records after the request completes;
 - operational logs: retain only redacted metadata for at most **7 days**, then delete automatically;

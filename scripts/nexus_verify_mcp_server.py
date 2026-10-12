@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0"]
+# dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0", "sigstore==4.5.0"]
 # ///
 
 """Loopback Streamable HTTP MCP host for Nexus Verify.
@@ -54,6 +54,7 @@ _MAX_PAGES = 100
 PUBLIC_REVIEW_GITHUB_TOKEN_ENV = "NEXUS_VERIFY_PUBLIC_GITHUB_TOKEN"
 PUBLIC_HOST_ENV = "NEXUS_VERIFY_PUBLIC_HOST"
 MAX_PUBLIC_RECEIPT_BYTES = 512 * 1024
+MAX_PUBLIC_RECEIPT_SIGNATURE_BYTES = 1024 * 1024
 PUBLIC_TOOL_META: dict[str, Any] = {
     "securitySchemes": [{"type": "noauth"}],
     "openai/toolInvocation/invoking": "Checking verification evidence...",
@@ -72,7 +73,7 @@ def _validate_public_tool_arguments(
         raise ValueError("tool arguments must be an object")
     values = dict(arguments)
     required = {"repository_owner", "repository_name", "pr_number"}
-    allowed = {*required, "receipt"}
+    allowed = {*required, "receipt", "receipt_signature"}
     if not required.issubset(values):
         raise ValueError("repository_owner, repository_name and pr_number are required")
     if set(values) - allowed:
@@ -99,6 +100,19 @@ def _validate_public_tool_arguments(
         ).encode("utf-8")
         if len(encoded_receipt) > MAX_PUBLIC_RECEIPT_BYTES:
             raise ValueError("receipt exceeds public-review size limit")
+    receipt_signature = values.get("receipt_signature")
+    if receipt_signature is not None and not isinstance(receipt_signature, dict):
+        raise ValueError("receipt_signature must be an object or null")
+    if public_review and receipt_signature is not None:
+        encoded_signature = json.dumps(
+            receipt_signature,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        if len(encoded_signature) > MAX_PUBLIC_RECEIPT_SIGNATURE_BYTES:
+            raise ValueError("receipt_signature exceeds public-review size limit")
 
 
 def _normalize_public_host(value: str | None) -> str | None:
@@ -386,6 +400,7 @@ def create_mcp_server(
     github_port_factory: Callable[[], object] | None = None,
     *,
     public_review: bool = False,
+    receipt_authenticator: object | None = None,
 ):
     """Create the one-tool Nexus Verify MCP server without starting a listener."""
 
@@ -443,15 +458,20 @@ def create_mcp_server(
         repository_name: str,
         pr_number: int,
         receipt: dict[str, Any] | None = None,
+        receipt_signature: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # The signer is host policy (the subject repository's gate workflow);
+        # the tool caller supplies signature material only.
         return verify_code_change_evidence(
             {
                 "repository_owner": repository_owner,
                 "repository_name": repository_name,
                 "pr_number": pr_number,
                 "receipt": receipt,
+                "receipt_signature": receipt_signature,
             },
             github_port=port_factory(),
+            authenticator=receipt_authenticator,  # type: ignore[arg-type]
         )
 
     return server

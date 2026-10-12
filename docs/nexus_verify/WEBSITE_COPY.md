@@ -6,11 +6,11 @@ Status: source copy for the future required HTTPS website URL.
 
 Verify whether an AI- or human-generated code-change completion claim is backed by evidence that is still valid for the exact current pull request.
 
-Nexus Verify is read-only. It checks evidence integrity and applicability; it does not review code quality, execute repository code, write to GitHub, approve merges, release software, or deploy to production.
+Nexus Verify is read-only. It checks that the evidence was signed by the repository's CI workflow, and checks evidence integrity and applicability; it does not review code quality, execute repository code, write to GitHub, approve merges, release software, or deploy to production.
 
 ### Public v0
 
-The initial public profile is intentionally limited to public GitHub pull requests and optional caller-supplied Nexus verification receipts.
+The initial public profile is intentionally limited to public GitHub pull requests and optional caller-supplied Nexus verification receipts. A receipt counts only together with its Sigstore signature bundle from CI; without it the result is `UNVERIFIABLE`.
 
 Typical questions:
 

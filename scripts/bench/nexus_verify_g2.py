@@ -5,6 +5,12 @@ This harness compares:
 A. facts available from ordinary GitHub state alone; and
 B. the existing Nexus Verify read-only tool with an optional Nexus receipt.
 
+Since #231 Nexus Verify trusts a receipt only with an authenticated Sigstore
+bundle. The harness injects a controlled authenticator that models the CI
+signer: it authenticates exactly the receipt bytes the harness "signed" as the
+controlled workflow identity, and nothing else. Real Sigstore signatures are
+exercised separately in tests/product/test_nexus_verify_sigstore_real.py.
+
 It is synthetic/controlled benchmark instrumentation. It does not claim
 real-user value, public distribution value, or production readiness.
 """
@@ -12,7 +18,9 @@ real-user value, public distribution value, or production readiness.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
+import hashlib
 import json
 import os
 import statistics
@@ -41,6 +49,13 @@ from product.clients.nexus_verify import (  # noqa: E402
     CLAIM_CEILING,
     verify_code_change_evidence,
 )
+from product.clients.receipt_authentication import (  # noqa: E402
+    AUTHENTICATED,
+    NOT_AUTHENTICATED,
+    ReceiptAuthentication,
+    ReceiptSignerPolicy,
+    github_workflow_signer_policy,
+)
 from product.protocol.generic_verification import (  # noqa: E402
     acceptance_contract_hash,
     canonical_hash,
@@ -54,6 +69,49 @@ DUPLICATE_STATE = "PLUGIN_VALUE_DUPLICATES_COMMODITY_BASELINE"
 INVALID_STATE = "INVALID_G2_EVIDENCE"
 MIN_UNIQUE_CASES = 5
 DEFAULT_REPETITIONS = 21
+CONTROLLED_SIGNER = github_workflow_signer_policy("example", "demo")
+_CONTROLLED_BUNDLE_SHAPE: dict[str, Any] = {
+    "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+    "verificationMaterial": {"controlled": True},
+    "messageSignature": {"controlled": True},
+}
+
+
+class ControlledReceiptAuthenticator:
+    """Synthetic stand-in for Sigstore: models the CI signer, not cryptography."""
+
+    def __init__(self) -> None:
+        self._signed: set[str] = set()
+
+    def sign(self, receipt: Mapping[str, Any]) -> dict[str, Any]:
+        data = _receipt_bytes(receipt)
+        self._signed.add(hashlib.sha256(data).hexdigest())
+        return _signature_for(data)
+
+    def authenticate(
+        self,
+        *,
+        receipt_bytes: bytes,
+        bundle_json: bytes,
+        policy: ReceiptSignerPolicy,
+    ) -> ReceiptAuthentication:
+        if (
+            policy == CONTROLLED_SIGNER
+            and hashlib.sha256(receipt_bytes).hexdigest() in self._signed
+        ):
+            return ReceiptAuthentication(AUTHENTICATED, policy.identity)
+        return ReceiptAuthentication(NOT_AUTHENTICATED, "not signed by the controlled signer")
+
+
+def _receipt_bytes(receipt: Mapping[str, Any]) -> bytes:
+    return (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _signature_for(data: bytes) -> dict[str, Any]:
+    return {
+        "receipt_base64": base64.b64encode(data).decode("ascii"),
+        "sigstore_bundle": dict(_CONTROLLED_BUNDLE_SHAPE),
+    }
 
 
 @dataclass(frozen=True)
@@ -61,6 +119,7 @@ class Scenario:
     case_id: str
     description: str
     receipt: dict[str, Any] | None
+    receipt_signature: dict[str, Any] | None
     base_sha: str
     head_sha: str
     base_tree: str
@@ -98,8 +157,6 @@ class ScenarioPort:
             f"{self.scenario.base_tree}:{head_tree}:"
             f"{','.join(self.scenario.changed_paths)}"
         ).encode("utf-8")
-        import hashlib
-
         diff_hash = "sha256:" + hashlib.sha256(diff_bytes).hexdigest()
         freshness_cas = _freshness_cas_for(
             locator.repository_owner,
@@ -231,6 +288,15 @@ def _tampered_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def _rehashed_forgery(receipt: dict[str, Any]) -> dict[str, Any]:
+    """#231 forgery: edit a receipt that names the real base and recompute its hash."""
+
+    value = copy.deepcopy(receipt)
+    value["timestamp"] = "2026-01-01T00:00:00+00:00"
+    value["receipt_hash"] = _receipt_hash(value)
+    return value
+
+
 def _receipt_identity(receipt: Mapping[str, Any]) -> tuple[str, str, str, str, tuple[str, ...]]:
     request = receipt["inputs"]["request"]
     change_set = request["change_set"]
@@ -247,16 +313,35 @@ def _receipt_identity(receipt: Mapping[str, Any]) -> tuple[str, str, str, str, t
     return base_sha, head_sha, base_tree, head_tree, paths
 
 
-def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scenario]:
+def build_scenarios(
+    older: dict[str, Any],
+    current: dict[str, Any],
+    signer: ControlledReceiptAuthenticator,
+) -> list[Scenario]:
     base_sha, head_sha, base_tree, head_tree, paths = _receipt_identity(current)
     missing = _with_missing_required_verifier(current)
     tampered = _tampered_receipt(current)
+    forged = _rehashed_forgery(current)
+    # The controlled CI signer signs what CI would have produced; the tampered
+    # and forged receipts carry the genuine bundle but different bytes.
+    signed_current = signer.sign(current)
+    signed_older = signer.sign(older)
+    signed_missing = signer.sign(missing)
+    tampered_signature = {
+        **signed_current,
+        "receipt_base64": _signature_for(_receipt_bytes(tampered))["receipt_base64"],
+    }
+    forged_signature = {
+        **signed_current,
+        "receipt_base64": _signature_for(_receipt_bytes(forged))["receipt_base64"],
+    }
 
     return [
         Scenario(
             case_id="G2-01-FRESH-EXACT",
             description="exact matching fresh Nexus evidence",
             receipt=current,
+            receipt_signature=signed_current,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -267,6 +352,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-02-OLDER-TARGET",
             description="receipt evidence bound to an older target revision",
             receipt=older,
+            receipt_signature=signed_older,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -280,6 +366,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-03-HEAD-MOVES-DURING-READ",
             description="PR head moves between independent reads after evidence existed",
             receipt=current,
+            receipt_signature=signed_current,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -296,6 +383,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-04-TAMPERED-RECEIPT",
             description="receipt/evidence was tampered after creation",
             receipt=tampered,
+            receipt_signature=tampered_signature,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -310,6 +398,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-05-REQUIRED-VERIFIER-MISSING",
             description="canonical Core result is missing a required verifier",
             receipt=missing,
+            receipt_signature=signed_missing,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -323,6 +412,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-06-SCOPE-MISMATCH",
             description="evidence exists but does not apply to the acquired changed-path scope",
             receipt=current,
+            receipt_signature=signed_current,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -336,6 +426,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-07-GREEN-CHECKS-NO-RECEIPT",
             description="ordinary GitHub checks are green but no Nexus evidence was supplied",
             receipt=None,
+            receipt_signature=None,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -351,6 +442,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-08-INCOMPLETE-ACQUISITION",
             description="GitHub acquisition/pagination is incomplete",
             receipt=current,
+            receipt_signature=signed_current,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -367,6 +459,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-09-VALID-EVIDENCE-CHECK-CHURN",
             description="valid exact receipt remains accepted despite unrelated current check churn",
             receipt=current,
+            receipt_signature=signed_current,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -381,6 +474,7 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             case_id="G2-10-GITHUB-NATIVE-SUFFICIENT",
             description="latest-SHA required-check question is already handled by GitHub-native state",
             receipt=None,
+            receipt_signature=None,
             base_sha=base_sha,
             head_sha=head_sha,
             base_tree=base_tree,
@@ -392,6 +486,37 @@ def build_scenarios(older: dict[str, Any], current: dict[str, Any]) -> list[Scen
             expected_accept=False,
             expected_unique_value=False,
             commodity_overlap=True,
+        ),
+        Scenario(
+            case_id="G2-11-REHASHED-FORGED-RECEIPT",
+            description=(
+                "self-consistent re-hashed receipt naming the real base, paired with "
+                "another receipt's genuine signature bundle (#231)"
+            ),
+            receipt=forged,
+            receipt_signature=forged_signature,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            base_tree=base_tree,
+            head_tree=head_tree,
+            changed_paths=paths,
+            expected_applicability="UNVERIFIABLE",
+            expected_core_verification="NOT_AVAILABLE",
+            expected_accept=False,
+        ),
+        Scenario(
+            case_id="G2-12-UNSIGNED-RECEIPT",
+            description="exact matching receipt supplied without its Sigstore bundle",
+            receipt=current,
+            receipt_signature=None,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            base_tree=base_tree,
+            head_tree=head_tree,
+            changed_paths=paths,
+            expected_applicability="UNVERIFIABLE",
+            expected_core_verification="NOT_AVAILABLE",
+            expected_accept=False,
         ),
     ]
 
@@ -455,7 +580,9 @@ def _baseline_once(scenario: Scenario) -> tuple[dict[str, Any], int]:
     )
 
 
-def _assisted_once(scenario: Scenario) -> tuple[dict[str, Any], int]:
+def _assisted_once(
+    scenario: Scenario, signer: ControlledReceiptAuthenticator
+) -> tuple[dict[str, Any], int]:
     port = ScenarioPort(scenario)
     result = verify_code_change_evidence(
         {
@@ -463,8 +590,11 @@ def _assisted_once(scenario: Scenario) -> tuple[dict[str, Any], int]:
             "repository_name": "demo",
             "pr_number": 7,
             "receipt": scenario.receipt,
+            "receipt_signature": scenario.receipt_signature,
         },
         github_port=port,
+        authenticator=signer,
+        signer_policy=CONTROLLED_SIGNER,
     )
     return result, port.read_calls
 
@@ -478,9 +608,11 @@ def _timed_median_ns(fn, repetitions: int) -> int:
     return int(statistics.median(values))
 
 
-def evaluate_case(scenario: Scenario, repetitions: int) -> dict[str, Any]:
+def evaluate_case(
+    scenario: Scenario, repetitions: int, signer: ControlledReceiptAuthenticator
+) -> dict[str, Any]:
     baseline, baseline_calls = _baseline_once(scenario)
-    assisted, assisted_calls = _assisted_once(scenario)
+    assisted, assisted_calls = _assisted_once(scenario, signer)
 
     accepted = (
         assisted["receipt_integrity"] == "VALID"
@@ -530,7 +662,7 @@ def evaluate_case(scenario: Scenario, repetitions: int) -> dict[str, Any]:
                 lambda: _baseline_once(scenario), repetitions
             ),
             "assisted_median_ns": _timed_median_ns(
-                lambda: _assisted_once(scenario), repetitions
+                lambda: _assisted_once(scenario, signer), repetitions
             ),
         },
     }
@@ -542,7 +674,11 @@ def run_experiment(*, repetitions: int = DEFAULT_REPETITIONS) -> dict[str, Any]:
 
     with tempfile.TemporaryDirectory(prefix="nexus-verify-g2-") as tmp:
         older, current = _make_receipts(Path(tmp))
-        cases = [evaluate_case(case, repetitions) for case in build_scenarios(older, current)]
+        signer = ControlledReceiptAuthenticator()
+        cases = [
+            evaluate_case(case, repetitions, signer)
+            for case in build_scenarios(older, current, signer)
+        ]
 
     false_green = sum(row["observed"]["false_green"] for row in cases)
     false_block = sum(row["observed"]["false_block"] for row in cases)
@@ -632,6 +768,7 @@ def run_experiment(*, repetitions: int = DEFAULT_REPETITIONS) -> dict[str, Any]:
             "logical GitHub read counts are adapter reads, not raw REST-request counts",
             "G3 conversation/tool-selection behavior is intentionally out of scope",
             "G4 public endpoint/OAuth/review readiness is intentionally out of scope",
+            "receipt authentication uses a controlled signer model, not real Sigstore cryptography",
         ],
     }
     report["report_hash"] = canonical_hash(report)

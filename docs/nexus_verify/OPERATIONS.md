@@ -31,6 +31,17 @@ tool remains `noauth`; this is an operator-owned transport credential only.
 
 Private repository access requires a later OAuth 2.1 design and is not enabled by v0.
 
+## Receipt signature verification
+
+Receipts are trusted only with an authenticated Sigstore bundle (#231). The MCP
+script pins `sigstore==4.5.0` in its inline dependencies. By default the host
+refreshes the Sigstore trust root from the public Sigstore TUF repository, so it
+needs outbound HTTPS to it. When the package or trust root is unavailable, every
+receipt result is `UNVERIFIABLE` with `RECEIPT_AUTHENTICATION_UNAVAILABLE`; this
+fails closed and must never be treated as verification success. The signer is
+host policy (the subject repository's `nexus-core-issue-completion.yml` on
+`refs/heads/main`), never a tool argument.
+
 ## Abuse and rate limiting
 
 The initial public host must enforce all of the following before G4B can be considered ready:
@@ -64,7 +75,7 @@ Allowed operational log fields:
 
 Do not write to normal application logs:
 
-- raw Nexus receipts;
+- raw Nexus receipts and their Sigstore bundles;
 - raw diff bodies;
 - GitHub authorization headers/tokens;
 - MCP authorization headers;
@@ -89,7 +100,8 @@ Production monitoring should cover:
 - latency and timeout rate;
 - rate-limit denials;
 - unexpected private-repository attempts;
-- schema/tool-definition drift.
+- schema/tool-definition drift;
+- `RECEIPT_AUTHENTICATION_UNAVAILABLE` rate (Sigstore trust-root or package failure).
 
 Metrics must not embed receipt bodies, raw diffs, credentials, or full prompts.
 
