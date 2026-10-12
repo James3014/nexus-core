@@ -850,20 +850,23 @@ CASES: tuple[GoldenCase, ...] = (
         "Sandbox clone has no hardlinks and no alternates",
         "security",
         "boundary",
-        "SECURITY.md 'Verifier sandbox': 'The sandbox is cloned with --no-hardlinks, the origin remote is removed and objects/info/alternates must be absent'. product/clients/local_golden_path.py implements both, but no test witnesses --no-hardlinks or the alternates rejection (only the origin removal is tested by NCG-014).",
+        "SECURITY.md 'Verifier sandbox': the sandbox is cloned with --no-hardlinks and objects/info/alternates must be absent. After a real check the sandbox object files share no inode with the source repository and each has st_nlink == 1, and no alternates file exists (a negative control that drops --no-hardlinks makes the same inspection see shared inodes). If alternates are present after the clone, the run fails closed with VERIFIER_SANDBOX_PREPARE_FAILED and a FAILED_CLOSED receipt, the verifier never runs, and the sandbox is still removed.",
         (
             "SECURITY.md#Threat Model & Trust Boundaries",
             "product/clients/local_golden_path.py",
         ),
-        status="finding",
-        finding_id="NCGF-003",
+        (
+            "tests/product/test_local_golden_path.py::test_sandbox_clone_shares_no_hardlinked_objects_and_has_no_alternates",
+            "tests/product/test_local_golden_path.py::test_sandbox_hardlink_detector_negative_control",
+            "tests/product/test_local_golden_path.py::test_sandbox_with_object_alternates_fails_closed_before_verifier",
+        ),
     ),
     _c(
         "NCG-055",
         "PR gate workflow structure is enforced",
         "security",
         "authority_conflict",
-        "SECURITY.md 'PR gate': 'Same-repository branches only (fork guard)'; the verify job runs receipt-check with all eight expectation flags including --require-trusted-config. No test asserts the fork guard on both jobs, issue-check --require-trusted-config, or that receipt-verify passes all eight flags (GITHUB_REPOSITORY_CHECK 'Why fork pull requests are excluded').",
+        "SECURITY.md 'PR gate': the workflow triggers only on pull_request_target; both the run and verify jobs carry the same-repository guard head.repo.full_name == github.repository (never head.repo.fork == false); issue-check runs with --require-trusted-config; receipt-verify's receipt-check passes all eight expectation flags; and the Sigstore identity is pinned to this workflow on refs/heads/main. Negative controls feed mutated workflow/action text to the same checkers and expect failure.",
         (
             "SECURITY.md#Threat Model & Trust Boundaries",
             "docs/GITHUB_REPOSITORY_CHECK.md#Why fork pull requests are excluded",
@@ -871,29 +874,36 @@ CASES: tuple[GoldenCase, ...] = (
             ".github/actions/issue-gate/action.yml",
             ".github/actions/receipt-verify/action.yml",
         ),
-        status="finding",
-        finding_id="NCGF-004",
+        (
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_pr_gate_workflow_trigger_fork_guard_and_identity",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_issue_gate_runs_issue_check_with_trusted_config",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_receipt_verify_passes_all_eight_expectations",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_negative_control_removed_fork_guard_is_detected",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_negative_control_trigger_and_identity_mutations_are_detected",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_negative_control_missing_expectations_are_detected",
+        ),
     ),
     _c(
         "NCG-056",
         "PR gate token exposure matches SECURITY.md",
         "compatibility",
         "normal",
-        "SECURITY.md 'PR gate': 'GITHUB_TOKEN is set only on the issue-init/issue-check steps', but .github/actions/issue-gate/action.yml also passes github.token as FETCH_TOKEN to the plain-Git acquisition step (documented in GITHUB_REPOSITORY_CHECK 'Candidate acquisition'). Wording mismatch, not a vulnerability.",
+        "SECURITY.md 'PR gate' names every composite step that sees the GitHub token: in issue-gate the plain-Git candidate fetch (FETCH_TOKEN via an env-scoped http.extraheader, never written to .git/config) and issue-init/issue-check (GITHUB_TOKEN); in receipt-verify the artifact resolution and head-tree fetch. The set of token-referencing steps in each action equals that documented set, so drift fails.",
         (
             "SECURITY.md#Threat Model & Trust Boundaries",
             "docs/GITHUB_REPOSITORY_CHECK.md#Candidate acquisition",
             ".github/actions/issue-gate/action.yml",
         ),
-        status="finding",
-        finding_id="NCGF-005",
+        (
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_token_exposure_matches_security_documentation",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_candidate_fetch_token_is_env_scoped_and_never_persisted",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_security_md_pr_gate_row_documents_token_steps",
+            "tests/architecture/test_pr_gate_workflow_invariants.py::test_negative_control_token_drift_is_detected",
+        ),
     ),
 )
 
 
 FINDINGS = {
     "NCGF-001": "Nexus Verify does not authenticate receipts: a re-hashed relabelled receipt gets APPLIES+VERIFIED; tracked in #231 (OPEN).",
-    "NCGF-003": "Sandbox --no-hardlinks clone and objects/info/alternates rejection are implemented but have no witness test.",
-    "NCGF-004": "No test asserts the PR gate workflow structure (fork guard on both jobs, --require-trusted-config, all eight receipt-check expectations).",
-    "NCGF-005": "SECURITY.md says GITHUB_TOKEN is only on issue-init/issue-check, but issue-gate also passes it as FETCH_TOKEN to acquisition.",
 }
