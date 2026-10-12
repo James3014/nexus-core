@@ -6,6 +6,13 @@ subject through an injected read port, validates an existing Nexus local
 verification receipt, and compares the two identities. It does not execute code,
 write GitHub state, make merge/release decisions, or create a second verification
 authority.
+
+Integrity here means self-consistency (an unkeyed SHA-256 hash), not authenticity.
+The config-source and base-commit checks only bind what the receipt claims, so a
+caller who can edit and re-hash a receipt can make it APPLY. ``VERIFIED`` from this
+tool is therefore not proof that the receipt came from Nexus CI. The Sigstore-signed
+CI receipt checked by ``receipt-verify`` is the authority (see SECURITY.md);
+signature verification here is tracked in #231.
 """
 
 from __future__ import annotations
