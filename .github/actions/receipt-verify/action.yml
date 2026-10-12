@@ -96,6 +96,15 @@ runs:
       run: |
         set -euo pipefail
         fail() { echo "NEXUS_CORE_VERIFY_INPUT_INVALID: $1" >&2; exit 1; }
+        if [ -z "$IN_ISSUE" ]; then
+          # The upstream issue gate resolved no Issue: name the fix before failing closed.
+          remedy="PR_MISSING_CORE_ISSUE_BINDING: the issue gate resolved no Issue; add exactly one line <!-- NEXUS_CORE_ISSUE: N --> (N = the Issue number) to the PR body, then re-run the gate"
+          echo "$remedy" >&2
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            printf '### Nexus Core gate: how to fix\n\n```text\n%s\n```\n\n' "$remedy" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          fail "issue-number is empty"
+        fi
         [[ "$IN_ARTIFACT" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "artifact-name"
         [ -z "$IN_ARTIFACT_ID" ] || [[ "$IN_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || fail "artifact-id must be a positive integer"
         [[ "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || fail "github.run_id"

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence, cast
 
 from product.adapters.generic_verification import verify_generic_changeset
+from product.clients import gate_diagnostics
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -84,10 +85,13 @@ class LocalCheckError(Exception):
         detail: str = "",
         *,
         receipt_path: Path | None = None,
+        remediation: str | None = None,
     ) -> None:
         self.reason_code = reason_code
         self.detail = detail
         self.receipt_path = receipt_path
+        # Copy-paste fix for the caller (diagnostics only; never part of a verdict).
+        self.remediation = remediation
         super().__init__(f"{reason_code}{': ' + detail if detail else ''}")
 
 
@@ -675,7 +679,11 @@ def _resolve_base_and_head(repo: Path, base_ref: str) -> tuple[str, str]:
     head = _git_stdout(repo, "rev-parse", "HEAD^{commit}")
     ancestor = _run_git(repo, "merge-base", "--is-ancestor", source_commit, head)
     if ancestor.returncode == 1:
-        raise LocalCheckError("BASE_REF_NOT_ANCESTOR", base_ref)
+        raise LocalCheckError(
+            "BASE_REF_NOT_ANCESTOR",
+            f"{base_ref} at {source_commit} is not an ancestor of HEAD {head}",
+            remediation=gate_diagnostics.base_ref_not_ancestor(base_ref, source_commit),
+        )
     if ancestor.returncode != 0:
         detail = (ancestor.stderr or ancestor.stdout).strip()
         raise LocalCheckError("GIT_COMMAND_FAILED", detail)
@@ -1703,6 +1711,7 @@ def _raise_with_receipt(
     config_source: Mapping[str, Any] | None = None,
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
+    remediation: str | None = None,
 ) -> NoReturn:
     receipt = _base_receipt(
         repo=repo,
@@ -1720,7 +1729,7 @@ def _raise_with_receipt(
         material_transitions=material_transitions,
     )
     path = _write_receipt(repo, receipt)
-    raise LocalCheckError(reason, detail, receipt_path=path)
+    raise LocalCheckError(reason, detail, receipt_path=path, remediation=remediation)
 
 
 def check_repository(
@@ -1865,7 +1874,7 @@ def check_repository(
             config_source=config_source,
             requirements_context=requirements_context,
             issue_verification=issue_verification,
-            material_transitions=transitions,
+            material_transitions=transitions,            remediation=exc.remediation,
         )
 
     forbidden = [
