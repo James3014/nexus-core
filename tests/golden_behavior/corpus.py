@@ -827,17 +827,23 @@ CASES: tuple[GoldenCase, ...] = (
     ),
     _c(
         "NCG-053",
-        "Candidate-created branch base_ref is not trusted",
+        "Candidate-created branch base_ref is advisory; only a pin enforces",
         "security",
         "authority_conflict",
-        "LOCAL_GOLDEN_PATH 'Trusted config source': 'a revision expression such as HEAD~1 or a commit SHA is chosen by the candidate and is treated as untrusted'. A local branch the candidate creates is equally candidate-chosen, yet base_ref=\"weak\" on a candidate-created branch earns 'config: trusted (weak@<sha>)' and VERIFIED under --require-trusted-config even though main's verifier fails. CI is not affected (plain-Git fetch has no such branch and receipt-verify pins --expect-config-commit BASE_SHA); local/advisory gap.",
+        "A named base_ref is only advisory locally because any process with repository write access can create a ref: base_ref=\"weak\" on a candidate-created branch is reported as 'config: base-ref, unpinned (weak@<sha>)', never 'config: trusted', and --require-trusted-config keeps accepting it for CI compatibility. With --expect-config-commit <sha> (or NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT; malformed value fails closed) obtained outside the candidate's control, any config source other than base-ref at that commit fails closed with CONFIG_SOURCE_MISMATCH before the verifier runs and still writes a receipt; a matching pin prints 'config: trusted (<ref>@<sha>, pinned)'.",
         (
             "docs/LOCAL_GOLDEN_PATH.md#Trusted config source",
             "SECURITY.md#Threat Model & Trust Boundaries",
             "product/clients/local_golden_path.py",
         ),
-        status="finding",
-        finding_id="NCGF-002",
+        (
+            "tests/product/test_local_golden_path.py::test_candidate_created_branch_is_reported_unpinned_not_trusted",
+            "tests/product/test_local_golden_path.py::test_pinned_config_commit_rejects_candidate_created_branch_before_verifier",
+            "tests/product/test_local_golden_path.py::test_pinned_config_commit_also_rejects_worktree_source",
+            "tests/product/test_local_golden_path.py::test_pinned_legit_base_commit_is_verified_and_labelled_pinned",
+            "tests/product/test_local_golden_path.py::test_expect_config_commit_env_pins_and_flag_wins",
+            "tests/product/test_local_golden_path.py::test_malformed_expect_config_commit_env_fails_closed",
+        ),
     ),
     _c(
         "NCG-054",
@@ -887,7 +893,6 @@ CASES: tuple[GoldenCase, ...] = (
 
 FINDINGS = {
     "NCGF-001": "Nexus Verify does not authenticate receipts: a re-hashed relabelled receipt gets APPLIES+VERIFIED; tracked in #231 (OPEN).",
-    "NCGF-002": "A candidate-created local branch used as base_ref earns `config: trusted` and VERIFIED under --require-trusted-config; local/advisory only.",
     "NCGF-003": "Sandbox --no-hardlinks clone and objects/info/alternates rejection are implemented but have no witness test.",
     "NCGF-004": "No test asserts the PR gate workflow structure (fork guard on both jobs, --require-trusted-config, all eight receipt-check expectations).",
     "NCGF-005": "SECURITY.md says GITHUB_TOKEN is only on issue-init/issue-check, but issue-gate also passes it as FETCH_TOKEN to acquisition.",

@@ -388,18 +388,44 @@ def _require_trusted_config(args: argparse.Namespace) -> bool:
     )
 
 
-def _print_config_source(result: dict[str, Any]) -> None:
+def _expect_config_commit(args: argparse.Namespace) -> str | None:
+    """Pinned trusted-config commit: the flag wins; a malformed env value fails closed."""
+
+    flag = getattr(args, "expect_config_commit", None)
+    if flag is not None:
+        return flag
+    env = os.environ.get("NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT")
+    if env is None:
+        return None
+    if re.fullmatch(r"[0-9a-f]{40}", env) is None:
+        raise CertifyCLIError(
+            "usage error: NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT: expected 40 lowercase hex characters",
+            exit_code=2,
+        )
+    return env
+
+
+def _print_config_source(result: dict[str, Any], pin: str | None = None) -> None:
     source: dict[str, Any] = result.get("config_source") or {}
     if source.get("kind") == "base-ref":
-        print(f"config: trusted ({source['ref']}@{source['commit'][:12]})")
+        label = f"{source['ref']}@{source['commit'][:12]}"
+        if pin is not None and source.get("commit") == pin:
+            print(f"config: trusted ({label}, pinned)")
+        else:
+            print(f"config: base-ref, unpinned ({label})")
     else:
         print(f"config: untrusted (not committed on {result.get('base_ref', 'base ref')})")
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    result = check_repository(args.repo, require_trusted_config=_require_trusted_config(args))
+    pin = _expect_config_commit(args)
+    result = check_repository(
+        args.repo,
+        require_trusted_config=_require_trusted_config(args),
+        expect_config_commit=pin,
+    )
     print(f"verification: {result['status']} (not CERTIFIED)")
-    _print_config_source(result)
+    _print_config_source(result, pin)
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
@@ -571,13 +597,15 @@ def cmd_markers(args: argparse.Namespace) -> int:
 
 
 def cmd_issue_check(args: argparse.Namespace) -> int:
+    pin = _expect_config_commit(args)
     result = check_issue(
         args.repo,
         issue_number=args.issue,
         require_trusted_config=_require_trusted_config(args),
+        expect_config_commit=pin,
     )
     print(f"issue verification: {result['status']} (not RELEASED)")
-    _print_config_source(result)
+    _print_config_source(result, pin)
     print(f"claim ceiling: {result['claim_ceiling']}")
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
@@ -730,6 +758,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail closed unless the config is committed on the base ref",
     )
+    p_check.add_argument(
+        "--expect-config-commit",
+        default=None,
+        type=_hex40,
+        help="Fail closed unless the effective config is committed on this base commit "
+        "(obtain it outside the candidate's control; env NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT)",
+    )
 
     p_receipt_check = subparsers.add_parser(
         "receipt-check", help="Validate a local verification receipt without rerunning its verifier"
@@ -781,6 +816,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-trusted-config",
         action="store_true",
         help="Fail closed unless the config is committed on the base ref",
+    )
+    p_issue_check.add_argument(
+        "--expect-config-commit",
+        default=None,
+        type=_hex40,
+        help="Fail closed unless the effective config is committed on this base commit "
+        "(obtain it outside the candidate's control; env NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT)",
     )
     p_issue_check.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
 

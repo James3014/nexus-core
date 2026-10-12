@@ -592,13 +592,15 @@ def _load_config(repo: Path) -> dict[str, Any]:
 
 
 def _base_ref_is_candidate_controlled(repo: Path, base_ref: str) -> bool:
-    """True when the worktree-chosen ``base_ref`` can only name candidate history.
+    """True when the worktree-chosen ``base_ref`` is a bare revision expression.
 
     ``base_ref`` comes from the untrusted worktree config. A revision expression
-    (``HEAD~1``, ``HEAD``, ``abc123``) is chosen by the candidate commit itself and
-    resolves inside candidate history, so it must not confer ``base-ref`` trust.
-    Only a named branch, remote-tracking ref or tag counts; refs are not created by
-    candidate commits. ``--expect-config-commit`` remains the pin for CI.
+    (``HEAD~1``, ``HEAD``, ``abc123``) is trivially chosen by the candidate commit
+    and resolves inside candidate history, so it never confers ``base-ref`` source.
+    A named branch, remote-tracking ref or tag is accepted as ``base-ref``, but that
+    is advisory only: any process with write access to the repository can create a
+    ref. Against an adversarial agent the enforcement is ``--expect-config-commit``,
+    a commit pin obtained outside the candidate's control.
     """
 
     full = _run_git(repo, "rev-parse", "--verify", "--symbolic-full-name", base_ref)
@@ -1726,10 +1728,16 @@ def check_repository(
     *,
     requirements_context: Mapping[str, Any] | None = None,
     require_trusted_config: bool = False,
+    expect_config_commit: str | None = None,
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Run the local Golden Path and return the canonical Core verdict."""
+    """Run the local Golden Path and return the canonical Core verdict.
+
+    ``expect_config_commit`` pins the trusted config: the effective config must come
+    from a ``base-ref`` source at exactly that commit, else the run fails closed
+    with ``CONFIG_SOURCE_MISMATCH`` before any verifier runs.
+    """
 
     repo = _repo_root(path)
     config, config_source, worktree_config = _load_effective_config(repo)
@@ -1740,6 +1748,22 @@ def check_repository(
         if requirements_context is None
         else canonical_hash({"config_hash": config_hash, "context": dict(requirements_context)})
     )
+
+    if expect_config_commit is not None and not (
+        config_source["kind"] == "base-ref" and config_source["commit"] == expect_config_commit
+    ):
+        _raise_with_receipt(
+            repo,
+            "CONFIG_SOURCE_MISMATCH",
+            f"effective config source {config_source['kind']}@{config_source['commit']} "
+            f"!= pinned base-ref@{expect_config_commit}",
+            config=config,
+            config_hash=config_hash,
+            config_source=config_source,
+            requirements_context=requirements_context,
+            issue_verification=issue_verification,
+            material_transitions=transitions,
+        )
 
     if require_trusted_config and config_source["kind"] != "base-ref":
         _raise_with_receipt(

@@ -117,7 +117,8 @@ If the base commit has no config, the worktree config is used, the receipt recor
 `config_source.kind = "worktree"`, and the CLI prints one of:
 
 ```text
-config: trusted (<ref>@<sha>)
+config: trusted (<ref>@<sha>, pinned)
+config: base-ref, unpinned (<ref>@<sha>)
 config: untrusted (not committed on <base_ref>)
 ```
 
@@ -125,12 +126,22 @@ To refuse the untrusted case, pass `--require-trusted-config` (or set
 `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`); the run then fails closed with
 `CONFIG_UNTRUSTED`. `base_ref` must name a branch, remote-tracking ref or tag; a
 revision expression such as `HEAD~1` or a commit SHA is chosen by the candidate
-and is treated as untrusted. In CI also pin the config commit with
-`--expect-config-commit`:
+and is treated as untrusted.
+
+A named ref is only advisory locally: any process with write access to the
+repository can create a branch or tag, so `--require-trusted-config` still accepts
+an unpinned base ref (`config: base-ref, unpinned`). For enforcement, pass
+`--expect-config-commit <40-hex>` (or set `NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT`;
+the flag wins, a malformed value fails closed) with a commit obtained outside the
+candidate's control. The effective config must then be `base-ref` at exactly that
+commit, otherwise the run fails closed with `CONFIG_SOURCE_MISMATCH` before the
+verifier runs and still writes a receipt:
 
 ```bash
 nexus-certify check --repo . --require-trusted-config
-nexus-certify issue-check --repo . --issue <NUMBER> --require-trusted-config
+nexus-certify check --repo . --require-trusted-config --expect-config-commit <BASE_SHA>
+nexus-certify issue-check --repo . --issue <NUMBER> --require-trusted-config \
+  --expect-config-commit <BASE_SHA>
 ```
 
 Changes to the config take effect only after they are merged into the base ref

@@ -226,14 +226,16 @@ network = "bridge"
 `check` 與 `issue-check` 只會讀取 worktree 中的設定檔來得知 `base_ref`，接著使用已 commit 在該基準 ref 上的設定檔。輸出會告訴你用的是哪一份：
 
 ```text
-config: trusted (main@<commit>)
+config: trusted (main@<commit>, pinned)
+config: base-ref, unpinned (main@<commit>)
 config: untrusted (not committed on main)
 ```
 
-若要拒絕未受信任的情況，請加上 `--require-trusted-config`（或設定 `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`）。此時執行會以 `CONFIG_UNTRUSTED` 失敗。
+若要拒絕未受信任的情況，請加上 `--require-trusted-config`（或設定 `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`）。此時執行會以 `CONFIG_UNTRUSTED` 失敗。在本機，具名 ref 只是參考：任何對 repository 有寫入權限的程序都能建立 ref，因此 `--require-trusted-config` 仍會接受未釘選的 base ref。若要強制執行，請以 `--expect-config-commit <40-hex>`（或設定 `NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT`）傳入一個從候選變更控制範圍之外取得的 commit；其他任何設定檔來源都會在 verifier 執行前以 `CONFIG_SOURCE_MISMATCH` fail closed。
 
 ```bash
 nexus-certify check --require-trusted-config
+nexus-certify check --require-trusted-config --expect-config-commit <BASE_SHA>
 ```
 
 更多資訊：[`docs/LOCAL_GOLDEN_PATH.zh-TW.md`](docs/LOCAL_GOLDEN_PATH.zh-TW.md)（[English](docs/LOCAL_GOLDEN_PATH.md)）。

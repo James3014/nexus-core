@@ -238,14 +238,16 @@ network = "bridge"
 `check` and `issue-check` read the worktree config only to learn `base_ref`. They then use the config committed on that base ref. The output tells you which one was used:
 
 ```text
-config: trusted (main@<commit>)
+config: trusted (main@<commit>, pinned)
+config: base-ref, unpinned (main@<commit>)
 config: untrusted (not committed on main)
 ```
 
-To refuse the untrusted case, add `--require-trusted-config` (or set `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`). The run then fails with `CONFIG_UNTRUSTED`. `base_ref` must name a branch, remote-tracking ref or tag; a revision expression such as `HEAD~1` or a commit SHA is treated as untrusted because the candidate can choose it. In CI, also pin the config commit with `--expect-config-commit`.
+To refuse the untrusted case, add `--require-trusted-config` (or set `NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`). The run then fails with `CONFIG_UNTRUSTED`. `base_ref` must name a branch, remote-tracking ref or tag; a revision expression such as `HEAD~1` or a commit SHA is treated as untrusted because the candidate can choose it. A named ref is only advisory locally: any process with write access to the repository can create a ref, so `--require-trusted-config` still accepts an unpinned base ref. For enforcement, pass `--expect-config-commit <40-hex>` (or set `NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT`) with a commit obtained outside the candidate's control; any other config source fails closed with `CONFIG_SOURCE_MISMATCH` before the verifier runs.
 
 ```bash
 nexus-certify check --require-trusted-config
+nexus-certify check --require-trusted-config --expect-config-commit <BASE_SHA>
 ```
 
 More: [`docs/LOCAL_GOLDEN_PATH.md`](docs/LOCAL_GOLDEN_PATH.md) ([繁體中文](docs/LOCAL_GOLDEN_PATH.zh-TW.md)).
