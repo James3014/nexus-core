@@ -316,6 +316,8 @@ async def test_deterministic_pr635_tracer_full_journey(test_setup):
             v_data = v_resp.json()
             assert v_data["scope"] == "ENVELOPE_ONLY"
             assert v_data["status"] == "VALID"
+            # Receipt produced by this runtime's pipeline is recorded in its ledger (#233).
+            assert v_data["provenance"] == "RECORDED"
 
             # 4. POST /v1/receipts/verify (FULL with original inputs) -> 200 VALID
             # The deterministic executor lets the test recompute the exact evidence
@@ -367,6 +369,7 @@ async def test_deterministic_pr635_tracer_full_journey(test_setup):
             v_full = v_full_resp.json()
             assert v_full["scope"] == "FULL_RECOMPUTED"
             assert v_full["status"] == "VALID", v_full
+            assert v_full["provenance"] == "RECORDED", v_full
 
             # 4b. Substituted evidence must not verify (#205).
             tampered = json.loads(json.dumps(verify_full))

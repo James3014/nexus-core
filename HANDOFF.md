@@ -1,10 +1,10 @@
 # HANDOFF
 
-更新：2026-10-12 · by Claude · HEAD `8ef9b33`
+更新：2026-10-12 · by Claude · HEAD `f0909e9`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
-#233 等 Owner 決定是否動工：runtime `verify_receipt` 改查 ledger 確認來源，政策條件改由 signer/authority 推導（authority 來源設計在 Nexus-new#1750）。目前限制已寫進 SECURITY.md、LEDGER_TRUST_MODEL.md，並有測試固定。
+#233 剩下的「政策條件」部分：runtime 仍把 authority/approval/signing 寫死為 True。等 Nexus-new#1750 的 authority 來源設計定案再做（Owner 已決定先不動）。來源訊號（verify_receipt 的 `provenance` 欄位）已完成。
 
 ## 進行中
 - 無工程中項目。剩下的開放單都在等 Owner 決定（見下）。
