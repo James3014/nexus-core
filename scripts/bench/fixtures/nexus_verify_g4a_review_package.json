@@ -5,7 +5,7 @@
   "product": {
     "name": "Nexus Verify",
     "subtitle": "Verify whether code-change evidence still applies to the exact current pull request.",
-    "description": "Read-only evidence-applicability verification for public GitHub pull requests. Nexus Verify checks optional Nexus receipt integrity and current PR binding; it does not review code, execute repository code, write GitHub state, or authorize merge, release, or deployment.",
+    "description": "Read-only evidence-applicability verification for public GitHub pull requests. Nexus Verify checks optional Nexus receipt integrity, the receipt's Sigstore CI signature, and current PR binding; it does not review code, execute repository code, write GitHub state, or authorize merge, release, or deployment.",
     "no_ui": true,
     "screenshots": []
   },
@@ -19,8 +19,8 @@
     "github_writes": false,
     "merge_release_deploy_authority": false,
     "stable_schema_ids": [
-      "nexus.verify-code-change-evidence.input.v1",
-      "nexus.verify-code-change-evidence.output.v1"
+      "nexus.verify-code-change-evidence.input.v2",
+      "nexus.verify-code-change-evidence.output.v2"
     ],
     "annotations": {
       "readOnlyHint": true,

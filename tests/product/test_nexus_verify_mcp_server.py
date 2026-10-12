@@ -243,6 +243,31 @@ def test_public_tool_argument_validation_matches_advertised_schema():
             public_review=True,
         )
 
+    signed = {
+        **valid,
+        "receipt": {},
+        "receipt_signature": {"receipt_base64": "e30=", "sigstore_bundle": {}},
+    }
+    module._validate_public_tool_arguments(signed, public_review=True)
+
+    with pytest.raises(ValueError, match="receipt_signature must be an object or null"):
+        module._validate_public_tool_arguments(
+            {**valid, "receipt_signature": "bundle"},
+            public_review=True,
+        )
+
+    with pytest.raises(ValueError, match="receipt_signature exceeds public-review size limit"):
+        module._validate_public_tool_arguments(
+            {
+                **signed,
+                "receipt_signature": {
+                    "receipt_base64": "x" * (1025 * 1024),
+                    "sigstore_bundle": {},
+                },
+            },
+            public_review=True,
+        )
+
 
 def test_public_review_server_binds_scanned_schemas_to_frozen_contract():
     source = SCRIPT.read_text(encoding="utf-8")
@@ -332,7 +357,7 @@ def test_public_host_normalization_rejects_ambiguous_or_broad_values(raw):
 def test_pep723_dependency_is_isolated_from_project_runtime():
     source = SCRIPT.read_text(encoding="utf-8")
     assert (
-        '# dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0"]'
+        '# dependencies = ["mcp==2.2.0", "aiohttp==3.14.3", "PyGithub==2.10.0", "sigstore==4.5.0"]'
         in source
     )
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")

@@ -158,9 +158,9 @@ def _check_tool_contract(package: Mapping[str, Any]) -> tuple[bool, list[str]]:
         failures.append("TOOL_NAME_DRIFT")
     input_schema = TOOL_DEFINITION.get("inputSchema")
     output_schema = TOOL_DEFINITION.get("outputSchema")
-    if not isinstance(input_schema, Mapping) or input_schema.get("$id") != "nexus.verify-code-change-evidence.input.v1":
+    if not isinstance(input_schema, Mapping) or input_schema.get("$id") != "nexus.verify-code-change-evidence.input.v2":
         failures.append("INPUT_SCHEMA_DRIFT")
-    if not isinstance(output_schema, Mapping) or output_schema.get("$id") != "nexus.verify-code-change-evidence.output.v1":
+    if not isinstance(output_schema, Mapping) or output_schema.get("$id") != "nexus.verify-code-change-evidence.output.v2":
         failures.append("OUTPUT_SCHEMA_DRIFT")
     expected_annotations = {
         "readOnlyHint": True,

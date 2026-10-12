@@ -1,0 +1,732 @@
+{
+  "config_hash": "sha256:3d7ebc1715642b16c96b38b7da79af35348a1572e881fd8cb181ba418f382e51",
+  "config_source": {
+    "blob": "b6a10259cc08a91e74f3cefc6f8bb2941c9bdb69",
+    "commit": "3c1bfd9ac094bdef99ecec407ac5640537a12237",
+    "config_drift": false,
+    "kind": "base-ref",
+    "ref": "origin/main",
+    "worktree_config_hash": "sha256:3d7ebc1715642b16c96b38b7da79af35348a1572e881fd8cb181ba418f382e51"
+  },
+  "core_response": {
+    "certification": null,
+    "hashes": {
+      "acceptance_contract_hash": "sha256:7a6b5db922306c55e2e0284e1586abcfdd9d8a1d6fb0c585b1a27d0b64018005",
+      "change_manifest_hash": "sha256:40468587d58a9bcea55007e5bfd75d25bde0431c5eab2d98e3c2b836f3743412",
+      "change_set_hash": "sha256:f3921e37cbc231e1bb8de1db751e78f672c75bac87c3ba8b38a47bfaeed8ab35",
+      "evidence_bundle_hash": "sha256:029e1ce2d85e0032cd70df0f04bc8738efb28f8178283f604c50c38c1d444d32",
+      "verification_plan_hash": "sha256:5c72d128c6b33789d8f5154c325f3a8bfb2c92e69dac54ca42c5e3bf2837f2e2"
+    },
+    "protocol_version": "0.1.0-experimental",
+    "schema": "nexus.core.generic-verification-response.v1-experimental",
+    "verification": {
+      "coverage": {
+        "entries": [
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/architecture-prohibition",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/benchmark-regressions",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "package-smoke",
+            "logical_subject_id": "core/distribution-install-smoke",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/product-tests",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "static-analysis",
+            "logical_subject_id": "core/pyright",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "category": "COVERED",
+            "evidence_kind": "static-analysis",
+            "logical_subject_id": "core/ruff",
+            "observed_status": "PASS",
+            "requirement_mode": "REQUIRED"
+          }
+        ],
+        "unexpected_subjects": [],
+        "universe_generation": 1,
+        "universe_identity": "sha256:981bf7fb7ded8b500f18f9d9f7144215677d0d3e4060b1d1d8d0dc5875f927a3"
+      },
+      "integrity": "VALID",
+      "reason_codes": [],
+      "status": "VERIFIED"
+    }
+  },
+  "evidence_artifacts": [
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:5f7c499f6e399030b2d9a3480b1cffe091a7e2973c2516b4bce11f8823b1d896",
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "-q",
+        "tests/architecture"
+      ],
+      "evidence_kind": "test-result",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": true,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "core/architecture-prohibition",
+      "output_hash": "sha256:04641cbc06723ba4e3c51bc1551209f52deb4da4de87ce37dbbf0768b4ba2536",
+      "producer_id": "architecture-tests",
+      "producer_kind": "verifier",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\n   Building nexus-certify @ file:///sandbox/repo\nDownloading aiohttp (1.7MiB)\nDownloading pygments (1.2MiB)\nDownloading pyright (5.9MiB)\nDownloading ruff (9.8MiB)\n Downloaded ruff\n Downloaded aiohttp\n Downloaded pygments\n Downloaded pyright\n      Built nexus-certify @ file:///sandbox/repo\nInstalled 29 packages in 141ms\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgYXQ6IC52ZW52CiAgIEJ1aWxkaW5nIG5leHVzLWNlcnRpZnkgQCBmaWxlOi8vL3NhbmRib3gvcmVwbwpEb3dubG9hZGluZyBhaW9odHRwICgxLjdNaUIpCkRvd25sb2FkaW5nIHB5Z21lbnRzICgxLjJNaUIpCkRvd25sb2FkaW5nIHB5cmlnaHQgKDUuOU1pQikKRG93bmxvYWRpbmcgcnVmZiAoOS44TWlCKQogRG93bmxvYWRlZCBydWZmCiBEb3dubG9hZGVkIGFpb2h0dHAKIERvd25sb2FkZWQgcHlnbWVudHMKIERvd25sb2FkZWQgcHlyaWdodAogICAgICBCdWlsdCBuZXh1cy1jZXJ0aWZ5IEAgZmlsZTovLy9zYW5kYm94L3JlcG8KSW5zdGFsbGVkIDI5IHBhY2thZ2VzIGluIDE0MW1zCg==",
+      "stderr_hash": "sha256:70a850ea1e9180c9eb176f43f50f82ab52d257d36ca34b1a229cec225608dbe2",
+      "stdout": "........................................................................ [ 83%]\n..............                                                           [100%]\n86 passed in 21.90s\n",
+      "stdout_base64": "Li4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgODMlXQouLi4uLi4uLi4uLi4uLiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgWzEwMCVdCjg2IHBhc3NlZCBpbiAyMS45MHMK",
+      "stdout_hash": "sha256:40bcec42a5cc008a6e2b605173b2d4d2ba528cb2f7eeeeb0c4c02444e68eea7e"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:5be61e03decfd7159f22f26c9070e3c0fb0426c2559b08edb9e447fa8c36a3f9",
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "-q",
+        "tests/product"
+      ],
+      "evidence_kind": "test-result",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "core/product-tests",
+      "output_hash": "sha256:80f717f2439fa2d9ddcc177d33655a0ee3f4d8d7da79697ace5403106c03a2ce",
+      "producer_id": "product-tests",
+      "producer_kind": "verifier",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\n   Building nexus-certify @ file:///sandbox/repo\nDownloading pyright (5.9MiB)\nDownloading aiohttp (1.7MiB)\nDownloading pygments (1.2MiB)\nDownloading ruff (9.8MiB)\n Downloaded ruff\n Downloaded aiohttp\n Downloaded pygments\n Downloaded pyright\n      Built nexus-certify @ file:///sandbox/repo\nInstalled 29 packages in 146ms\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgYXQ6IC52ZW52CiAgIEJ1aWxkaW5nIG5leHVzLWNlcnRpZnkgQCBmaWxlOi8vL3NhbmRib3gvcmVwbwpEb3dubG9hZGluZyBweXJpZ2h0ICg1LjlNaUIpCkRvd25sb2FkaW5nIGFpb2h0dHAgKDEuN01pQikKRG93bmxvYWRpbmcgcHlnbWVudHMgKDEuMk1pQikKRG93bmxvYWRpbmcgcnVmZiAoOS44TWlCKQogRG93bmxvYWRlZCBydWZmCiBEb3dubG9hZGVkIGFpb2h0dHAKIERvd25sb2FkZWQgcHlnbWVudHMKIERvd25sb2FkZWQgcHlyaWdodAogICAgICBCdWlsdCBuZXh1cy1jZXJ0aWZ5IEAgZmlsZTovLy9zYW5kYm94L3JlcG8KSW5zdGFsbGVkIDI5IHBhY2thZ2VzIGluIDE0Nm1zCg==",
+      "stderr_hash": "sha256:46284b2642da689544c4488d82a13f3420a01eaac8ecb1523c0226a9457c8fa5",
+      "stdout": "........................................................................ [  4%]\n........................................................................ [  9%]\n........................................................................ [ 13%]\n........................................................................ [ 18%]\n........................................................................ [ 22%]\n........................................................................ [ 27%]\n........................................................................ [ 31%]\n........................................................................ [ 36%]\n........................................................................ [ 40%]\n........................................................................ [ 45%]\n.......s................................................................ [ 50%]\n........................................................................ [ 54%]\n........................................................................ [ 59%]\n........................................................................ [ 63%]\n........................................................................ [ 68%]\n........................................................................ [ 72%]\n........................................................................ [ 77%]\n........................................................................ [ 81%]\n........................................................................ [ 86%]\n........................................................................ [ 91%]\n........................................................................ [ 95%]\n.....................................................................    [100%]\n=============================== warnings summary ===============================\ntests/product/test_http_e2e.py:482\n  /sandbox/repo/tests/product/test_http_e2e.py:482: PytestUnknownMarkWarning: Unknown pytest.mark.live - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html\n    @pytest.mark.live\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1580 passed, 1 skipped, 1 deselected, 1 warning in 169.51s (0:02:49)\n",
+      "stdout_base64": "Li4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgIDQlXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyAgOSVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDEzJV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgMTglXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyAyMiVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDI3JV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgMzElXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyAzNiVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDQwJV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgNDUlXQouLi4uLi4ucy4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyA1MCVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDU0JV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgNTklXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyA2MyVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDY4JV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgNzIlXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyA3NyVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDgxJV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgODYlXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4gWyA5MSVdCi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiBbIDk1JV0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uICAgIFsxMDAlXQo9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09IHdhcm5pbmdzIHN1bW1hcnkgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQp0ZXN0cy9wcm9kdWN0L3Rlc3RfaHR0cF9lMmUucHk6NDgyCiAgL3NhbmRib3gvcmVwby90ZXN0cy9wcm9kdWN0L3Rlc3RfaHR0cF9lMmUucHk6NDgyOiBQeXRlc3RVbmtub3duTWFya1dhcm5pbmc6IFVua25vd24gcHl0ZXN0Lm1hcmsubGl2ZSAtIGlzIHRoaXMgYSB0eXBvPyAgWW91IGNhbiByZWdpc3RlciBjdXN0b20gbWFya3MgdG8gYXZvaWQgdGhpcyB3YXJuaW5nIC0gZm9yIGRldGFpbHMsIHNlZSBodHRwczovL2RvY3MucHl0ZXN0Lm9yZy9lbi9zdGFibGUvaG93LXRvL21hcmsuaHRtbAogICAgQHB5dGVzdC5tYXJrLmxpdmUKCi0tIERvY3M6IGh0dHBzOi8vZG9jcy5weXRlc3Qub3JnL2VuL3N0YWJsZS9ob3ctdG8vY2FwdHVyZS13YXJuaW5ncy5odG1sCjE1ODAgcGFzc2VkLCAxIHNraXBwZWQsIDEgZGVzZWxlY3RlZCwgMSB3YXJuaW5nIGluIDE2OS41MXMgKDA6MDI6NDkpCg==",
+      "stdout_hash": "sha256:3df2f3b23c7c47cd092a18cd178decc156f91441d9072b5faa88e8ae74a688f1"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:d6557ef56069c9cd7213c7bd460627919965466cb1353931737eb2887ec9d3c4",
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "-q",
+        "tests/benchmark"
+      ],
+      "evidence_kind": "test-result",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "core/benchmark-regressions",
+      "output_hash": "sha256:9b49511c4baa0b0400b15d6107f65ed52394c73da815fbe101aef3fe70f1655d",
+      "producer_id": "benchmark-tests",
+      "producer_kind": "verifier",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\n   Building nexus-certify @ file:///sandbox/repo\nDownloading pyright (5.9MiB)\nDownloading pygments (1.2MiB)\nDownloading aiohttp (1.7MiB)\nDownloading ruff (9.8MiB)\n Downloaded ruff\n Downloaded aiohttp\n Downloaded pygments\n Downloaded pyright\n      Built nexus-certify @ file:///sandbox/repo\nInstalled 29 packages in 139ms\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgYXQ6IC52ZW52CiAgIEJ1aWxkaW5nIG5leHVzLWNlcnRpZnkgQCBmaWxlOi8vL3NhbmRib3gvcmVwbwpEb3dubG9hZGluZyBweXJpZ2h0ICg1LjlNaUIpCkRvd25sb2FkaW5nIHB5Z21lbnRzICgxLjJNaUIpCkRvd25sb2FkaW5nIGFpb2h0dHAgKDEuN01pQikKRG93bmxvYWRpbmcgcnVmZiAoOS44TWlCKQogRG93bmxvYWRlZCBydWZmCiBEb3dubG9hZGVkIGFpb2h0dHAKIERvd25sb2FkZWQgcHlnbWVudHMKIERvd25sb2FkZWQgcHlyaWdodAogICAgICBCdWlsdCBuZXh1cy1jZXJ0aWZ5IEAgZmlsZTovLy9zYW5kYm94L3JlcG8KSW5zdGFsbGVkIDI5IHBhY2thZ2VzIGluIDEzOW1zCg==",
+      "stderr_hash": "sha256:0c8b54415371a250c49f17e3cfa0b2dc0ce0714dd521be1d3a2e3782f2322b02",
+      "stdout": "........................................................................ [ 56%]\n........................................................                 [100%]\n128 passed in 1.91s\n",
+      "stdout_base64": "Li4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uIFsgNTYlXQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLiAgICAgICAgICAgICAgICAgWzEwMCVdCjEyOCBwYXNzZWQgaW4gMS45MXMK",
+      "stdout_hash": "sha256:27635ddfd01e6744f787befdd7984fcc3b2900539b0512c383a5ca517c4ed71b"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:8b1c6387983a05c681021d771701ddc1b8d740b57f5849a40aef5071dd80e06f",
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "product",
+        "tests"
+      ],
+      "evidence_kind": "static-analysis",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "core/ruff",
+      "output_hash": "sha256:d077fc47280e1c2a2d2abe3a37a4c0717e168fae75e3510a1c046ef5e86f9e8c",
+      "producer_id": "ruff",
+      "producer_kind": "verifier",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\n   Building nexus-certify @ file:///sandbox/repo\nDownloading pyright (5.9MiB)\nDownloading aiohttp (1.7MiB)\nDownloading pygments (1.2MiB)\nDownloading ruff (9.8MiB)\n Downloaded ruff\n Downloaded aiohttp\n Downloaded pygments\n Downloaded pyright\n      Built nexus-certify @ file:///sandbox/repo\nInstalled 29 packages in 141ms\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgYXQ6IC52ZW52CiAgIEJ1aWxkaW5nIG5leHVzLWNlcnRpZnkgQCBmaWxlOi8vL3NhbmRib3gvcmVwbwpEb3dubG9hZGluZyBweXJpZ2h0ICg1LjlNaUIpCkRvd25sb2FkaW5nIGFpb2h0dHAgKDEuN01pQikKRG93bmxvYWRpbmcgcHlnbWVudHMgKDEuMk1pQikKRG93bmxvYWRpbmcgcnVmZiAoOS44TWlCKQogRG93bmxvYWRlZCBydWZmCiBEb3dubG9hZGVkIGFpb2h0dHAKIERvd25sb2FkZWQgcHlnbWVudHMKIERvd25sb2FkZWQgcHlyaWdodAogICAgICBCdWlsdCBuZXh1cy1jZXJ0aWZ5IEAgZmlsZTovLy9zYW5kYm94L3JlcG8KSW5zdGFsbGVkIDI5IHBhY2thZ2VzIGluIDE0MW1zCg==",
+      "stderr_hash": "sha256:5cad227e6e322719028335e2e065d948fb659b5ab63d5494d1dd4e8ff08e2c3c",
+      "stdout": "All checks passed!\n",
+      "stdout_base64": "QWxsIGNoZWNrcyBwYXNzZWQhCg==",
+      "stdout_hash": "sha256:82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:5cd9cc9a7b345f3bb418f7c553b63ce45f35a1e17a0b10e07fd76326f4f4c2d3",
+      "command": [
+        "uv",
+        "run",
+        "pyright",
+        "product"
+      ],
+      "evidence_kind": "static-analysis",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "core/pyright",
+      "output_hash": "sha256:1c4eeb9f3e1fb45ee7cf7edaa180687aaa4e3879a9066a9d5fcf9efba34a3ace",
+      "producer_id": "pyright",
+      "producer_kind": "verifier",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\n   Building nexus-certify @ file:///sandbox/repo\nDownloading pyright (5.9MiB)\nDownloading aiohttp (1.7MiB)\nDownloading ruff (9.8MiB)\nDownloading pygments (1.2MiB)\n Downloaded ruff\n Downloaded aiohttp\n Downloaded pygments\n Downloaded pyright\n      Built nexus-certify @ file:///sandbox/repo\nInstalled 29 packages in 138ms\n * Install prebuilt node (26.11.1) ..... done.\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgYXQ6IC52ZW52CiAgIEJ1aWxkaW5nIG5leHVzLWNlcnRpZnkgQCBmaWxlOi8vL3NhbmRib3gvcmVwbwpEb3dubG9hZGluZyBweXJpZ2h0ICg1LjlNaUIpCkRvd25sb2FkaW5nIGFpb2h0dHAgKDEuN01pQikKRG93bmxvYWRpbmcgcnVmZiAoOS44TWlCKQpEb3dubG9hZGluZyBweWdtZW50cyAoMS4yTWlCKQogRG93bmxvYWRlZCBydWZmCiBEb3dubG9hZGVkIGFpb2h0dHAKIERvd25sb2FkZWQgcHlnbWVudHMKIERvd25sb2FkZWQgcHlyaWdodAogICAgICBCdWlsdCBuZXh1cy1jZXJ0aWZ5IEAgZmlsZTovLy9zYW5kYm94L3JlcG8KSW5zdGFsbGVkIDI5IHBhY2thZ2VzIGluIDEzOG1zCiAqIEluc3RhbGwgcHJlYnVpbHQgbm9kZSAoMjYuMTEuMSkgLi4uLi4gZG9uZS4K",
+      "stderr_hash": "sha256:56567dc1f7c6f291cc3957a75fee8662f4cd8c190c00f5096bcdda769efd65ef",
+      "stdout": "{'x86': False, 'risc': False, 'lts': False}\n0 errors, 0 warnings, 0 informations\nWARNING: there is a new pyright version available (v1.1.411 -> v1.1.414).\nPlease install the new version or set PYRIGHT_PYTHON_FORCE_VERSION to `latest`\n\n",
+      "stdout_base64": "eyd4ODYnOiBGYWxzZSwgJ3Jpc2MnOiBGYWxzZSwgJ2x0cyc6IEZhbHNlfQowIGVycm9ycywgMCB3YXJuaW5ncywgMCBpbmZvcm1hdGlvbnMKV0FSTklORzogdGhlcmUgaXMgYSBuZXcgcHlyaWdodCB2ZXJzaW9uIGF2YWlsYWJsZSAodjEuMS40MTEgLT4gdjEuMS40MTQpLgpQbGVhc2UgaW5zdGFsbCB0aGUgbmV3IHZlcnNpb24gb3Igc2V0IFBZUklHSFRfUFlUSE9OX0ZPUkNFX1ZFUlNJT04gdG8gYGxhdGVzdGAKCg==",
+      "stdout_hash": "sha256:9c46b666bded9f322484534451395a5b8fea24efb192b585e977bb0a6e091e5a"
+    },
+    {
+      "applicability": "APPLICABLE",
+      "artifact_hash": "sha256:c51f345787de40a1f62068599539f4dc36ef38d14e906a06f8673ce042306ec8",
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "-q",
+        "tests/product/test_distribution_license.py",
+        "tests/product/test_installed_wheel_smoke.py"
+      ],
+      "evidence_kind": "package-smoke",
+      "execution_subject": {
+        "env_passthrough": [],
+        "isolation": {
+          "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+          "image_pulled": false,
+          "mode": "container",
+          "mount_probe": "PASS",
+          "network": "bridge"
+        },
+        "mode": "isolated_detached_clone",
+        "source_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "exit_code": 0,
+      "logical_subject_id": "core/distribution-install-smoke",
+      "output_hash": "sha256:034558a59d26d4dfc20855f4047be374d150b0fb06852025d2cdfedc22dfe1bc",
+      "producer_id": "distribution-smoke",
+      "producer_kind": "verifier",
+      "required_material_ids": [],
+      "requirement_mode": "REQUIRED",
+      "status": "PASS",
+      "stderr": "Using CPython 3.11.14 interpreter at: /usr/local/bin/python3\nCreating virtual environment at: .venv\n   Building nexus-certify @ file:///sandbox/repo\nDownloading ruff (9.8MiB)\nDownloading aiohttp (1.7MiB)\nDownloading pyright (5.9MiB)\nDownloading pygments (1.2MiB)\n Downloaded ruff\n Downloaded aiohttp\n Downloaded pygments\n Downloaded pyright\n      Built nexus-certify @ file:///sandbox/repo\nInstalled 29 packages in 140ms\n",
+      "stderr_base64": "VXNpbmcgQ1B5dGhvbiAzLjExLjE0IGludGVycHJldGVyIGF0OiAvdXNyL2xvY2FsL2Jpbi9weXRob24zCkNyZWF0aW5nIHZpcnR1YWwgZW52aXJvbm1lbnQgYXQ6IC52ZW52CiAgIEJ1aWxkaW5nIG5leHVzLWNlcnRpZnkgQCBmaWxlOi8vL3NhbmRib3gvcmVwbwpEb3dubG9hZGluZyBydWZmICg5LjhNaUIpCkRvd25sb2FkaW5nIGFpb2h0dHAgKDEuN01pQikKRG93bmxvYWRpbmcgcHlyaWdodCAoNS45TWlCKQpEb3dubG9hZGluZyBweWdtZW50cyAoMS4yTWlCKQogRG93bmxvYWRlZCBydWZmCiBEb3dubG9hZGVkIGFpb2h0dHAKIERvd25sb2FkZWQgcHlnbWVudHMKIERvd25sb2FkZWQgcHlyaWdodAogICAgICBCdWlsdCBuZXh1cy1jZXJ0aWZ5IEAgZmlsZTovLy9zYW5kYm94L3JlcG8KSW5zdGFsbGVkIDI5IHBhY2thZ2VzIGluIDE0MG1zCg==",
+      "stderr_hash": "sha256:096e8e9b14dbce4cd9ff68885fa05d6da72773bb0002edd5c5c71610fd58c09d",
+      "stdout": "..                                                                       [100%]\n2 passed in 13.71s\n",
+      "stdout_base64": "Li4gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFsxMDAlXQoyIHBhc3NlZCBpbiAxMy43MXMK",
+      "stdout_hash": "sha256:59fb35b455f37d791a9d4f3b8757b351953b7c94aac6aec114e22dfdc3ce5d40"
+    }
+  ],
+  "evidence_links": [
+    {
+      "required_material_ids": [],
+      "verifier_id": "architecture-tests"
+    },
+    {
+      "required_material_ids": [],
+      "verifier_id": "product-tests"
+    },
+    {
+      "required_material_ids": [],
+      "verifier_id": "benchmark-tests"
+    },
+    {
+      "required_material_ids": [],
+      "verifier_id": "ruff"
+    },
+    {
+      "required_material_ids": [],
+      "verifier_id": "pyright"
+    },
+    {
+      "required_material_ids": [],
+      "verifier_id": "distribution-smoke"
+    }
+  ],
+  "evidence_universe": {
+    "expected_subjects": [
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "test-result",
+        "logical_subject_id": "core/architecture-prohibition",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "test-result",
+        "logical_subject_id": "core/product-tests",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "test-result",
+        "logical_subject_id": "core/benchmark-regressions",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "static-analysis",
+        "logical_subject_id": "core/ruff",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "static-analysis",
+        "logical_subject_id": "core/pyright",
+        "requirement_mode": "REQUIRED"
+      },
+      {
+        "applicability": "APPLICABLE",
+        "evidence_kind": "package-smoke",
+        "logical_subject_id": "core/distribution-install-smoke",
+        "requirement_mode": "REQUIRED"
+      }
+    ],
+    "required_verifier_ids": [
+      "architecture-tests",
+      "product-tests",
+      "benchmark-tests",
+      "ruff",
+      "pyright",
+      "distribution-smoke"
+    ],
+    "universe_generation": 1
+  },
+  "inputs": {
+    "config": {
+      "allowed_patterns": [
+        "**"
+      ],
+      "base_ref": "origin/main",
+      "deletion_policy": "FORBID",
+      "isolation": {
+        "image": "ghcr.io/astral-sh/uv:python3.11-bookworm@sha256:58683a39536f1f4ed2e1dd79cf155edccfb47731aba8964bd0312aac942126cf",
+        "mode": "container",
+        "network": "bridge"
+      },
+      "materials": [],
+      "universe_generation": 1,
+      "verifiers": [
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "tests/architecture"
+          ],
+          "evidence_kind": "test-result",
+          "id": "architecture-tests",
+          "logical_subject_id": "core/architecture-prohibition",
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 1200
+        },
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "tests/product"
+          ],
+          "evidence_kind": "test-result",
+          "id": "product-tests",
+          "logical_subject_id": "core/product-tests",
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 1800
+        },
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "tests/benchmark"
+          ],
+          "evidence_kind": "test-result",
+          "id": "benchmark-tests",
+          "logical_subject_id": "core/benchmark-regressions",
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 1200
+        },
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "product",
+            "tests"
+          ],
+          "evidence_kind": "static-analysis",
+          "id": "ruff",
+          "logical_subject_id": "core/ruff",
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 600
+        },
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "pyright",
+            "product"
+          ],
+          "evidence_kind": "static-analysis",
+          "id": "pyright",
+          "logical_subject_id": "core/pyright",
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 600
+        },
+        {
+          "applicability": "APPLICABLE",
+          "command": [
+            "uv",
+            "run",
+            "pytest",
+            "-q",
+            "tests/product/test_distribution_license.py",
+            "tests/product/test_installed_wheel_smoke.py"
+          ],
+          "evidence_kind": "package-smoke",
+          "id": "distribution-smoke",
+          "logical_subject_id": "core/distribution-install-smoke",
+          "requirement_mode": "REQUIRED",
+          "timeout_seconds": 1200
+        }
+      ],
+      "version": 2
+    },
+    "material_transitions": [],
+    "request": {
+      "acceptance_contract": {
+        "allowed_paths": [
+          "SECURITY.md",
+          "tests/architecture/test_pr_gate_workflow_invariants.py",
+          "tests/golden_behavior/corpus.py",
+          "tests/product/test_local_golden_path.py"
+        ],
+        "contract_id": "local-contract-3d7ebc1715642b16",
+        "deletion_policy": "FORBID",
+        "expected_subjects": [
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/architecture-prohibition",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/product-tests",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/benchmark-regressions",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "static-analysis",
+            "logical_subject_id": "core/ruff",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "static-analysis",
+            "logical_subject_id": "core/pyright",
+            "requirement_mode": "REQUIRED"
+          },
+          {
+            "applicability": "APPLICABLE",
+            "evidence_kind": "package-smoke",
+            "logical_subject_id": "core/distribution-install-smoke",
+            "requirement_mode": "REQUIRED"
+          }
+        ],
+        "required_verifier_ids": [
+          "architecture-tests",
+          "product-tests",
+          "benchmark-tests",
+          "ruff",
+          "pyright",
+          "distribution-smoke"
+        ],
+        "requirements_hash": "sha256:9268d5944074a745336b907ed0ca99c03a003bac573b3f412eb869ed53284643",
+        "universe_generation": 1
+      },
+      "certification_policy": null,
+      "change_manifest": {
+        "entries": [
+          {
+            "after_mode": "100644",
+            "after_oid": "80db7b3998dca350e6af0d4bc2c75ecac286c5ba",
+            "before_mode": "100644",
+            "before_oid": "5c17b77d92ca4bec66eedc7574a497d50cdf9e25",
+            "change_type": "MODIFY",
+            "path": "SECURITY.md"
+          },
+          {
+            "after_mode": "100644",
+            "after_oid": "728b91a0fe6e715c23fe0b5dcf65f4ef778e2677",
+            "before_mode": null,
+            "before_oid": null,
+            "change_type": "ADD",
+            "path": "tests/architecture/test_pr_gate_workflow_invariants.py"
+          },
+          {
+            "after_mode": "100644",
+            "after_oid": "a2bf66c3c4239f4fc15a1a6cba838aec53a71771",
+            "before_mode": "100644",
+            "before_oid": "18cbc9b69a0ae5ca9271c17fab5aa7fe4a737e58",
+            "change_type": "MODIFY",
+            "path": "tests/golden_behavior/corpus.py"
+          },
+          {
+            "after_mode": "100644",
+            "after_oid": "dca37df18f34301fb1544e3424cc7da738b9a83a",
+            "before_mode": "100644",
+            "before_oid": "c8907f18a6c8a271996763d04304c03e0a3522f4",
+            "change_type": "MODIFY",
+            "path": "tests/product/test_local_golden_path.py"
+          }
+        ],
+        "source_tree": "git-tree:87dcc85ff73fd94bb019e21fff5d60e37294a885",
+        "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "change_set": {
+        "change_set_id": "local-change-f83cb3efeeb1a370",
+        "deleted_paths": [],
+        "diff_hash": "sha256:40468587d58a9bcea55007e5bfd75d25bde0431c5eab2d98e3c2b836f3743412",
+        "paths": [
+          "SECURITY.md",
+          "tests/architecture/test_pr_gate_workflow_invariants.py",
+          "tests/golden_behavior/corpus.py",
+          "tests/product/test_local_golden_path.py"
+        ],
+        "source_revision": "git-commit:3c1bfd9ac094bdef99ecec407ac5640537a12237",
+        "target_revision": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c"
+      },
+      "evidence_bundle": {
+        "acceptance_contract_hash": "sha256:7a6b5db922306c55e2e0284e1586abcfdd9d8a1d6fb0c585b1a27d0b64018005",
+        "bundle_id": "local-evidence-f83cb3efeeb1a370",
+        "change_set_hash": "sha256:f3921e37cbc231e1bb8de1db751e78f672c75bac87c3ba8b38a47bfaeed8ab35",
+        "claimed_bundle_hash": "sha256:029e1ce2d85e0032cd70df0f04bc8738efb28f8178283f604c50c38c1d444d32",
+        "observations": [
+          {
+            "artifact_hash": "sha256:5f7c499f6e399030b2d9a3480b1cffe091a7e2973c2516b4bce11f8823b1d896",
+            "artifact_id": "architecture-tests-5f7c499f6e399030",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/architecture-prohibition",
+            "status": "PASS",
+            "verifier_id": "architecture-tests"
+          },
+          {
+            "artifact_hash": "sha256:5be61e03decfd7159f22f26c9070e3c0fb0426c2559b08edb9e447fa8c36a3f9",
+            "artifact_id": "product-tests-5be61e03decfd715",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/product-tests",
+            "status": "PASS",
+            "verifier_id": "product-tests"
+          },
+          {
+            "artifact_hash": "sha256:d6557ef56069c9cd7213c7bd460627919965466cb1353931737eb2887ec9d3c4",
+            "artifact_id": "benchmark-tests-d6557ef56069c9cd",
+            "evidence_kind": "test-result",
+            "logical_subject_id": "core/benchmark-regressions",
+            "status": "PASS",
+            "verifier_id": "benchmark-tests"
+          },
+          {
+            "artifact_hash": "sha256:8b1c6387983a05c681021d771701ddc1b8d740b57f5849a40aef5071dd80e06f",
+            "artifact_id": "ruff-8b1c6387983a05c6",
+            "evidence_kind": "static-analysis",
+            "logical_subject_id": "core/ruff",
+            "status": "PASS",
+            "verifier_id": "ruff"
+          },
+          {
+            "artifact_hash": "sha256:5cd9cc9a7b345f3bb418f7c553b63ce45f35a1e17a0b10e07fd76326f4f4c2d3",
+            "artifact_id": "pyright-5cd9cc9a7b345f3b",
+            "evidence_kind": "static-analysis",
+            "logical_subject_id": "core/pyright",
+            "status": "PASS",
+            "verifier_id": "pyright"
+          },
+          {
+            "artifact_hash": "sha256:c51f345787de40a1f62068599539f4dc36ef38d14e906a06f8673ce042306ec8",
+            "artifact_id": "distribution-smoke-c51f345787de40a1",
+            "evidence_kind": "package-smoke",
+            "logical_subject_id": "core/distribution-install-smoke",
+            "status": "PASS",
+            "verifier_id": "distribution-smoke"
+          }
+        ],
+        "verification_plan_hash": "sha256:5c72d128c6b33789d8f5154c325f3a8bfb2c92e69dac54ca42c5e3bf2837f2e2"
+      },
+      "protocol_version": "0.1.0-experimental",
+      "schema": "nexus.core.generic-verification-request.v1-experimental",
+      "verification_plan": {
+        "acceptance_contract_hash": "sha256:7a6b5db922306c55e2e0284e1586abcfdd9d8a1d6fb0c585b1a27d0b64018005",
+        "change_set_hash": "sha256:f3921e37cbc231e1bb8de1db751e78f672c75bac87c3ba8b38a47bfaeed8ab35",
+        "plan_id": "local-plan-f83cb3efeeb1a370",
+        "required_verifier_ids": [
+          "architecture-tests",
+          "product-tests",
+          "benchmark-tests",
+          "ruff",
+          "pyright",
+          "distribution-smoke"
+        ]
+      }
+    },
+    "requirements_context": {
+      "binding_hash": "sha256:4fd54b9a902b5012297b7b385a5367fbe6082e32b2f71178c4f6111807d3c181",
+      "evidence_sufficiency": {
+        "config_hash": "sha256:3d7ebc1715642b16c96b38b7da79af35348a1572e881fd8cb181ba418f382e51",
+        "status": "BOUND"
+      },
+      "github_repository": "James3014/nexus-core",
+      "issue_contract_hash": "sha256:2697a17035c42d1d619498e831f6d639f34c0b2f46d30a4a012fc943bc524b54",
+      "issue_number": 240,
+      "schema": "nexus.core.issue-binding-context.v2"
+    }
+  },
+  "issue_verification": {
+    "claim_ceiling": "ISSUE_VERIFIED_NOT_RELEASED",
+    "evidence_universe": "BOUND",
+    "github_repository": "James3014/nexus-core",
+    "issue_contract_hash": "sha256:2697a17035c42d1d619498e831f6d639f34c0b2f46d30a4a012fc943bc524b54",
+    "issue_number": 240,
+    "reason_codes": [],
+    "status": "VERIFIED"
+  },
+  "kind": "NEXUS_CORE_LOCAL_VERIFICATION_RECEIPT",
+  "manifest_hash": "sha256:40468587d58a9bcea55007e5bfd75d25bde0431c5eab2d98e3c2b836f3743412",
+  "outcome": {
+    "reason_codes": [],
+    "status": "VERIFIED",
+    "transport_error": false
+  },
+  "product": {
+    "name": "nexus-core",
+    "version": "0.3.0"
+  },
+  "receipt_hash": "sha256:b4868d1cdb3314302713e9b35da186d98c184b36fc72b430946380e433b1b461",
+  "residue_policy": "sandbox-only",
+  "schema_version": 2,
+  "source_revision": "git-commit:3c1bfd9ac094bdef99ecec407ac5640537a12237",
+  "source_tree": "git-tree:87dcc85ff73fd94bb019e21fff5d60e37294a885",
+  "subject_clean": true,
+  "subject_head": "git-commit:4fd00829996214d648f85bd2c63a7afee7945f02",
+  "subject_head_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c",
+  "target_revision": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c",
+  "target_tree": "git-tree:f83cb3efeeb1a370367016c478f81e53b7259f5c",
+  "timestamp": "2026-10-12T11:03:14.934013+00:00"
+}

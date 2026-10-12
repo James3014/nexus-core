@@ -477,12 +477,43 @@ def cmd_receipt_check(args: argparse.Namespace) -> int:
 def cmd_evidence_check(args: argparse.Namespace) -> int:
     """Evaluate one supplied exact PR subject through the canonical Core reducer."""
     _require_runtime()
+    import base64
+
     from product.clients.nexus_verify import evaluate_code_change_evidence_subject
+    from product.clients.receipt_authentication import (
+        SigstoreReceiptAuthenticator,
+        signer_policy_for_identity,
+    )
 
     try:
-        receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        receipt_bytes = Path(args.receipt).read_bytes()
+        receipt = json.loads(receipt_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CertifyCLIError(f"malformed receipt file: {exc}", exit_code=2) from exc
+    # The bundle CI uploads next to the receipt; without it the result is
+    # UNVERIFIABLE / RECEIPT_NOT_AUTHENTICATED (#231).
+    bundle_path = args.sigstore_bundle
+    if bundle_path is None:
+        default_bundle = Path(f"{args.receipt}.sigstore.json")
+        bundle_path = str(default_bundle) if default_bundle.is_file() else None
+    receipt_signature: dict[str, Any] | None = None
+    if bundle_path is not None:
+        try:
+            bundle: Any = json.loads(Path(bundle_path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CertifyCLIError(f"malformed Sigstore bundle file: {exc}", exit_code=2) from exc
+        if not isinstance(bundle, dict):
+            raise CertifyCLIError("malformed Sigstore bundle file: not an object", exit_code=2)
+        receipt_signature = {
+            "receipt_base64": base64.b64encode(receipt_bytes).decode("ascii"),
+            "sigstore_bundle": bundle,
+        }
+    try:
+        signer_policy = (
+            signer_policy_for_identity(args.signer_identity) if args.signer_identity else None
+        )
+    except ValueError as exc:
+        raise CertifyCLIError(str(exc), exit_code=2) from exc
     subject = {
         "repository_owner": args.repository_owner,
         "repository_name": args.repository_name,
@@ -495,7 +526,13 @@ def cmd_evidence_check(args: argparse.Namespace) -> int:
         "deleted_paths": args.deleted_path,
     }
     try:
-        result = evaluate_code_change_evidence_subject(subject, receipt)
+        result = evaluate_code_change_evidence_subject(
+            subject,
+            receipt,
+            receipt_signature=receipt_signature,
+            authenticator=SigstoreReceiptAuthenticator(offline=args.sigstore_offline),
+            signer_policy=signer_policy,
+        )
     except ValueError as exc:
         raise CertifyCLIError(str(exc), exit_code=2) from exc
     print(json.dumps(result, sort_keys=True))
@@ -795,6 +832,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_evidence_check.add_argument("--head-tree", required=True)
     p_evidence_check.add_argument("--changed-path", action="append", default=[])
     p_evidence_check.add_argument("--deleted-path", action="append", default=[])
+    p_evidence_check.add_argument(
+        "--sigstore-bundle",
+        help="Sigstore bundle for the receipt (default: <receipt>.sigstore.json when present)",
+    )
+    p_evidence_check.add_argument(
+        "--signer-identity",
+        help=(
+            "Expected signing workflow identity, e.g. https://github.com/OWNER/REPO/"
+            ".github/workflows/<file>.yml@refs/heads/main (default: the subject "
+            "repository's nexus-core-issue-completion.yml on refs/heads/main)"
+        ),
+    )
+    p_evidence_check.add_argument(
+        "--sigstore-offline",
+        action="store_true",
+        help="Use the cached/embedded Sigstore trust root instead of refreshing it",
+    )
 
     p_issue_init = subparsers.add_parser(
         "issue-init", help="Bind one GitHub Issue to the repository verification contract"

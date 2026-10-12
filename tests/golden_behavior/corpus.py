@@ -816,14 +816,27 @@ CASES: tuple[GoldenCase, ...] = (
         "Nexus Verify authenticates receipts",
         "security",
         "malformed_input",
-        "SECURITY.md: 'Nexus Verify Does Not Authenticate Receipts ... A caller who edits and re-hashes a receipt can still obtain VERIFIED'; a re-hashed relabelled receipt currently gets APPLIES+VERIFIED (pinned as current unsafe behavior by tests/product/test_nexus_verify_plugin.py::test_rehashed_receipt_claiming_current_base_is_not_authenticated). Required: only a Sigstore-verified CI receipt may yield APPLIES/VERIFIED (Issue #231, OPEN).",
+        "Only a receipt whose exact bytes carry a Sigstore bundle that verifies against the subject repository's gate workflow identity (issuer GitHub Actions, nexus-core-issue-completion.yml@refs/heads/main, same workflow repository) may yield APPLIES/VERIFIED. The Issue #231 forgery (relabel config_source as base-ref at the current base commit and re-hash) stays receipt_integrity VALID but is UNVERIFIABLE / NOT_AVAILABLE with RECEIPT_NOT_AUTHENTICATED, with no bundle, with another receipt's genuine bundle, or with a bundle for other bytes, another workflow or another repository; malformed or DSSE bundles are RECEIPT_NOT_AUTHENTICATED and a missing sigstore package or trust root is RECEIPT_AUTHENTICATION_UNAVAILABLE, never VERIFIED. A genuine CI receipt with its bundle is VALID/APPLIES/VERIFIED (real signature: tests/product/test_nexus_verify_sigstore_real.py, needs the optional sigstore package).",
         (
             "SECURITY.md#Security Claim Boundaries: What `VERIFIED` Means",
+            "docs/nexus_verify/PUBLIC_REVIEW_READINESS.md#Receipt authentication",
             "https://github.com/James3014/nexus-core/issues/231",
-            "product/runtime/nexus_verify.py",
+            "product/clients/nexus_verify.py",
+            "product/clients/receipt_authentication.py",
         ),
-        status="finding",
-        finding_id="NCGF-001",
+        (
+            "tests/product/test_nexus_verify_plugin.py::test_rehashed_receipt_claiming_current_base_is_not_authenticated",
+            "tests/product/test_nexus_verify_plugin.py::test_fresh_valid_receipt_applies_to_current_pr",
+            "tests/product/test_nexus_verify_plugin.py::test_missing_bundle_is_not_authenticated",
+            "tests/product/test_nexus_verify_plugin.py::test_bundle_for_different_bytes_is_not_authenticated",
+            "tests/product/test_nexus_verify_plugin.py::test_signed_bytes_must_encode_the_exact_receipt_value",
+            "tests/product/test_nexus_verify_plugin.py::test_wrong_signer_identity_is_not_authenticated",
+            "tests/product/test_nexus_verify_plugin.py::test_authenticator_unavailable_or_unknown_is_never_verified",
+            "tests/product/test_nexus_verify_plugin.py::test_default_authenticator_without_sigstore_is_unavailable",
+            "tests/product/test_nexus_verify_plugin.py::test_malformed_signature_material_is_not_authenticated",
+            "tests/product/test_nexus_verify_plugin.py::test_acquisition_failure_never_reports_verified_for_unsigned_receipt",
+            "tests/benchmark/test_nexus_verify_g2.py::test_unauthenticated_receipt_is_never_accepted",
+        ),
     ),
     _c(
         "NCG-053",
@@ -904,6 +917,6 @@ CASES: tuple[GoldenCase, ...] = (
 )
 
 
-FINDINGS = {
-    "NCGF-001": "Nexus Verify does not authenticate receipts: a re-hashed relabelled receipt gets APPLIES+VERIFIED; tracked in #231 (OPEN).",
-}
+# NCGF-001 (Nexus Verify did not authenticate receipts) was resolved by #231 and
+# NCG-052 is now covered.
+FINDINGS = {}

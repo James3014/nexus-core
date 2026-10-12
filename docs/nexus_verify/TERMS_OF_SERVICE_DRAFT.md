@@ -14,7 +14,7 @@ The proposed public v0 supports public GitHub repositories only. Do not submit p
 
 ## Verification claim boundary
 
-A `VERIFIED` result means the supplied evidence passed Nexus's defined integrity/applicability checks for the exact represented subject. It does not mean the code is bug-free, secure, approved for merge, approved for release, deployed, production-ready, or suitable for any particular purpose.
+A `VERIFIED` result means the supplied evidence passed Nexus's defined authentication (a Sigstore signature by the repository's gate workflow), integrity and applicability checks for the exact represented subject. It does not mean the code is bug-free, secure, approved for merge, approved for release, deployed, production-ready, or suitable for any particular purpose.
 
 Users remain responsible for their own engineering, security, review, release, and deployment decisions.
 
