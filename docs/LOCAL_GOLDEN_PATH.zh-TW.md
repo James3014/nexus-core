@@ -100,16 +100,26 @@ config hash 會綁定 normalized config。path pattern 只屬於 product-shell a
 `config_source.kind = "worktree"`，CLI 會印出以下其中一行：
 
 ```text
-config: trusted (<ref>@<sha>)
+config: trusted (<ref>@<sha>, pinned)
+config: base-ref, unpinned (<ref>@<sha>)
 config: untrusted (not committed on <base_ref>)
 ```
 
 若要拒絕 untrusted 情況，請加上 `--require-trusted-config`（或設定
-`NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`），此時會以 `CONFIG_UNTRUSTED` fail closed：
+`NEXUS_CERTIFY_REQUIRE_TRUSTED_CONFIG=1`），此時會以 `CONFIG_UNTRUSTED` fail closed。
+
+在本機，具名 ref 只是參考：任何對 repository 有寫入權限的程序都能建立 branch 或 tag，
+因此 `--require-trusted-config` 仍會接受未釘選的 base ref（`config: base-ref, unpinned`）。
+若要強制執行，請以 `--expect-config-commit <40-hex>`（或設定
+`NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT`；flag 優先，格式錯誤的值會 fail closed）傳入一個
+從候選變更控制範圍之外取得的 commit。此時生效的 config 必須是該 commit 上的
+`base-ref`，否則會在 verifier 執行前以 `CONFIG_SOURCE_MISMATCH` fail closed，並仍寫出 receipt：
 
 ```bash
 nexus-certify check --repo . --require-trusted-config
-nexus-certify issue-check --repo . --issue <NUMBER> --require-trusted-config
+nexus-certify check --repo . --require-trusted-config --expect-config-commit <BASE_SHA>
+nexus-certify issue-check --repo . --issue <NUMBER> --require-trusted-config \
+  --expect-config-commit <BASE_SHA>
 ```
 
 Config 的變更只有在合併進 base ref 之後才會生效（第 N 代在舊 config 下驗證，

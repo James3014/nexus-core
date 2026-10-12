@@ -475,6 +475,7 @@ def check_issue(
     issue_number: int,
     issue_reader: IssueReader | None = None,
     require_trusted_config: bool = False,
+    expect_config_commit: str | None = None,
 ) -> dict[str, Any]:
     repo = _repo_root(path)
     binding = load_issue_binding(repo, issue_number)
@@ -567,6 +568,7 @@ def check_issue(
         repo,
         requirements_context=context,
         require_trusted_config=require_trusted_config,
+        expect_config_commit=expect_config_commit,
         issue_verification=issue_verification,
         material_transitions=transitions,
     )

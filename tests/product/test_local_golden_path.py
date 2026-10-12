@@ -2250,3 +2250,168 @@ def test_require_trusted_config_rejects_candidate_chosen_base_ref_expression(
     assert raised.value.reason_code == "CONFIG_UNTRUSTED"
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["config_source"]["kind"] == "worktree"
+
+
+# --- NCGF-002: a local named ref is advisory; only an external pin enforces -------------
+
+
+def _weak_branch_attack(repo: Path, marker: Path) -> tuple[str, str]:
+    """main fails its verifier; candidate F1 mints branch ``weak`` with a weak config.
+
+    Returns ``(main_sha, weak_sha)``. The weak verifier writes ``marker`` when run.
+    """
+
+    _v2_config(repo, [sys.executable, "-c", "raise SystemExit(1)"])
+    _git(repo, "add", ".nexus-core/config.toml")
+    _git(repo, "commit", "-m", "trusted failing config")
+    main_sha = _git(repo, "rev-parse", "main")
+    _git(repo, "checkout", "-b", "feature")
+    write_marker = f"open({str(marker)!r}, 'w').close()"
+    _v2_config(repo, [sys.executable, "-c", write_marker], patterns='["**"]', base_ref="weak")
+    _git(repo, "commit", "-am", "F1 weak config")
+    _git(repo, "branch", "weak")
+    (repo / "app.py").write_text("VALUE = 3\n", encoding="utf-8")
+    _git(repo, "commit", "-am", "F2 payload")
+    return main_sha, _git(repo, "rev-parse", "weak")
+
+
+def test_candidate_created_branch_is_reported_unpinned_not_trusted(
+    external_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    marker = tmp_path / "weak-verifier-ran"
+    _main_sha, weak_sha = _weak_branch_attack(external_repo, marker)
+
+    rc = cli_main(["check", "--repo", str(external_repo), "--require-trusted-config"])
+
+    out = capsys.readouterr().out
+    assert rc == 0  # --require-trusted-config semantics unchanged (CI compatibility)
+    assert f"config: base-ref, unpinned (weak@{weak_sha[:12]})" in out
+    assert "config: trusted" not in out
+    assert marker.exists()
+
+
+def test_pinned_config_commit_rejects_candidate_created_branch_before_verifier(
+    external_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    marker = tmp_path / "weak-verifier-ran"
+    main_sha, weak_sha = _weak_branch_attack(external_repo, marker)
+    receipts = external_repo / ".nexus-core" / "receipts"
+    before = set(receipts.glob("*.json")) if receipts.exists() else set()
+
+    rc = cli_main(
+        [
+            "check",
+            "--repo",
+            str(external_repo),
+            "--require-trusted-config",
+            "--expect-config-commit",
+            main_sha,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert rc != 0
+    assert "CONFIG_SOURCE_MISMATCH" in captured.err
+    assert "verification: VERIFIED" not in captured.out
+    assert not marker.exists()
+    written = set(receipts.glob("*.json")) - before
+    assert len(written) == 1
+    receipt = json.loads(written.pop().read_text(encoding="utf-8"))
+    assert receipt["outcome"]["status"] == "FAILED_CLOSED"
+    assert receipt["outcome"]["reason_codes"] == ["CONFIG_SOURCE_MISMATCH"]
+    assert receipt["config_source"]["kind"] == "base-ref"
+    assert receipt["config_source"]["commit"] == weak_sha
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo, expect_config_commit=main_sha)
+    assert raised.value.reason_code == "CONFIG_SOURCE_MISMATCH"
+    assert raised.value.receipt_path is not None
+    assert raised.value.receipt_path.is_file()
+    assert not marker.exists()
+
+
+def test_pinned_config_commit_also_rejects_worktree_source(external_repo: Path):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(
+            external_repo, expect_config_commit=_git(external_repo, "rev-parse", "HEAD")
+        )
+    assert raised.value.reason_code == "CONFIG_SOURCE_MISMATCH"
+    receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["config_source"]["kind"] == "worktree"
+
+
+def test_pinned_legit_base_commit_is_verified_and_labelled_pinned(
+    external_repo: Path, capsys: pytest.CaptureFixture[str]
+):
+    _commit_config_on_main(external_repo, '["*.py"]')
+    main_sha = _git(external_repo, "rev-parse", "main")
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    rc = cli_main(
+        [
+            "check",
+            "--repo",
+            str(external_repo),
+            "--require-trusted-config",
+            "--expect-config-commit",
+            main_sha,
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "verification: VERIFIED" in out
+    assert f"config: trusted (main@{main_sha[:12]}, pinned)" in out
+
+
+def test_expect_config_commit_env_pins_and_flag_wins(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _commit_config_on_main(external_repo, '["*.py"]')
+    main_sha = _git(external_repo, "rev-parse", "main")
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    monkeypatch.setenv("NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT", main_sha)
+    assert cli_main(["check", "--repo", str(external_repo)]) == 0
+    assert f"config: trusted (main@{main_sha[:12]}, pinned)" in capsys.readouterr().out
+
+    monkeypatch.setenv("NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT", "0" * 40)
+    assert cli_main(["check", "--repo", str(external_repo)]) != 0
+    assert "CONFIG_SOURCE_MISMATCH" in capsys.readouterr().err
+    rc = cli_main(["check", "--repo", str(external_repo), "--expect-config-commit", main_sha])
+    assert rc == 0
+    assert f"config: trusted (main@{main_sha[:12]}, pinned)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("value", ["", "main", "ABCDEF" + "0" * 34, "0" * 39])
+def test_malformed_expect_config_commit_env_fails_closed(
+    external_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+):
+    marker = tmp_path / "verifier-ran"
+    _v2_config(external_repo, [sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"])
+    _git(external_repo, "add", ".nexus-core/config.toml")
+    _git(external_repo, "commit", "-m", "trusted config")
+    _git(external_repo, "checkout", "-b", "feature")
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.setenv("NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT", value)
+
+    assert cli_main(["check", "--repo", str(external_repo)]) == 2
+    assert "NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT" in capsys.readouterr().err
+    assert not marker.exists()
+
+
+def test_issue_check_accepts_expect_config_commit():
+    args = build_parser().parse_args(
+        ["issue-check", "--issue", "1", "--expect-config-commit", "a" * 40]
+    )
+    assert args.expect_config_commit == "a" * 40
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["check", "--expect-config-commit", "main"])
