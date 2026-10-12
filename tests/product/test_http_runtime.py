@@ -479,3 +479,60 @@ async def test_post_routes_return_400_for_invalid_utf8_and_deep_nesting(isolated
                     assert resp.json()["code"] == "MALFORMED_REQUEST"
     finally:
         await handle.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_verify_receipt_does_not_check_provenance(tmp_path: Path):
+    """Pins the documented limit from #205: verify_receipt is not provenance.
+
+    A CERTIFIED receipt minted offline, for work this runtime never acquired or ran,
+    verifies VALID against a fresh service with an empty ledger. This pins CURRENT
+    behaviour (see docs/architecture/LEDGER_TRUST_MODEL.md) and must flip when #233
+    (ledger lookup / signature / authority source) lands.
+    """
+    from product.runtime.service import RuntimeCertificationService
+
+    cert_in = _input()
+    result = certify(cert_in)
+    assert result.disposition.value == "CERTIFIED"
+    receipt = result.receipt.to_dict()
+    original_inputs = {
+        "acceptance_contract": {
+            "contract_id": cert_in.contract.contract_id,
+            "requirements_hash": cert_in.contract.requirements_hash,
+            "required_verifier_ids": list(cert_in.contract.required_verifier_ids),
+            "allowed_paths": list(cert_in.contract.allowed_paths),
+            "deletion_policy": cert_in.contract.deletion_policy,
+        },
+        "change_set": {
+            "change_set_id": cert_in.change_set.change_set_id,
+            "source_revision": cert_in.change_set.source_revision,
+            "target_revision": cert_in.change_set.target_revision,
+            "diff_hash": cert_in.change_set.diff_hash,
+            "paths": list(cert_in.change_set.paths),
+        },
+        "verification_plan": {
+            "plan_id": cert_in.plan.plan_id,
+            "required_verifier_ids": list(cert_in.plan.required_verifier_ids),
+        },
+        "evidence": {
+            "bundle_id": cert_in.evidence.bundle_id,
+            "observations": [
+                {
+                    "verifier_id": o.verifier_id,
+                    "artifact_id": o.artifact_id,
+                    "artifact_hash": o.artifact_hash,
+                    "status": o.status.value,
+                }
+                for o in cert_in.evidence.observations
+            ],
+        },
+    }
+
+    service = RuntimeCertificationService(db_path=str(tmp_path / "empty-ledger.db"))
+    for scope, inputs in (("FULL", original_inputs), ("AUTO", None)):
+        code, body = await service.verify_receipt(
+            {"receipt": receipt, "requested_scope": scope, "original_inputs": inputs}
+        )
+        assert code == 200, (scope, body)
+        assert body["status"] == "VALID", (scope, body)

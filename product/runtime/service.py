@@ -425,6 +425,10 @@ class RuntimeCertificationService:
             )
 
             # 4. Completion Core Certification
+            # NOTE (#205, fix tracked in #233): these policy facts are hard-coded
+            # placeholders. They are not derived from a signer or an authority source
+            # (the authority source is designed in James3014/Nexus-new#1750), and are
+            # True even when no signer is configured.
             cert_input = CertificationInput(
                 contract=contract,
                 change_set=change_set,
@@ -600,7 +604,18 @@ class RuntimeCertificationService:
             )
 
     async def verify_receipt(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        """POST /v1/receipts/verify."""
+        """POST /v1/receipts/verify.
+
+        Checks only structural and hash-recomputation consistency of the supplied
+        receipt (and, for FULL scope, recomputation from caller-supplied inputs).
+
+        This is NOT provenance: the runtime ledger is never consulted and no
+        signature is checked, so a CERTIFIED receipt minted offline by a caller for
+        work this runtime never acquired or executed can return VALID. The policy
+        facts (authority/approval/signing) are read from the receipt under test, i.e.
+        self-asserted. See docs/architecture/LEDGER_TRUST_MODEL.md; the fix is tracked
+        in #233 (issue #205).
+        """
         errs = validate_receipt_verify_request(payload)
         if errs:
             return 422, make_http_error(
