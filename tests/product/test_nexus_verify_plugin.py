@@ -434,3 +434,31 @@ def test_forged_base_ref_config_source_with_wrong_commit_is_unverifiable(
 
     assert result["evidence_applicability"] == "UNVERIFIABLE"
     assert result["core_verification"] == "NOT_AVAILABLE"
+
+
+def test_rehashed_receipt_claiming_current_base_is_not_authenticated(
+    verified_repo_and_receipt,
+):
+    """Pin the documented limit: receipt authenticity is not checked (#204).
+
+    The receipt hash is an unkeyed SHA-256 and ``config_source`` is self-asserted,
+    so a caller who forges ``config_source`` to claim the current base commit and
+    re-hashes the receipt still gets APPLIES / VERIFIED. This asserts the CURRENT
+    behaviour. When #231 adds Sigstore signature verification, this test must flip
+    to UNVERIFIABLE.
+    """
+    from product.clients.local_golden_path import _receipt_hash
+
+    repo, receipt = verified_repo_and_receipt
+    port = FakeGitHubPort(repo, receipt)
+    receipt["config_source"] = {
+        **receipt["config_source"],
+        "kind": "base-ref",
+        "commit": port.base_sha,
+    }
+    receipt["receipt_hash"] = _receipt_hash(receipt)
+
+    result = verify_code_change_evidence(_args(receipt), github_port=port)
+
+    assert result["evidence_applicability"] == "APPLIES"
+    assert result["core_verification"] == "VERIFIED"

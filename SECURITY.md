@@ -63,6 +63,7 @@ A receipt's SHA-256 field makes that receipt **tamper-evident when revalidated**
 - **No Deployment or Release Authority**: A receipt is evidence; it does not authorize git merge, branch promotion, release, or production deployment.
 - **No Execution Safety**: It does not guarantee that the repository code is safe to execute or install.
 - **Repository `VERIFIED` Is Not Issue `VERIFIED`**: `outcome.status` reflects the repository check only. For Issue-bound receipts the Issue-level verdict lives in `issue_verification`; since Issue #134 `receipt-check --expect-issue` and `--expect-status VERIFIED` require it to be `VERIFIED`, so an unbound or stale evidence universe can no longer pass the gate. Receipts without `issue_verification` never satisfy `--expect-issue`.
+- **Nexus Verify Does Not Authenticate Receipts**: `verify_code_change_evidence` checks that a supplied receipt is self-consistent (an unkeyed SHA-256 hash) and that its self-asserted `config_source` matches the current base commit; it does not verify a signature. A caller who edits and re-hashes a receipt can still obtain `VERIFIED`, so only the Sigstore-signed CI receipt checked by `receipt-verify` is authoritative; signature verification in Nexus Verify is tracked in #231.
 
 ---
 

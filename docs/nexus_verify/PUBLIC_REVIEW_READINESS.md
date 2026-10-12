@@ -24,6 +24,7 @@ It does not:
 - write to GitHub;
 - approve or merge a pull request;
 - release or deploy software;
+- authenticate supplied receipts (no signature check yet; a re-hashed receipt can report `VERIFIED`; see SECURITY.md and #231);
 - support private repositories;
 - accept user passwords, API keys, GitHub tokens, MFA codes, or other authentication secrets.
 
