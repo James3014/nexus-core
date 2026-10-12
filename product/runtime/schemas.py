@@ -158,6 +158,11 @@ RECEIPT_VERIFY_RESPONSE_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
         },
+        # Optional for clients (#233): whether this runtime's ledger recorded the receipt.
+        "provenance": {
+            "type": "string",
+            "enum": ["RECORDED", "NOT_RECORDED", "LEDGER_UNAVAILABLE"],
+        },
     },
     "additionalProperties": False,
 }

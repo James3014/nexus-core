@@ -46,7 +46,8 @@ The behaviour described here is pinned by
 ## Runtime receipt verification is not provenance
 
 `RuntimeCertificationService.verify_receipt` (`POST /v1/receipts/verify`) is a
-consistency check, not a provenance check (issue #205).
+consistency check; its `status` is not a provenance check (issue #205). Since #233 it
+also reports a separate, additive `provenance` signal (see below).
 
 ### What it checks
 
@@ -54,10 +55,25 @@ consistency check, not a provenance check (issue #205).
 - For `FULL` scope, that recomputing the certification from caller-supplied
   `original_inputs` reproduces the receipt.
 
-### What it does not check
+### Provenance signal
 
-- That this runtime produced the receipt. `verify_receipt` never looks the receipt up in
-  the runtime ledger and checks no signature. A CERTIFIED receipt minted offline with
+Every 200 response carries `provenance`, computed after the hash checks pass (422 paths
+are unchanged) with a read-only `SELECT 1 FROM ledger_entries WHERE receipt_hash = ?`:
+
+- `RECORDED`: this service's ledger holds an entry with that `receipt_hash`.
+- `NOT_RECORDED`: the ledger was read and the hash is absent.
+- `LEDGER_UNAVAILABLE`: the ledger read failed. This fails closed (never `RECORDED`) and
+  the response stays a 200.
+
+`status`, `scope`, `reason_codes` and HTTP codes are unchanged. `status` alone still only
+means hash/recomputation consistency. Callers who need provenance must require
+`provenance == "RECORDED"`. `RECORDED` means only that this ledger holds the hash; it is
+not a signature or authority check.
+
+### What `status` does not check
+
+- That this runtime produced the receipt (use `provenance` for that). No signature is
+  checked. A CERTIFIED receipt minted offline with
   `product.kernel.certify`, for a PR the runtime never acquired or executed, returns
   `200 VALID` in `FULL` scope (with caller-supplied `original_inputs`) and
   `200 ENVELOPE_ONLY VALID` in `AUTO` scope.
@@ -68,11 +84,14 @@ consistency check, not a provenance check (issue #205).
   configured. They are not derived from a signer or an authority source; the authority
   source is designed in James3014/Nexus-new#1750.
 
-A `VALID` result must not be read as "this runtime certified this change".
+A `VALID` result alone must not be read as "this runtime certified this change"; require
+`provenance == "RECORDED"` as well.
 
 ### Status
 
-The owner chose to document the limit with no behaviour change. The real fix is tracked
-in #233. The behaviour described here is pinned by
-`test_runtime_verify_receipt_does_not_check_provenance` in
-`tests/product/test_http_runtime.py`, which must be flipped when #233 lands.
+The owner scoped #233 to an additive provenance signal only; the policy-fact placeholders
+and signature/authority checks remain deferred (James3014/Nexus-new#1750). The behaviour
+is pinned by `test_runtime_verify_receipt_reports_offline_receipt_as_not_recorded`,
+`test_runtime_verify_receipt_fails_closed_when_ledger_unavailable` in
+`tests/product/test_http_runtime.py`, and the `RECORDED` assertions in
+`tests/product/test_http_e2e.py`.

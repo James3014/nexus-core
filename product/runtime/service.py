@@ -44,6 +44,7 @@ from product.ledger import (
     LedgerAppendStatus,
     append_or_replay,
     compute_canonical_request_hash,
+    find_receipt_hash,
     get_by_request_id,
     resolve_ledger_path,
 )
@@ -425,7 +426,8 @@ class RuntimeCertificationService:
             )
 
             # 4. Completion Core Certification
-            # NOTE (#205, fix tracked in #233): these policy facts are hard-coded
+            # NOTE (#205; deferred to Nexus-new#1750, #233 added only a provenance
+            # signal to verify_receipt): these policy facts are hard-coded
             # placeholders. They are not derived from a signer or an authority source
             # (the authority source is designed in James3014/Nexus-new#1750), and are
             # True even when no signer is configured.
@@ -603,18 +605,32 @@ class RuntimeCertificationService:
                 message="receipt data unavailable",
             )
 
+    async def _receipt_provenance(self, receipt_hash: str) -> str:
+        """Report whether this runtime's ledger recorded ``receipt_hash`` (fail closed)."""
+        try:
+            recorded = await asyncio.to_thread(
+                find_receipt_hash, receipt_hash, db_path=self.db_path
+            )
+        except Exception:
+            return "LEDGER_UNAVAILABLE"
+        return "RECORDED" if recorded else "NOT_RECORDED"
+
     async def verify_receipt(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         """POST /v1/receipts/verify.
 
-        Checks only structural and hash-recomputation consistency of the supplied
+        Checks structural and hash-recomputation consistency of the supplied
         receipt (and, for FULL scope, recomputation from caller-supplied inputs).
+        ``status`` alone still means only that consistency; it is NOT provenance.
 
-        This is NOT provenance: the runtime ledger is never consulted and no
-        signature is checked, so a CERTIFIED receipt minted offline by a caller for
-        work this runtime never acquired or executed can return VALID. The policy
-        facts (authority/approval/signing) are read from the receipt under test, i.e.
-        self-asserted. See docs/architecture/LEDGER_TRUST_MODEL.md; the fix is tracked
-        in #233 (issue #205).
+        Every 200 response also carries ``provenance``: RECORDED when this service's
+        ledger holds an entry with the receipt's ``receipt_hash``, NOT_RECORDED when
+        the ledger was read and the hash is absent, LEDGER_UNAVAILABLE when the read
+        failed (fail closed; never RECORDED on error). Callers who need provenance
+        must require ``provenance == "RECORDED"``. No signature is checked, and the
+        policy facts (authority/approval/signing) are read from the receipt under
+        test, i.e. self-asserted; they remain placeholders pending
+        James3014/Nexus-new#1750. See docs/architecture/LEDGER_TRUST_MODEL.md
+        (#233, issue #205).
         """
         errs = validate_receipt_verify_request(payload)
         if errs:
@@ -646,6 +662,10 @@ class RuntimeCertificationService:
                 message="receipt_hash does not match canonical receipt body",
             )
 
+        # Provenance signal only (#233): runs after the hash checks so 422 paths are
+        # unchanged, and never alters status/scope/reason_codes.
+        provenance = await self._receipt_provenance(claimed_hash)
+
         # Full recomputation scope
         if requested_scope == "FULL":
             if not original_inputs or not isinstance(original_inputs, dict):
@@ -656,6 +676,7 @@ class RuntimeCertificationService:
                     "receipt_hash": claimed_hash,
                     "recomputed_hash": None,
                     "claim_ceiling": list(CLAIM_CEILING),
+                    "provenance": provenance,
                 }
 
             # Attempt full recomputation
@@ -739,6 +760,7 @@ class RuntimeCertificationService:
                         "receipt_hash": claimed_hash,
                         "recomputed_hash": recomputed_hash,
                         "claim_ceiling": list(CLAIM_CEILING),
+                        "provenance": provenance,
                     }
                 else:
                     return 200, {
@@ -748,6 +770,7 @@ class RuntimeCertificationService:
                         "receipt_hash": claimed_hash,
                         "recomputed_hash": recomputed_hash,
                         "claim_ceiling": list(CLAIM_CEILING),
+                        "provenance": provenance,
                     }
             except Exception:
                 return 422, make_http_error(
@@ -764,6 +787,7 @@ class RuntimeCertificationService:
             "receipt_hash": claimed_hash,
             "recomputed_hash": None,
             "claim_ceiling": list(CLAIM_CEILING),
+            "provenance": provenance,
         }
 
     def stop_admission(self) -> None:

@@ -850,6 +850,33 @@ def get_by_request_id(
         conn.close()
 
 
+def find_receipt_hash(
+    receipt_hash: str,
+    *,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Return True when a ledger entry with this receipt_hash exists (read-only).
+
+    The ``receipt_hash`` column stores the canonical hash of the committed receipt
+    (see ``append_or_replay``). A missing ledger file means nothing is recorded.
+    Database errors propagate so callers can fail closed.
+    """
+    target_path = resolve_ledger_path(db_path)
+    if not target_path.exists():
+        return False
+
+    conn = _connect_ledger(target_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM ledger_entries WHERE receipt_hash = ? LIMIT 1;",
+            (receipt_hash,),
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def verify_chain(
     *,
     db_path: Path | str | None = None,
@@ -1165,6 +1192,7 @@ __all__ = [
     "compute_canonical_request_hash",
     "compute_entry_hash",
     "append_or_replay",
+    "find_receipt_hash",
     "get_by_request_id",
     "verify_chain",
     "verify_external_anchor",

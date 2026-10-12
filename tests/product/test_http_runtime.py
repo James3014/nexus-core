@@ -354,6 +354,7 @@ async def test_receipt_verify_endpoint(isolated_env):
             assert data["scope"] == "ENVELOPE_ONLY"
             assert data["status"] == "VALID"
             assert data["receipt_hash"] == receipt_obj.hash
+            assert data["provenance"] == "NOT_RECORDED"
 
             # 2. Tampered receipt -> 422 RECEIPT_INVALID
             tampered_dict = dict(receipt_dict, receipt_hash="sha256:" + "0" * 64)
@@ -378,6 +379,7 @@ async def test_receipt_verify_endpoint(isolated_env):
             assert data["scope"] == "FULL_RECOMPUTED"
             assert data["status"] == "UNVERIFIABLE"
             assert "MISSING_ORIGINAL_INPUTS" in data["reason_codes"]
+            assert data["provenance"] == "NOT_RECORDED"
     finally:
         await handle.stop()
 
@@ -482,13 +484,12 @@ async def test_post_routes_return_400_for_invalid_utf8_and_deep_nesting(isolated
 
 
 @pytest.mark.asyncio
-async def test_runtime_verify_receipt_does_not_check_provenance(tmp_path: Path):
-    """Pins the documented limit from #205: verify_receipt is not provenance.
+async def test_runtime_verify_receipt_reports_offline_receipt_as_not_recorded(tmp_path: Path):
+    """A receipt minted offline is still VALID but reports provenance NOT_RECORDED.
 
-    A CERTIFIED receipt minted offline, for work this runtime never acquired or ran,
-    verifies VALID against a fresh service with an empty ledger. This pins CURRENT
-    behaviour (see docs/architecture/LEDGER_TRUST_MODEL.md) and must flip when #233
-    (ledger lookup / signature / authority source) lands.
+    status/scope are unchanged (backward compatible); the additive ``provenance``
+    field tells callers this runtime's ledger never recorded the receipt (#233).
+    Signature and authority checks remain out of scope (Nexus-new#1750).
     """
     from product.runtime.service import RuntimeCertificationService
 
@@ -536,3 +537,26 @@ async def test_runtime_verify_receipt_does_not_check_provenance(tmp_path: Path):
         )
         assert code == 200, (scope, body)
         assert body["status"] == "VALID", (scope, body)
+        assert body["provenance"] == "NOT_RECORDED", (scope, body)
+
+
+@pytest.mark.asyncio
+async def test_runtime_verify_receipt_fails_closed_when_ledger_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A ledger read error reports LEDGER_UNAVAILABLE, never RECORDED, and stays a 200."""
+    import product.runtime.service as service_module
+    from product.runtime.service import RuntimeCertificationService
+
+    def _boom(*_args: Any, **_kwargs: Any) -> bool:
+        raise RuntimeError("ledger read failed")
+
+    monkeypatch.setattr(service_module, "find_receipt_hash", _boom)
+    receipt = certify(_input()).receipt.to_dict()
+    service = RuntimeCertificationService(db_path=str(tmp_path / "ledger.db"))
+    code, body = await service.verify_receipt(
+        {"receipt": receipt, "requested_scope": "AUTO", "original_inputs": None}
+    )
+    assert code == 200, body
+    assert body["status"] == "VALID"
+    assert body["provenance"] == "LEDGER_UNAVAILABLE"
