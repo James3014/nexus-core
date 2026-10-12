@@ -436,25 +436,46 @@ def test_forged_base_ref_config_source_with_wrong_commit_is_unverifiable(
     assert result["core_verification"] == "NOT_AVAILABLE"
 
 
-def test_rehashed_receipt_claiming_current_base_is_not_authenticated(
-    verified_repo_and_receipt,
-):
+def test_rehashed_receipt_claiming_current_base_is_not_authenticated(tmp_path: Path):
     """Pin the documented limit: receipt authenticity is not checked (#204).
 
     The receipt hash is an unkeyed SHA-256 and ``config_source`` is self-asserted,
-    so a caller who forges ``config_source`` to claim the current base commit and
-    re-hashes the receipt still gets APPLIES / VERIFIED. This asserts the CURRENT
-    behaviour. When #231 adds Sigstore signature verification, this test must flip
-    to UNVERIFIABLE.
+    so a receipt produced under a caller-chosen worktree config (no-op verifier)
+    can be relabelled as a base-ref config at the current base commit, re-hashed,
+    and still get APPLIES / VERIFIED. This asserts the CURRENT behaviour. When #231
+    adds Sigstore signature verification, this test must flip to UNVERIFIABLE.
     """
     from product.clients.local_golden_path import _receipt_hash
 
-    repo, receipt = verified_repo_and_receipt
+    repo = tmp_path / "forged"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "external@example.test")
+    _git(repo, "config", "user.name", "External User")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "base")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "feature")
+    # Never-committed, caller-chosen config with a no-op verifier.
+    init_repository(
+        repo,
+        base_ref="main",
+        allowed_patterns=("*.py",),
+        verifier_command=(sys.executable, "-c", "pass"),
+    )
+    receipt = json.loads(check_repository(repo)["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["config_source"]["kind"] == "worktree"
     port = FakeGitHubPort(repo, receipt)
     receipt["config_source"] = {
-        **receipt["config_source"],
         "kind": "base-ref",
+        "ref": "main",
         "commit": port.base_sha,
+        "blob": "0" * 40,
+        "worktree_config_hash": receipt["config_hash"],
+        "config_drift": False,
     }
     receipt["receipt_hash"] = _receipt_hash(receipt)
 
