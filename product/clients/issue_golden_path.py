@@ -363,6 +363,18 @@ def _check_evidence_universe_mode(mode: str) -> None:
         raise LocalCheckError("INVALID_EVIDENCE_UNIVERSE_MODE", str(mode))
 
 
+def _require_base_ref_config(repo: Path) -> None:
+    """Trusted-config mode only binds a config committed on the base ref (never the worktree)."""
+
+    _config, source, _worktree = _load_effective_config(repo)
+    if source["kind"] != "base-ref":
+        raise LocalCheckError(
+            "CONFIG_UNTRUSTED",
+            f"trusted-config evidence universe needs {CONFIG_DIRECTORY}/{CONFIG_FILENAME} "
+            "committed on the base ref (a plain branch name, not a revision expression)",
+        )
+
+
 def _advisory_marker_warning(contract: Mapping[str, Any], current_hash: str) -> str | None:
     """In trusted-config mode a bad or stale marker is advisory only (never an error)."""
 
@@ -476,6 +488,7 @@ def init_issue_binding(
     trusted = evidence_universe == "trusted-config"
     declared_config_identity: str | None = None
     if trusted:
+        _require_base_ref_config(repo)
         warning = _advisory_marker_warning(
             contract, _verification_contract_identity(repo)["config_hash"]
         )
@@ -533,6 +546,13 @@ def check_issue(
 ) -> dict[str, Any]:
     _check_evidence_universe_mode(evidence_universe)
     trusted = evidence_universe == "trusted-config"
+    if trusted and not require_trusted_config:
+        # Fail closed (not force): the caller must say it, so a receipt can never be
+        # produced from a worktree config while claiming trusted-base-config.
+        raise LocalCheckError(
+            "EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG",
+            "--evidence-universe trusted-config requires --require-trusted-config",
+        )
     repo = _repo_root(path)
     binding = load_issue_binding(repo, issue_number)
     github_repo = _resolve_github_repo(repo, binding["github_repository"])

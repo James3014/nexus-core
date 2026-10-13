@@ -222,6 +222,7 @@ def test_issue_cli_evidence_universe_flag_parsing(repo, monkeypatch, capsys) -> 
 
 
 def test_issue_init_trusted_config_has_no_marker_hint(repo, monkeypatch, capsys) -> None:
+    _commit_config(repo)
     _patch_reader(monkeypatch, "Change V")
     code = cli.main([
         "issue-init",

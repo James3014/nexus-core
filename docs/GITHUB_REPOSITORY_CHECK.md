@@ -67,7 +67,7 @@ config is still read from the current base tip.
 
 The default is fail closed: an Issue without the exact `NEXUS_CORE_EVIDENCE_UNIVERSE`
 line is `UNVERIFIABLE`, and a stale or malformed line fails. A repository can opt in to a
-second mode in which the evidence universe is derived from the trusted base config
+second mode in which the evidence universe is derived from the `.nexus-core/config.toml` committed on the base ref
 instead, so Issues need no hand-written marker:
 
 ```bash
@@ -79,7 +79,15 @@ In the `issue-gate` action, set the input `evidence-universe: trusted-config` (d
 `issue-marker`); both commands receive it through `env:`. Use the same mode for init and
 check: a binding created in one mode is refused (`ISSUE_EVIDENCE_UNIVERSE_MODE_MISMATCH`) by the other.
 
-In this mode the universe is bound to the verification contract hash of the effective config
+The mode requires trusted config: `issue-init` refuses (`CONFIG_UNTRUSTED`) unless the effective
+config is committed on the base ref (a plain branch name; a worktree-only config or a revision
+expression such as `HEAD~1` is refused), and `issue-check` fails closed with
+`EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG` unless `--require-trusted-config` is given (it is
+not forced silently). Receipts claiming `trusted-base-config` are rejected by `receipt-verify`
+unless their `config_source.kind` is `base-ref`. A legacy schema-1 Issue binding carries no
+evidence-sufficiency binding, so in this mode it stays UNBOUND and its Issue is UNVERIFIABLE.
+
+In this mode the universe is bound to the verification contract hash of that base-ref config
 (recorded with `source = "trusted-base-config"`), so the Issue status follows the repository
 verification: `VERIFIED` exactly when the repository check is `VERIFIED`. A marker that is
 present but stale or malformed only prints a warning on stderr and is ignored. Receipts

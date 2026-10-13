@@ -1565,7 +1565,7 @@ _ISSUE_VERIFICATION_KEYS = {
 
 
 _ISSUE_OPTIONAL_VERDICT_KEYS = {"material_transitions", "evidence_universe_source"}
-_ISSUE_UNIVERSE_SOURCES = {"issue-contract-marker", "trusted-base-config"}
+_ISSUE_UNIVERSE_SOURCES = {"trusted-base-config"}
 
 
 def _issue_status_from(repo_status: str, universe: Any) -> str:
@@ -2523,6 +2523,10 @@ def _validate_verification_receipt_payload(
         reasons.append("MALFORMED_RECEIPT")
     bound: dict[str, Any] | None = payload.get("issue_verification")
     bound_transitions: list[Any] = bound.get("material_transitions", []) if isinstance(bound, dict) else []
+    if isinstance(bound, dict) and bound.get("evidence_universe_source") == "trusted-base-config":
+        universe_source = payload.get("config_source")
+        if not isinstance(universe_source, dict) or universe_source.get("kind") != "base-ref":
+            reasons.append("EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG")
     if transitions or bound_transitions:
         if not isinstance(bound, dict) or bound_transitions != transitions:
             reasons.append("MATERIAL_TRANSITION_UNBOUND")
