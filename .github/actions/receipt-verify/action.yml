@@ -40,6 +40,18 @@ inputs:
   issue-number:
     description: Positive Issue number the receipt must be bound to.
     required: true
+  gate-outcome:
+    description: >-
+      The issue-gate 'outcome' output. Empty or 'PROCEED' requires a signed VERIFIED
+      receipt as before. 'PR_ALREADY_CLOSED_SKIPPED' skips the receipt and instead
+      re-reads the live PR: it passes (neutral, verified stays 'false') only when the
+      PR is merged at exactly head-sha; closed-unmerged, open or another head fails.
+    required: false
+    default: ""
+  pull-request-number:
+    description: Pull request number for the skip check (default the triggering PR).
+    required: false
+    default: ""
   nexus-certify-source:
     description: "'ref' installs from a pinned nexus-core commit; 'path' installs from a trusted local checkout."
     required: false
@@ -71,6 +83,11 @@ outputs:
   verified:
     description: "'true' only when signature and every receipt-check expectation passed."
     value: ${{ steps.verify.outputs.verified }}
+  outcome:
+    description: >-
+      'VERIFIED' after a full receipt check, or 'PR_ALREADY_CLOSED_SKIPPED' when a declared
+      skip was accepted for a PR merged at this head (verified stays 'false').
+    value: ${{ steps.verify.outputs.outcome || steps.skip.outputs.outcome }}
 
 runs:
   using: composite
@@ -91,6 +108,7 @@ runs:
         IN_PATH: ${{ inputs.nexus-certify-path }}
         IN_PYTHON: ${{ inputs.python-version }}
         IN_SIGSTORE: ${{ inputs.sigstore-version }}
+        IN_GATE_OUTCOME: ${{ inputs.gate-outcome }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
@@ -116,6 +134,10 @@ runs:
         [[ "$IN_ISSUE" =~ ^[1-9][0-9]*$ ]] || fail "issue-number must be a positive integer"
         [[ "$IN_PYTHON" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "python-version"
         [[ "$IN_SIGSTORE" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "sigstore-version must be an exact release"
+        case "$IN_GATE_OUTCOME" in
+          ""|PROCEED|PR_ALREADY_CLOSED_SKIPPED) ;;
+          *) fail "gate-outcome must be empty, PROCEED or PR_ALREADY_CLOSED_SKIPPED" ;;
+        esac
         case "$IN_SOURCE" in
           ref) [[ "$IN_REF" =~ ^[0-9a-f]{40}$ ]] || fail "nexus-certify-ref must be 40-hex" ;;
           path) [ -n "$IN_PATH" ] || fail "nexus-certify-path must be set" ;;
@@ -134,6 +156,7 @@ runs:
 
     - name: Resolve exact producer artifact
       id: artifact
+      if: inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       shell: bash
       env:
         API_URL: ${{ github.api_url }}
@@ -233,7 +256,29 @@ runs:
         "$UV_TOOL_BIN_DIR/nexus-certify" --help >/dev/null
         echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
 
+    - name: Confirm skipped PR merged at this head
+      id: skip
+      if: inputs.gate-outcome == 'PR_ALREADY_CLOSED_SKIPPED'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        REPO: ${{ inputs.github-repository }}
+        PR_NUMBER: ${{ inputs.pull-request-number || github.event.pull_request.number }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+      run: |
+        set -euo pipefail
+        # The gate's skip is a claim, not evidence: re-read the live PR here. Only a PR
+        # merged at exactly this head passes; the result stays neutral (verified=false).
+        [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "NEXUS_CORE_VERIFY_INPUT_INVALID: pull-request-number" >&2; exit 1; }
+        record="$(nexus-certify pr-state --mode verify-skip --github-repo "$REPO" --pr "$PR_NUMBER" --expect-head "$HEAD_SHA")"
+        echo "NEXUS_CORE_PR_STATE: $record"
+        echo "outcome=PR_ALREADY_CLOSED_SKIPPED" >> "$GITHUB_OUTPUT"
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          printf '### Nexus Core: PR_ALREADY_CLOSED_SKIPPED (neutral, not VERIFIED)\n\nThe PR was merged at this exact head before the gate ran, so no receipt was evaluated. This is not completion evidence.\n\n```json\n%s\n```\n' "$record" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
     - name: Download receipt artifact
+      if: inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
         # The exact artifact resolved above. By id, a same-name artifact that appears
@@ -243,6 +288,7 @@ runs:
 
     - name: Locate exactly one receipt and bundle
       id: locate
+      if: inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       shell: bash
       env:
         ARTIFACT_DIR: ${{ runner.temp }}/nexus-core-receipt-artifact
@@ -264,6 +310,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Verify Sigstore signature and workflow identity
+      if: inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       shell: bash
       env:
         RECEIPT: ${{ steps.locate.outputs.receipt }}
@@ -281,6 +328,7 @@ runs:
 
     - name: Resolve expected head tree
       id: tree
+      if: inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       shell: bash
       env:
         REPO: ${{ inputs.github-repository }}
@@ -303,6 +351,7 @@ runs:
 
     - name: Check receipt against every expectation
       id: verify
+      if: inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       shell: bash
       env:
         RECEIPT: ${{ steps.locate.outputs.receipt }}
@@ -325,3 +374,4 @@ runs:
           --require-trusted-config
         echo "receipt-sha256=$(sha256sum "$RECEIPT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
         echo "verified=true" >> "$GITHUB_OUTPUT"
+        echo "outcome=VERIFIED" >> "$GITHUB_OUTPUT"

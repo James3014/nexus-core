@@ -100,6 +100,28 @@ repository-level `outcome.status` of `VERIFIED` with an unbound or stale marker 
 `UNVERIFIABLE` at the Issue level and fails `--expect-issue` and `--expect-status`
 (see Issue #134, a false green found in nexus-runtime PRs #89 and #91).
 
+### Runs that start after the PR closed (`PR_ALREADY_CLOSED_SKIPPED`)
+
+A queued or retried run often starts after its PR merged and auto-closed the
+Issue. Before binding the Issue, `issue-gate` reads the **live pull request**
+(`nexus-certify pr-state --mode gate`):
+
+- PR open: the gate runs as above. A closed Issue on an open PR still fails
+  `ISSUE_NOT_OPEN`; an Issue being closed is never success by itself.
+- PR merged or closed: the gate evaluates nothing, produces no receipt and
+  outputs `outcome: PR_ALREADY_CLOSED_SKIPPED` with the observed PR state in the
+  log and job summary. This is a neutral result, never a pass of the evidence.
+- PR state unreadable (API error, malformed payload): the gate fails closed.
+
+`receipt-verify` takes the gate's `outcome` as `gate-outcome`. For
+`PR_ALREADY_CLOSED_SKIPPED` it does not trust the claim: it re-reads the live PR
+(`nexus-certify pr-state --mode verify-skip`) and passes only when the PR is
+merged **and** its head equals `head-sha`. Its `verified` output stays `false`
+and its `outcome` output is `PR_ALREADY_CLOSED_SKIPPED`. A closed-unmerged PR,
+an open PR, a merge at another head, or an API failure fails the check.
+Consumers that do not pass `gate-outcome` get the old behaviour (a skipped run
+has no receipt, so the check fails closed).
+
 The signing identity is the workflow file on the default branch:
 
 ```text
@@ -131,6 +153,7 @@ jobs:
       artifact-name: ${{ steps.gate.outputs.artifact-name }}
       artifact-id: ${{ steps.gate.outputs.artifact-id }}
       issue-number: ${{ steps.gate.outputs.issue-number }}
+      outcome: ${{ steps.gate.outputs.outcome }}
     steps:
       - id: gate
         uses: James3014/nexus-core/.github/actions/issue-gate@<40-hex-sha>
@@ -153,6 +176,7 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha }}
           base-sha: ${{ github.event.pull_request.base.sha }}
           issue-number: ${{ needs.run.outputs.issue-number }}
+          gate-outcome: ${{ needs.run.outputs.outcome }}
           nexus-certify-ref: "<40-hex-sha>"
 ```
 

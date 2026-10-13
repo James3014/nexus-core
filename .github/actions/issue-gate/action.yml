@@ -37,6 +37,13 @@ inputs:
     default: candidate
 
 outputs:
+  outcome:
+    description: >-
+      'PROCEED' when the live PR was open and the Issue-bound check ran, or the neutral
+      'PR_ALREADY_CLOSED_SKIPPED' when the PR had already merged or closed before this
+      run started (no candidate evaluated, no receipt, never VERIFIED). receipt-verify
+      re-reads the live PR and accepts the skip only for a merge at this exact head.
+    value: ${{ steps.prstate.outputs.outcome }}
   issue-number:
     description: Resolved Issue number.
     value: ${{ steps.resolve.outputs.issue-number }}
@@ -163,7 +170,35 @@ runs:
         "$UV_TOOL_BIN_DIR/nexus-certify" --help >/dev/null
         echo "$UV_TOOL_BIN_DIR" >> "$GITHUB_PATH"
 
+    - name: Read live pull request state
+      id: prstate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        # A queued or retried run can start after the PR merged and auto-closed its
+        # Issue. Read the live PR (never the Issue): an open PR proceeds unchanged; a
+        # merged or closed PR gets the neutral PR_ALREADY_CLOSED_SKIPPED record, which
+        # evaluates nothing and is never VERIFIED. API failure fails closed.
+        [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "NEXUS_CORE_GATE_PR_NUMBER_INVALID" >&2; exit 1; }
+        record="$(nexus-certify pr-state --mode gate --github-repo "$REPO" --pr "$PR_NUMBER" --expect-head "$HEAD_SHA")"
+        outcome="$(printf '%s' "$record" | python3 -c 'import json, sys; print(json.load(sys.stdin)["outcome"])')"
+        case "$outcome" in
+          PROCEED|PR_ALREADY_CLOSED_SKIPPED) ;;
+          *) echo "NEXUS_CORE_GATE_PR_STATE_INVALID: $outcome" >&2; exit 1 ;;
+        esac
+        echo "NEXUS_CORE_PR_STATE: $record"
+        echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+        if [ "$outcome" = "PR_ALREADY_CLOSED_SKIPPED" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          printf '### Nexus Core gate: PR_ALREADY_CLOSED_SKIPPED (neutral, not a pass)\n\nThe pull request was already merged or closed when this run started, so no candidate was evaluated and no receipt was produced. receipt-verify accepts this only when the live PR is merged at this exact head.\n\n```json\n%s\n```\n' "$record" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
     - name: Acquire candidate head with plain Git (no submodule handling)
+      if: steps.prstate.outputs.outcome == 'PROCEED'
       shell: bash
       env:
         CANDIDATE: ${{ inputs.candidate-path }}
@@ -198,6 +233,7 @@ runs:
         test -z "$(git -C "$CANDIDATE" config --get http.extraheader || true)"
 
     - name: Bind exact Issue contract
+      if: steps.prstate.outputs.outcome == 'PROCEED'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
@@ -208,6 +244,7 @@ runs:
         nexus-certify issue-init --repo "$CANDIDATE" --issue "$ISSUE"
 
     - name: Verify exact Issue-bound candidate
+      if: steps.prstate.outputs.outcome == 'PROCEED'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
@@ -219,7 +256,7 @@ runs:
 
     - name: Sign newest receipt (Sigstore keyless)
       id: sign
-      if: always()
+      if: always() && steps.prstate.outputs.outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       shell: bash
       env:
         CANDIDATE: ${{ inputs.candidate-path }}
@@ -278,7 +315,7 @@ runs:
 
     - name: Upload receipts
       id: upload
-      if: always() && steps.names.outcome == 'success'
+      if: always() && steps.names.outcome == 'success' && steps.prstate.outputs.outcome != 'PR_ALREADY_CLOSED_SKIPPED'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
       with:
         name: ${{ steps.names.outputs.artifact-name }}
