@@ -140,6 +140,93 @@ For Nexus Core itself this is
 Because the workflow runs under `pull_request_target`, the certificate identity
 is the base-branch workflow, not the PR branch.
 
+## Early run and receipt reuse (Issue #255)
+
+The heavy check takes 30 to 60 minutes. A consumer may run it earlier, when an
+agent reports completion, and let the pull request reuse the signed receipt.
+The required check stays required; the full run remains the fallback.
+
+**Status: opt-in for consumers; not yet used by Nexus Core's own gate.** Nexus
+Core's `.github/workflows/nexus-core-issue-completion.yml` keeps the two-job
+layout above (an `issue-gate` with no `head-sha` under a pull request event behaves
+exactly as before). Consumers adopt the fast path by copying
+[`examples/nexus-core-issue-completion.consumer.yml`](examples/nexus-core-issue-completion.consumer.yml)
+to `.github/workflows/nexus-core-issue-completion.yml` and adapting it as its header
+says: replace `OWNER/REPO` in `expected-identity`, replace every `0000...0000`
+placeholder with the same pinned 40-hex nexus-core commit, keep `workflow-path`
+equal to the installed file name, and list extra trust-defining files under
+`equivalence-paths`. Then send
+`repository_dispatch` events of type `nexus-core-precheck` from the agent
+completion hook.
+
+- **Dispatch mode.** `issue-gate` also runs under `repository_dispatch` (the
+  example uses event type `nexus-core-precheck`, `client_payload`:
+  `{"head_sha": "<40-hex>", "issue_number": <N>}`). It requires a 40-hex
+  `head-sha` and a positive `issue-number` input, requires
+  `github.ref == refs/heads/<default branch>`, and takes the base from the run's
+  own commit (`github.sha`, the default-branch tip) and the base ref from
+  `github.ref_name`. Under `pull_request`/`pull_request_target` the `head-sha`
+  input must be empty or equal the PR head; any other event fails closed.
+  `repository_dispatch` needs only `contents: write` to send (an agent identity
+  with `actions: read` cannot use `workflow_dispatch`), and GitHub always runs
+  the default-branch workflow file for it. The dispatch run's `verify` job runs
+  `receipt-verify` with `base-sha = github.sha`.
+  The dispatched head must be the tip of a branch of this repository
+  (`git ls-remote --heads`); a commit reachable only through `refs/pull/*`, such
+  as a fork pull request head, is refused
+  (`NEXUS_CORE_GATE_DISPATCH_HEAD_NOT_A_BRANCH_TIP`), so dispatch never runs code
+  that the fork guard keeps off the runner.
+- **Reuse.** On a pull request that targets the default branch (other base
+  branches decline with `REUSE_BASE_NOT_DEFAULT_BRANCH`), the `reuse` job runs
+  `receipt-reuse`. It lists
+  successful `repository_dispatch` runs of the same workflow file on the default
+  branch (newest first, at most 100) and takes the newest one with exactly one
+  unexpired artifact `nexus-core-receipts-<head-sha>-run<id>-attempt<n>`
+  (`n <= run_attempt`). With `R` = that run's commit it then requires, in a bare
+  Git repository that never materialises candidate files: `R` is an ancestor of
+  the PR base sha; every trust-defining path (always `.nexus-core/config.toml`
+  and the workflow file, plus `equivalence-paths`) exists at both and has the
+  identical object id; the Issue is open and its `updated_at` is not later than
+  the producing run's `created_at` (`REUSE_ISSUE_CHANGED_AFTER_PRECHECK`); exactly one receipt and bundle;
+  `sigstore verify github` with the workflow identity on `refs/heads/<default>`,
+  `--trigger repository_dispatch`, `--sha R` and `--ref refs/heads/<default>`;
+  and `receipt-check` with every expectation and `--expect-config-commit R`.
+  Output `reused` is `true` only when the final step sees all of these succeed;
+  any decline or error gives `reused=false` with a reason code
+  (`NO_PRIOR_RECEIPT`, `REUSE_CONFIG_COMMIT_NOT_ANCESTOR`,
+  `REUSE_EQUIVALENCE_PATH_CHANGED`, `REUSE_SIGNATURE_INVALID`, ...), written to the
+  job summary.
+- **Required check.** `run` executes on dispatch, or on a pull request unless
+  `reuse` succeeded with `reused == 'true'`. `verify` (the required check) passes
+  only when `reuse` succeeded with `reused == 'true'` (pull requests only) or
+  `receipt-verify` succeeded with `verified == 'true'`, or (pull requests only)
+  `receipt-verify` succeeded with outcome `PR_ALREADY_CLOSED_SKIPPED` (#250: the
+  live PR was merged at this head before the gate ran; neutral, not evidence).
+  A dispatch run never passes on a skip: it has no pull request, so the skip
+  check fails closed. A failed `reuse` job never skips `receipt-verify`.
+- **PR-time inputs.** The full run reads, at PR time: the PR body Issue marker,
+  the Issue (title, body including the evidence-universe marker, state, author),
+  the base config and gate workflow, the pinned tool, and the PR head and tree.
+  Reuse binds each to PR time: the marker is parsed from the current PR body and
+  passed to `--expect-issue`; the Issue must be open and unchanged since the
+  producing run was created (any update, including a comment, bumps
+  `updated_at` and declines reuse; that only falls back to the full run, the
+  safe direction); config and workflow are equivalence paths; the tool pin lives
+  in the workflow file; head and tree are `receipt-check` expectations. The
+  verifier reads no labels, PR comments or Issue comments. With
+  `nexus-certify-source: path` the tool comes from the base checkout itself, so
+  add its source paths (for example `product`, `pyproject.toml`, `uv.lock`) to
+  `equivalence-paths`.
+
+**Trust boundary change.** Without reuse a receipt is valid only while its
+config commit is the current base tip (#249). Reuse also accepts a receipt
+whose config commit `R` is an older default-branch tip, provided `R` is an
+ancestor of the PR base and the trust-defining files are byte-identical at `R`
+and at the base. Tests and evidence run on the candidate head, so later
+default-branch commits that leave those files unchanged do not change the
+verdict; base interaction stays covered by the consumer's exact-base impact gate.
+Add any other file your verdict depends on to `equivalence-paths`.
+
 ## Consumer workflow
 
 Copy [`examples/github-repository-check.yml`](examples/github-repository-check.yml)

@@ -250,6 +250,8 @@ def _github(api_url: str, *, run_attempt: int, head: str = HEAD) -> dict[str, An
             "event": {"pull_request": {"head": {"sha": head}, "base": {"sha": BASE}}},
         },
         "runner": {"temp": "/tmp/runner"},
+        # issue-gate resolves the head once (pull request head, or the dispatch input).
+        "steps": {"target": {"outputs": {"head-sha": head, "mode": "pull_request"}}},
     }
 
 
