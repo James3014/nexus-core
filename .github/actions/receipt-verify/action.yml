@@ -262,6 +262,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_API_URL: ${{ github.api_url }}
         REPO: ${{ inputs.github-repository }}
         PR_NUMBER: ${{ inputs.pull-request-number || github.event.pull_request.number }}
         HEAD_SHA: ${{ inputs.head-sha }}

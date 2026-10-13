@@ -96,9 +96,7 @@ def test_gate_merged_pr_at_other_head_records_mismatch() -> None:
 
 
 def test_verify_accepts_skip_only_for_merged_pr_at_same_head() -> None:
-    record = pr_state.verify_skip(
-        REPO, 7, HEAD, reader=_reader(_pr(state="closed", merged=True))
-    )
+    record = pr_state.verify_skip(REPO, 7, HEAD, reader=_reader(_pr(state="closed", merged=True)))
     assert record["outcome"] == pr_state.PR_ALREADY_CLOSED_SKIPPED
     assert record["skip_accepted"] is True
     assert record["evidence_status"] == "NOT_EVALUATED"
@@ -135,6 +133,8 @@ def test_verify_rejects_skip_claim_for_open_pr() -> None:
         {**_pr(state="closed", merged=True), "head": None},
         {**_pr(state="closed", merged=True), "merge_commit_sha": None},
         {**_pr(state="closed", merged=True), "state": "draft"},
+        {**_pr(), "state": "draft"},  # unknown state, merged=false: never "closed_unmerged"
+        {**_pr(state="closed"), "state": "merged"},
         [],
     ],
 )
@@ -167,7 +167,11 @@ class _Response(io.BytesIO):
 
 def _http_error(code: int, body: bytes = b"{}") -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        "https://api.github.com/x", code, "error", {}, io.BytesIO(body)  # type: ignore[arg-type]
+        "https://api.github.com/x",
+        code,
+        "error",
+        {},
+        io.BytesIO(body),  # type: ignore[arg-type]
     )
 
 
@@ -219,11 +223,38 @@ def test_default_reader_reads_pulls_endpoint_with_token(monkeypatch: pytest.Monk
         return _Response(json.dumps(_pr(state="closed", merged=True)).encode())
 
     monkeypatch.setenv("GITHUB_TOKEN", "t0ken")
+    monkeypatch.delenv("GITHUB_API_URL", raising=False)
     monkeypatch.setattr(pr_state.urllib.request, "urlopen", fake)
     record = pr_state.verify_skip(REPO, 7, HEAD)
     assert record["skip_accepted"] is True
     assert seen["url"] == "https://api.github.com/repos/example/project/pulls/7"
     assert seen["auth"] == "Bearer t0ken"
+
+    # GitHub Enterprise Server: the Actions-provided API base is honoured.
+    monkeypatch.setenv("GITHUB_API_URL", "https://ghe.example.test/api/v3/")
+    pr_state.gate_preflight(REPO, 7, HEAD)
+    assert seen["url"] == "https://ghe.example.test/api/v3/repos/example/project/pulls/7"
+
+
+@pytest.mark.parametrize(
+    "api_url",
+    [
+        "http://api.github.com",
+        "file:///etc/passwd",
+        "https://user:pw@api.github.com",
+        "https://api.github.com?x=1",
+        "https://",
+    ],
+)
+def test_untrusted_api_url_fails_closed(monkeypatch: pytest.MonkeyPatch, api_url: str) -> None:
+    def never(*_args: object, **_kwargs: object) -> Any:
+        raise AssertionError("no request may be sent")
+
+    monkeypatch.setenv("GITHUB_API_URL", api_url)
+    monkeypatch.setattr(pr_state.urllib.request, "urlopen", never)
+    with pytest.raises(LocalCheckError) as raised:
+        pr_state.gate_preflight(REPO, 7, HEAD)
+    assert raised.value.reason_code == "PR_STATE_INPUT_INVALID"
 
 
 # --------------------------------------------------------------------------- CLI

@@ -78,8 +78,9 @@ exit code:
   a rerun keeps earlier attempts' artifacts in the same workflow run, so the name
   binds the producing attempt.
 - **`verify`** (`Nexus Core issue completion`, `needs: run`, `if: always()`) is
-  the required check. It runs `receipt-verify` with only `contents: read` and
-  `actions: read`: it requires the artifact name to bind this head, this
+  the required check. It runs `receipt-verify` with only `contents: read`,
+  `actions: read` and `pull-requests: read` (the last only for the
+  `PR_ALREADY_CLOSED_SKIPPED` live PR read): it requires the artifact name to bind this head, this
   workflow run and an attempt not after the current one (a verifier-only rerun
   keeps the producer's attempt from `needs.run.outputs`), resolves it through the
   GitHub API to exactly one unexpired artifact of this run (and to `artifact-id`
@@ -121,6 +122,12 @@ and its `outcome` output is `PR_ALREADY_CLOSED_SKIPPED`. A closed-unmerged PR,
 an open PR, a merge at another head, or an API failure fails the check.
 Consumers that do not pass `gate-outcome` get the old behaviour (a skipped run
 has no receipt, so the check fails closed).
+
+A skip pass binds this **head** to a **merged PR**; it does not bind the base
+ref, the base config or the Issue, and it is not completion evidence. Whatever
+governed the merge itself was the gate result that existed when the PR merged.
+The `verify` job needs `pull-requests: read` for the live PR read; without it the
+read fails (403/404 in private repositories) and the check fails closed.
 
 The signing identity is the workflow file on the default branch:
 
@@ -166,6 +173,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read  # PR_ALREADY_CLOSED_SKIPPED re-reads the live PR
     steps:
       - uses: James3014/nexus-core/.github/actions/receipt-verify@<40-hex-sha>
         with:

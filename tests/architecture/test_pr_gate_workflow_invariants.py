@@ -371,7 +371,9 @@ def pr_state_skip_violations(gate_text: str, verify_text: str) -> list[str]:
     names = [step["name"] for step in gate_steps]
     preflight = [s for s in gate_steps if "nexus-certify pr-state" in _uncommented(s["text"])]
     if len(preflight) != 1 or "--mode gate" not in preflight[0]["text"]:
-        violations.append("gate preflight: issue-gate must call 'nexus-certify pr-state --mode gate' once")
+        violations.append(
+            "gate preflight: issue-gate must call 'nexus-certify pr-state --mode gate' once"
+        )
     else:
         index = names.index(preflight[0]["name"])
         for guarded in (
@@ -388,9 +390,7 @@ def pr_state_skip_violations(gate_text: str, verify_text: str) -> list[str]:
                     f"gate preflight: {guarded!r} must run only when the preflight said PROCEED"
                 )
     verify_steps = _steps(verify_text)
-    skip_checks = [
-        s for s in verify_steps if "nexus-certify pr-state" in _uncommented(s["text"])
-    ]
+    skip_checks = [s for s in verify_steps if "nexus-certify pr-state" in _uncommented(s["text"])]
     if len(skip_checks) != 1 or "--mode verify-skip" not in skip_checks[0]["text"]:
         violations.append(
             "verify skip: receipt-verify must re-read the live PR with "
@@ -406,9 +406,7 @@ def pr_state_skip_violations(gate_text: str, verify_text: str) -> list[str]:
         text = _uncommented(step["text"])
         if "nexus-certify receipt-check" in text or "verified=true" in text:
             if f"inputs.gate-outcome != '{SKIP_OUTCOME}'" not in step["text"]:
-                violations.append(
-                    f"verify skip: {step['name']!r} must not run for a declared skip"
-                )
+                violations.append(f"verify skip: {step['name']!r} must not run for a declared skip")
     return violations
 
 

@@ -107,8 +107,11 @@ _EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 
 
 def _evaluate(value: str, context: dict[str, Any]) -> str:
-    def lookup(match: re.Match[str]) -> str:
-        expression = match.group(1)
+    def resolve(expression: str) -> str:
+        if " || " in expression:  # GitHub semantics: the first non-empty operand
+            return next(
+                (v for v in (resolve(o.strip()) for o in expression.split(" || ")) if v), ""
+            )
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*", expression):
             raise AssertionError(f"unsupported expression in test harness: {expression!r}")
         node: Any = context
@@ -116,7 +119,7 @@ def _evaluate(value: str, context: dict[str, Any]) -> str:
             node = node[part]
         return str(node)
 
-    return _EXPRESSION.sub(lookup, value)
+    return _EXPRESSION.sub(lambda match: resolve(match.group(1)), value)
 
 
 @dataclass

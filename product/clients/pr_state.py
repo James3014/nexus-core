@@ -20,6 +20,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, cast
@@ -35,14 +36,31 @@ PR_STATE_SCHEMA = "nexus.core.pr-state-preflight.v1"
 PROCEED = "PROCEED"
 PR_ALREADY_CLOSED_SKIPPED = "PR_ALREADY_CLOSED_SKIPPED"
 EVIDENCE_NOT_EVALUATED = "NOT_EVALUATED"
+DEFAULT_API_URL = "https://api.github.com"
 PullRequestReader = Callable[[str, int], Any]
 
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
+def _api_base_url() -> str:
+    """GitHub REST base: ``GITHUB_API_URL`` (set by Actions, incl. GHES), else github.com."""
+    value = (os.environ.get("GITHUB_API_URL") or DEFAULT_API_URL).rstrip("/")
+    parsed = urllib.parse.urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise LocalCheckError("PR_STATE_INPUT_INVALID", "GITHUB_API_URL must be an https URL")
+    return value
+
+
 def _default_pull_request_reader(github_repo: str, number: int) -> Any:
-    url = f"https://api.github.com/repos/{github_repo}/pulls/{number}"
+    url = f"{_api_base_url()}/repos/{github_repo}/pulls/{number}"
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "nexus-certify",
@@ -69,8 +87,12 @@ def _default_pull_request_reader(github_repo: str, number: int) -> Any:
                     ) from exc
                 time.sleep(delay)
                 continue
-            code = "PR_STATE_NOT_FOUND" if exc.code == 404 else (
-                "PR_STATE_ACCESS_DENIED" if exc.code in {401, 403} else "PR_STATE_FETCH_FAILED"
+            code = (
+                "PR_STATE_NOT_FOUND"
+                if exc.code == 404
+                else (
+                    "PR_STATE_ACCESS_DENIED" if exc.code in {401, 403} else "PR_STATE_FETCH_FAILED"
+                )
             )
             raise LocalCheckError(code, target) from exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
