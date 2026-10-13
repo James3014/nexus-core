@@ -107,8 +107,11 @@ _EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 
 
 def _evaluate(value: str, context: dict[str, Any]) -> str:
-    def lookup(match: re.Match[str]) -> str:
-        expression = match.group(1)
+    def resolve(expression: str) -> str:
+        if " || " in expression:  # GitHub semantics: the first non-empty operand
+            return next(
+                (v for v in (resolve(o.strip()) for o in expression.split(" || ")) if v), ""
+            )
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*", expression):
             raise AssertionError(f"unsupported expression in test harness: {expression!r}")
         node: Any = context
@@ -116,7 +119,7 @@ def _evaluate(value: str, context: dict[str, Any]) -> str:
             node = node[part]
         return str(node)
 
-    return _EXPRESSION.sub(lookup, value)
+    return _EXPRESSION.sub(lambda match: resolve(match.group(1)), value)
 
 
 @dataclass
@@ -247,6 +250,8 @@ def _github(api_url: str, *, run_attempt: int, head: str = HEAD) -> dict[str, An
             "event": {"pull_request": {"head": {"sha": head}, "base": {"sha": BASE}}},
         },
         "runner": {"temp": "/tmp/runner"},
+        # issue-gate resolves the head once (pull request head, or the dispatch input).
+        "steps": {"target": {"outputs": {"head-sha": head, "mode": "pull_request"}}},
     }
 
 
@@ -280,6 +285,7 @@ def _consume(
         "head-sha": head,
         "base-sha": BASE,
         "issue-number": "7",
+        "gate-outcome": producer.get("gate-outcome", ""),
         "nexus-certify-source": "ref",
         "nexus-certify-ref": "4" * 40,
         "nexus-certify-path": "",
@@ -621,7 +627,10 @@ def test_upload_is_skipped_without_a_valid_attempt_bound_name():
     uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
     assert len(uploads) == 1
     assert uploads[0]["with"]["name"] == "${{ steps.names.outputs.artifact-name }}"
-    assert uploads[0]["if"] == "always() && steps.names.outcome == 'success'"
+    assert uploads[0]["if"] == (
+        "always() && steps.names.outcome == 'success' && "
+        "steps.prstate.outputs.outcome != 'PR_ALREADY_CLOSED_SKIPPED'"
+    )
 
 
 def test_core_workflow_passes_producer_artifact_identity_to_verifier():
@@ -629,6 +638,23 @@ def test_core_workflow_passes_producer_artifact_identity_to_verifier():
     assert "artifact-id: ${{ steps.gate.outputs.artifact-id }}" in text
     assert "artifact-id: ${{ needs.run.outputs.artifact-id }}" in text
     assert "artifact-name: ${{ needs.run.outputs.artifact-name }}" in text
+    assert "outcome: ${{ steps.gate.outputs.outcome }}" in text
+    assert "gate-outcome: ${{ needs.run.outputs.outcome }}" in text
+
+
+@pytest.mark.parametrize("gate_outcome", ["VERIFIED", "PASS", "skip", "PR_ALREADY_CLOSED_SKIPPED "])
+def test_unknown_gate_outcome_fails_closed_before_any_lookup(tmp_path, store, gate_outcome):
+    state, api_url = store
+    producer = _retained_attempts(tmp_path, api_url, state)[1]
+
+    validated, resolved = _consume(
+        tmp_path, api_url, run_attempt=2, producer={**producer, "gate-outcome": gate_outcome}
+    )
+
+    assert validated.returncode != 0
+    assert resolved is None
+    assert "gate-outcome" in validated.stderr
+    assert state.requests == []
 
 
 _BASH_HAS_MAPFILE = subprocess.run(["bash", "-c", "type mapfile"], capture_output=True).returncode == 0
