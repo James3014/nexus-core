@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence, cast
 
 from product.adapters.generic_verification import verify_generic_changeset
-from product.clients import gate_diagnostics
+from product.clients import gate_diagnostics, owner_deletion_exception
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -66,7 +66,7 @@ _CONFIG_V2_KEYS = {
     "verifiers",
     "materials",
 }
-_CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation"}
+_CONFIG_V2_OPTIONAL_KEYS = {"env_passthrough", "isolation", "deletion_exception"}
 CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS = 900
 _ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _HEX40_RE = re.compile(r"[0-9a-f]{40}")
@@ -320,6 +320,11 @@ def _validate_config(value: Any) -> dict[str, Any]:
     _validate_env_passthrough(value.get("env_passthrough", []))
     if "isolation" in value:
         _validate_isolation(value["isolation"])
+    if "deletion_exception" in value:
+        try:
+            owner_deletion_exception.validate_section(value["deletion_exception"])
+        except owner_deletion_exception.DeletionExceptionError as exc:
+            raise LocalCheckError(exc.reason_code, exc.detail) from exc
     generation = value["universe_generation"]
     if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
         raise LocalCheckError("INVALID_CONFIG", "universe_generation must be a positive integer")
@@ -1400,6 +1405,7 @@ def _build_request(
     artifacts: Sequence[Mapping[str, Any]],
     *,
     requirements_hash: str | None = None,
+    deletion_exception: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     paths = [entry["path"] for entry in snapshot.manifest["entries"]]
     deleted = [
@@ -1444,7 +1450,9 @@ def _build_request(
         "requirements_hash": requirements_hash or config_hash,
         "required_verifier_ids": required_verifier_ids,
         "allowed_paths": paths,
-        "deletion_policy": config["deletion_policy"],
+        # An owner-signed, Core-verified deletion exception admits exactly the
+        # manifest-listed deletions of this change set; the base policy is unchanged.
+        "deletion_policy": "ALLOW" if deletion_exception is not None else config["deletion_policy"],
     }
     if expected_subjects is not None:
         contract["expected_subjects"] = expected_subjects
@@ -1619,6 +1627,7 @@ def _base_receipt(
     config_source: Mapping[str, Any] | None = None,
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
+    deletion_exception: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_version = config.get("version") if isinstance(config, Mapping) else None
     receipt: dict[str, Any] = {
@@ -1657,6 +1666,8 @@ def _base_receipt(
     if config_source is not None:
         receipt["config_source"] = dict(config_source)
         receipt["residue_policy"] = RESIDUE_POLICY
+    if deletion_exception is not None:
+        receipt["deletion_exception"] = dict(deletion_exception)
     if config_version in {None, CONFIG_VERSION}:
         receipt["verifier"] = dict(artifacts[0]) if artifacts else None
     else:
@@ -1730,6 +1741,51 @@ def _raise_with_receipt(
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path, remediation=remediation)
+
+
+def _evaluate_deletion_exception(
+    repo: Path,
+    config: Mapping[str, Any],
+    snapshot: _GitSnapshot,
+    *,
+    exempt_config: bool,
+) -> dict[str, Any] | None:
+    """Apply the owner-signed governed deletion exception from the trusted config."""
+
+    section = owner_deletion_exception.validate_section(config["deletion_exception"])
+
+    def read_blob(oid: str) -> bytes:
+        shown = _run_git(repo, "cat-file", "blob", oid, text=False)
+        if shown.returncode != 0:
+            raise owner_deletion_exception.DeletionExceptionError(
+                "DELETION_MANIFEST_MALFORMED", f"blob {oid} unreadable"
+            )
+        return shown.stdout
+
+    def tree_entry(commit: str, path: str) -> tuple[str, str] | None:
+        listed = _run_git(repo, "ls-tree", "-z", commit, "--", path, text=False)
+        if listed.returncode != 0 or not listed.stdout:
+            return None
+        metadata, _, listed_path = listed.stdout.rstrip(b"\0").partition(b"\t")
+        fields = metadata.decode("ascii", "replace").split()
+        if listed_path.decode("utf-8", "replace") != path or len(fields) != 3:
+            return None
+        return fields[0], fields[2]
+
+    def is_ancestor_of_base(commit: str) -> bool:
+        ancestry = _run_git(repo, "merge-base", "--is-ancestor", commit, snapshot.source_commit)
+        return ancestry.returncode == 0
+
+    return owner_deletion_exception.evaluate(
+        section=section,
+        entries=snapshot.manifest["entries"],
+        read_blob=read_blob,
+        tree_entry=tree_entry,
+        is_ancestor_of_base=is_ancestor_of_base,
+        exempt_paths=(
+            frozenset({owner_deletion_exception.CONFIG_PATH}) if exempt_config else frozenset()
+        ),
+    )
 
 
 def check_repository(
@@ -1898,7 +1954,26 @@ def check_repository(
     deleted = [
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
     ]
-    if deleted and config["deletion_policy"] == "FORBID":
+    deletion_exception: dict[str, Any] | None = None
+    if config["deletion_policy"] == "FORBID" and "deletion_exception" in config:
+        try:
+            deletion_exception = _evaluate_deletion_exception(
+                repo, config, snapshot, exempt_config=bool(transitions)
+            )
+        except owner_deletion_exception.DeletionExceptionError as exc:
+            _raise_with_receipt(
+                repo,
+                exc.reason_code,
+                exc.detail,
+                config=config,
+                config_hash=config_hash,
+                config_source=config_source,
+                snapshot=snapshot,
+                requirements_context=requirements_context,
+                issue_verification=issue_verification,
+                material_transitions=transitions,
+            )
+    if deleted and config["deletion_policy"] == "FORBID" and deletion_exception is None:
         _raise_with_receipt(
             repo,
             "FORBIDDEN_DELETION",
@@ -2039,6 +2114,7 @@ def check_repository(
         snapshot,
         artifacts,
         requirements_hash=requirements_hash,
+        deletion_exception=deletion_exception,
     )
     http_status, response = verify_generic_changeset(request)
     if http_status != 200:
@@ -2057,6 +2133,7 @@ def check_repository(
             requirements_context=requirements_context,
             issue_verification=issue_verification,
             material_transitions=transitions,
+            deletion_exception=deletion_exception,
         )
         path_out = _write_receipt(repo, receipt)
         raise LocalCheckError(reason, "canonical Core rejected request", receipt_path=path_out)
@@ -2077,6 +2154,7 @@ def check_repository(
         response=response,
         status=status,
         reasons=reasons,
+        deletion_exception=deletion_exception,
     )
     receipt_path = _write_receipt(repo, receipt)
     if status not in {"VERIFIED", "FAILED_VERIFICATION"}:
@@ -2287,6 +2365,36 @@ def evaluate_receipt_expectations(
     }
 
 
+def _deletion_policy_binding_reasons(
+    config: Any, request: Mapping[str, Any], payload: Mapping[str, Any]
+) -> list[str]:
+    """The contract may relax FORBID only through a re-verified owner-signed record."""
+
+    try:
+        contract_policy = request["acceptance_contract"]["deletion_policy"]
+        entries = request["change_manifest"]["entries"]
+    except (KeyError, TypeError):
+        return ["CONFIG_BINDING_MISMATCH"]
+    if not isinstance(config, dict):
+        return []
+    config = cast(dict[str, Any], config)
+    record = payload.get("deletion_exception")
+    if record is None:
+        matches = contract_policy == config.get("deletion_policy")
+        return [] if matches else ["CONFIG_BINDING_MISMATCH"]
+    if (
+        config.get("deletion_policy") != "FORBID"
+        or "deletion_exception" not in config
+        or contract_policy != "ALLOW"
+    ):
+        return ["CONFIG_BINDING_MISMATCH"]
+    try:
+        section = owner_deletion_exception.validate_section(config["deletion_exception"])
+    except owner_deletion_exception.DeletionExceptionError:
+        return ["CONFIG_BINDING_MISMATCH"]
+    return owner_deletion_exception.revalidate_record(section, record, entries)
+
+
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
@@ -2454,6 +2562,7 @@ def _validate_verification_receipt_payload(
         status, recomputed = verify_generic_changeset(request)
         if status != 200 or recomputed != payload.get("core_response"):
             reasons.append("CORE_RESPONSE_MISMATCH")
+        reasons.extend(_deletion_policy_binding_reasons(config, request, payload))
 
         try:
             observations = request["evidence_bundle"]["observations"]
