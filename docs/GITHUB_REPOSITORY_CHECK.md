@@ -186,7 +186,8 @@ completion hook.
   Git repository that never materialises candidate files: `R` is an ancestor of
   the PR base sha; every trust-defining path (always `.nexus-core/config.toml`
   and the workflow file, plus `equivalence-paths`) exists at both and has the
-  identical object id; the Issue is open; exactly one receipt and bundle;
+  identical object id; the Issue is open and its `updated_at` is not later than
+  the producing run's `created_at` (`REUSE_ISSUE_CHANGED_AFTER_PRECHECK`); exactly one receipt and bundle;
   `sigstore verify github` with the workflow identity on `refs/heads/<default>`,
   `--trigger repository_dispatch`, `--sha R` and `--ref refs/heads/<default>`;
   and `receipt-check` with every expectation and `--expect-config-commit R`.
@@ -198,8 +199,24 @@ completion hook.
 - **Required check.** `run` executes on dispatch, or on a pull request unless
   `reuse` succeeded with `reused == 'true'`. `verify` (the required check) passes
   only when `reuse` succeeded with `reused == 'true'` (pull requests only) or
-  `receipt-verify` succeeded with `verified == 'true'`. A failed `reuse` job
-  never skips `receipt-verify`.
+  `receipt-verify` succeeded with `verified == 'true'`, or (pull requests only)
+  `receipt-verify` succeeded with outcome `PR_ALREADY_CLOSED_SKIPPED` (#250: the
+  live PR was merged at this head before the gate ran; neutral, not evidence).
+  A dispatch run never passes on a skip: it has no pull request, so the skip
+  check fails closed. A failed `reuse` job never skips `receipt-verify`.
+- **PR-time inputs.** The full run reads, at PR time: the PR body Issue marker,
+  the Issue (title, body including the evidence-universe marker, state, author),
+  the base config and gate workflow, the pinned tool, and the PR head and tree.
+  Reuse binds each to PR time: the marker is parsed from the current PR body and
+  passed to `--expect-issue`; the Issue must be open and unchanged since the
+  producing run was created (any update, including a comment, bumps
+  `updated_at` and declines reuse; that only falls back to the full run, the
+  safe direction); config and workflow are equivalence paths; the tool pin lives
+  in the workflow file; head and tree are `receipt-check` expectations. The
+  verifier reads no labels, PR comments or Issue comments. With
+  `nexus-certify-source: path` the tool comes from the base checkout itself, so
+  add its source paths (for example `product`, `pyproject.toml`, `uv.lock`) to
+  `equivalence-paths`.
 
 **Trust boundary change.** Without reuse a receipt is valid only while its
 config commit is the current base tip (#249). Reuse also accepts a receipt

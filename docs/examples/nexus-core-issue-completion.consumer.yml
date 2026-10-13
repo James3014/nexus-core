@@ -12,7 +12,8 @@ name: Nexus Core issue completion
 # - On a pull request, 'reuse' accepts that signed receipt only when it is
 #   provably equivalent; otherwise 'run' does the full check.
 # - 'verify' is the required check: it passes only on a successful reuse with
-#   reused == 'true', or on a receipt-verify that succeeded with verified == 'true'.
+#   reused == 'true', on a receipt-verify that succeeded with verified == 'true',
+#   or (pull requests only) on receipt-verify's confirmed PR_ALREADY_CLOSED_SKIPPED.
 # Requires container isolation ([isolation] mode = "container") in the
 # repository's committed .nexus-core/config.toml. See
 # docs/GITHUB_REPOSITORY_CHECK.md.
@@ -83,6 +84,7 @@ jobs:
       artifact-id: ${{ steps.gate.outputs.artifact-id }}
       issue-number: ${{ steps.gate.outputs.issue-number }}
       head-sha: ${{ steps.gate.outputs.head-sha }}
+      outcome: ${{ steps.gate.outputs.outcome }}
     steps:
       - name: Issue gate
         id: gate
@@ -101,6 +103,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read   # receipt-verify re-reads the live PR for PR_ALREADY_CLOSED_SKIPPED
     steps:
       - name: Verify signed receipt
         id: verify
@@ -115,6 +118,7 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha || needs.run.outputs.head-sha }}
           base-sha: ${{ github.event.pull_request.base.sha || github.sha }}
           issue-number: ${{ needs.run.outputs.issue-number }}
+          gate-outcome: ${{ needs.run.outputs.outcome }}
           nexus-certify-ref: "0000000000000000000000000000000000000000"  # same sha
 
       - name: Decide required check
@@ -127,6 +131,7 @@ jobs:
           REUSE_REASON: ${{ needs.reuse.outputs.reason }}
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           VERIFIED: ${{ steps.verify.outputs.verified }}
+          VERIFY_RESULT: ${{ steps.verify.outputs.outcome }}
         run: |
           set -euo pipefail
           # Pass only on (a) a reuse job that succeeded with reused == 'true' (pull
@@ -139,5 +144,12 @@ jobs:
             echo "NEXUS_CORE_GATE: PASS via verified receipt from this run"
             exit 0
           fi
-          echo "NEXUS_CORE_GATE: FAIL (reuse=${REUSE_RESULT}/${REUSED:-}/${REUSE_REASON:-}, verify=${VERIFY_OUTCOME}/${VERIFIED:-})" >&2
+          # (c) Pull requests only: receipt-verify confirmed the live PR was merged at this
+          # exact head before the gate ran (#250 neutral skip, not completion evidence).
+          # Dispatch has no pull request, so a skip there never passes.
+          if [ "$EVENT_NAME" = "pull_request_target" ] && [ "$VERIFY_OUTCOME" = "success" ] && [ "$VERIFY_RESULT" = "PR_ALREADY_CLOSED_SKIPPED" ]; then
+            echo "NEXUS_CORE_GATE: NEUTRAL PR_ALREADY_CLOSED_SKIPPED (merged at this head before the gate ran)"
+            exit 0
+          fi
+          echo "NEXUS_CORE_GATE: FAIL (reuse=${REUSE_RESULT}/${REUSED:-}/${REUSE_REASON:-}, verify=${VERIFY_OUTCOME}/${VERIFIED:-}/${VERIFY_RESULT:-})" >&2
           exit 1

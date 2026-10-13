@@ -238,7 +238,9 @@ def test_negative_control_dispatch_branch_tip_check_removed_is_detected() -> Non
     mutated = text.replace("ls-remote --heads origin", "ls-remote origin", 1)
     assert mutated != text
     assert dispatch_branch_tip_violations(mutated)
-    mutated = text.replace('if [ "$TARGET_MODE" = "dispatch" ]; then', 'if false; then', 1)
+    guard = 'if [ "$TARGET_MODE" = "dispatch" ]; then\n          # Dispatch mode: the head must'
+    assert guard in text
+    mutated = text.replace(guard, guard.replace('[ "$TARGET_MODE" = "dispatch" ]', "false"), 1)
     assert mutated != text
     assert dispatch_branch_tip_violations(mutated)
 
@@ -337,6 +339,17 @@ def receipt_reuse_violations(text: str) -> list[str]:
         not in validate["text"]
     ):
         violations.append("sigstore: identity must be the consumer workflow on refs/heads/<default>")
+    issue_step = next((s for s in steps if s["name"] == CHECK_STEPS[2]), {"text": ""})
+    for needle in (
+        "RUN_CREATED_AT: ${{ steps.find.outputs.run-created-at }}",
+        'issue.get("updated_at")',
+        "updated is None or created is None or updated > created",
+        "REUSE_ISSUE_CHANGED_AFTER_PRECHECK",
+    ):
+        if needle not in _uncommented(issue_step["text"]):
+            violations.append(f"issue freshness: missing {needle!r}")
+    if '"run-created-at": run["created_at"]' not in find["text"]:
+        violations.append("issue freshness: the lookup must emit the producing run's created_at")
     check = next((s for s in steps if s["name"] == CHECK_STEPS[7]), {"text": ""})
     if "CONFIG_COMMIT: ${{ steps.find.outputs.config-commit }}" not in check["text"] or (
         '--expect-config-commit "$CONFIG_COMMIT"' not in check["text"]
@@ -381,6 +394,8 @@ def test_receipt_reuse_structure() -> None:
         ("    - name: Check Issue is still open\n      id: issue\n      if: steps.lineage.outputs.ok == 'true'\n      continue-on-error: true\n",
          "    - name: Check Issue is still open\n      id: issue\n      if: steps.lineage.outputs.ok == 'true'\n"),
         ("value: ${{ steps.decide.outputs.reused }}", "value: ${{ steps.check.outputs.ok }}"),
+        ("updated is None or created is None or updated > created", "updated is None"),
+        ("RUN_CREATED_AT: ${{ steps.find.outputs.run-created-at }}", "RUN_CREATED_AT: ''"),
     ],
 )
 def test_negative_control_receipt_reuse_drift_is_detected(old: str, new: str) -> None:
@@ -479,7 +494,7 @@ def test_reuse_invalid_inputs_fail_closed(tmp_path: Path, overrides: dict[str, s
 
 @pytest.fixture
 def api() -> Iterator[tuple[dict[str, Any], str]]:
-    state: dict[str, Any] = {"runs": [], "artifacts": {}, "requests": [], "raw": None}
+    state: dict[str, Any] = {"runs": [], "artifacts": {}, "requests": [], "raw": None, "issue": None}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args: Any) -> None:  # pragma: no cover - silence
@@ -490,7 +505,10 @@ def api() -> Iterator[tuple[dict[str, Any], str]]:
             state["requests"].append((url.path, {k: v[0] for k, v in parse_qs(url.query).items()}))
             runs = re.fullmatch(rf"/repos/{REPOSITORY}/actions/workflows/([^/]+)/runs", url.path)
             arts = re.fullmatch(rf"/repos/{REPOSITORY}/actions/runs/(\d+)/artifacts", url.path)
-            if runs:
+            issue = re.fullmatch(rf"/repos/{REPOSITORY}/issues/7", url.path)
+            if issue and state["issue"] is not None:
+                payload = state["issue"]
+            elif runs:
                 payload: Any = state["raw"] if state["raw"] is not None else {"total_count": len(state["runs"]), "workflow_runs": state["runs"]}
             elif arts:
                 items = state["artifacts"].get(int(arts.group(1)), [])
@@ -581,10 +599,11 @@ def test_lookup_takes_newest_qualifying_dispatch_run(tmp_path: Path, api) -> Non
         _run(9007, created="2026-10-13T09:00:00Z", attempt=1),  # artifact from attempt 2 > run_attempt
         _run(9008, created="2026-10-13T09:00:00Z"),  # expired artifact
         _run(9009, created="2026-10-13T09:00:00Z", attempt=2),  # ambiguous: two artifacts
+        _run(9010, created="2026-10-13 09:00:00"),  # creation time not a strict UTC stamp
         _run(8001, created="2026-10-13T08:00:00Z", attempt=2),  # the newest qualifying run
         _run(7001, created="2026-10-13T07:00:00Z"),
     ]
-    for run_id in (9001, 9002, 9003, 9004, 9005, 7001):
+    for run_id in (9001, 9002, 9003, 9004, 9005, 9010, 7001):
         state["artifacts"][run_id] = [_artifact(run_id, 1, run_id * 10)]
     state["artifacts"][9006] = [_artifact(9006, 1, 90060, head="5" * 40)]
     state["artifacts"][9007] = [_artifact(9007, 2, 90070)]
@@ -600,6 +619,7 @@ def test_lookup_takes_newest_qualifying_dispatch_run(tmp_path: Path, api) -> Non
         "artifact-id": "80010",
         "artifact-name": f"nexus-core-receipts-{HEAD}-run8001-attempt2",
         "config-commit": "1" * 40,
+        "run-created-at": "2026-10-13T08:00:00Z",
     }
     path, query = state["requests"][0]
     assert path.endswith("/actions/workflows/nexus-core-issue-completion.yml/runs")
@@ -629,6 +649,80 @@ def test_lookup_unreachable_api_and_missing_issue_decline(tmp_path: Path) -> Non
     assert code == 0 and outputs == {"ok": "false", "reason": "REUSE_PRIOR_RUN_LOOKUP_FAILED"}
     code, outputs, _ = _find(tmp_path, "http://127.0.0.1:9", issue="")
     assert code == 0 and outputs == {"ok": "false", "reason": "REUSE_ISSUE_BINDING_UNRESOLVED"}
+
+
+# ------------------------------------------------------------------ Issue open and unchanged
+
+PRECHECK_CREATED = "2026-10-13T08:00:00Z"
+
+
+def _issue_check(tmp_path: Path, api_url: str, created: str = PRECHECK_CREATED) -> tuple[int, dict[str, str], str]:
+    env = {
+        "API_URL": api_url,
+        "REPO": REPOSITORY,
+        "ISSUE": "7",
+        "RUN_CREATED_AT": created,
+        "GITHUB_TOKEN": "ghs_test",
+    }
+    script = _run_block(_action_step(RECEIPT_REUSE, "Check Issue is still open")["text"])
+    return _bash(script, env, tmp_path)
+
+
+@pytest.mark.parametrize("updated", ["2026-10-13T07:59:59Z", PRECHECK_CREATED])
+def test_issue_unchanged_since_precheck_allows_reuse(tmp_path: Path, api, updated: str) -> None:
+    state, api_url = api
+    state["issue"] = {"number": 7, "state": "open", "updated_at": updated}
+    code, outputs, log = _issue_check(tmp_path, api_url)
+    assert code == 0, log
+    assert outputs == {"ok": "true"}
+
+
+@pytest.mark.parametrize(
+    ("issue", "created", "reason"),
+    [
+        # Body/title/marker edit or new comment after the precheck run was created.
+        ({"state": "open", "updated_at": "2026-10-13T08:00:01Z"}, PRECHECK_CREATED,
+         "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"),
+        ({"state": "open"}, PRECHECK_CREATED, "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"),
+        ({"state": "open", "updated_at": None}, PRECHECK_CREATED, "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"),
+        ({"state": "open", "updated_at": "2026-10-13T07:00:00+00:00"}, PRECHECK_CREATED,
+         "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"),
+        ({"state": "open", "updated_at": "2026-10-13T07:00:00Z"}, "", "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"),
+        ({"state": "open", "updated_at": "2026-10-13T07:00:00Z"}, "yesterday",
+         "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"),
+        ({"state": "closed", "updated_at": "2026-10-13T07:00:00Z"}, PRECHECK_CREATED, "REUSE_ISSUE_NOT_OPEN"),
+        ({"state": "open", "updated_at": "2026-10-13T07:00:00Z", "pull_request": {}}, PRECHECK_CREATED,
+         "REUSE_ISSUE_NOT_OPEN"),
+    ],
+)
+def test_issue_changed_or_not_open_declines(
+    tmp_path: Path, api, issue: dict[str, Any], created: str, reason: str
+) -> None:
+    state, api_url = api
+    state["issue"] = {"number": 7, **issue}
+    code, outputs, log = _issue_check(tmp_path, api_url, created)
+    assert code == 0, log
+    assert outputs == {"ok": "false", "reason": reason}
+
+
+def test_issue_lookup_failure_declines(tmp_path: Path) -> None:
+    code, outputs, _ = _issue_check(tmp_path, "http://127.0.0.1:9")
+    assert code == 0
+    assert outputs == {"ok": "false", "reason": "REUSE_ISSUE_LOOKUP_FAILED"}
+
+
+def test_negative_control_dropped_issue_freshness_check_is_detected(tmp_path: Path, api) -> None:
+    state, api_url = api
+    state["issue"] = {"number": 7, "state": "open", "updated_at": "2026-10-13T09:00:00Z"}
+    text = _read(RECEIPT_REUSE)
+    needle = "updated is None or created is None or updated > created"
+    mutated = text.replace(needle, "False", 1)
+    assert mutated != text and receipt_reuse_violations(mutated)
+    script = _run_block(_action_step(RECEIPT_REUSE, "Check Issue is still open", mutated)["text"])
+    env = {"API_URL": api_url, "REPO": REPOSITORY, "ISSUE": "7",
+           "RUN_CREATED_AT": PRECHECK_CREATED, "GITHUB_TOKEN": "ghs_test"}
+    assert _bash(script, env, tmp_path)[1] == {"ok": "true"}  # the mutation would reuse ...
+    assert _issue_check(tmp_path, api_url)[1]["reason"] == "REUSE_ISSUE_CHANGED_AFTER_PRECHECK"  # ... the real step declines
 
 
 # ------------------------------------------------------------------ lineage and equivalence
@@ -827,7 +921,7 @@ def test_negative_control_dropped_decision_gate_is_detected(tmp_path: Path) -> N
 def _verify_decide(tmp_path: Path, env: dict[str, str], text: str | None = None) -> int:
     verify = _jobs(text if text is not None else _read(CONSUMER_EXAMPLE))["verify"]
     script = _run_block(_workflow_step(verify, "Decide required check"))
-    code, _, _ = _bash(script, env, tmp_path)
+    code, _, _ = _bash(script, {"VERIFY_RESULT": "", **env}, tmp_path)
     return code
 
 
@@ -843,6 +937,10 @@ PASSING = [
     # Dispatch, verified.
     {"EVENT_NAME": DISPATCH_TRIGGER, "REUSE_RESULT": "skipped", "REUSED": "",
      "VERIFY_OUTCOME": "success", "VERIFIED": "true"},
+    # Pull request merged at this head before the gate ran: receipt-verify confirmed
+    # the neutral #250 skip (verified stays 'false').
+    {"EVENT_NAME": "pull_request_target", "REUSE_RESULT": "success", "REUSED": "false",
+     "VERIFY_OUTCOME": "success", "VERIFIED": "false", "VERIFY_RESULT": "PR_ALREADY_CLOSED_SKIPPED"},
 ]
 FAILING = [
     # Reuse errored and the run was skipped / failed: receipt-verify fails or is absent.
@@ -867,6 +965,15 @@ FAILING = [
      "VERIFY_OUTCOME": "skipped", "VERIFIED": ""},
     {"EVENT_NAME": DISPATCH_TRIGGER, "REUSE_RESULT": "skipped", "REUSED": "",
      "VERIFY_OUTCOME": "failure", "VERIFIED": "false"},
+    # A skip never passes on dispatch, and never without a successful receipt-verify.
+    {"EVENT_NAME": DISPATCH_TRIGGER, "REUSE_RESULT": "skipped", "REUSED": "",
+     "VERIFY_OUTCOME": "success", "VERIFIED": "false", "VERIFY_RESULT": "PR_ALREADY_CLOSED_SKIPPED"},
+    {"EVENT_NAME": "pull_request_target", "REUSE_RESULT": "success", "REUSED": "false",
+     "VERIFY_OUTCOME": "failure", "VERIFIED": "false", "VERIFY_RESULT": "PR_ALREADY_CLOSED_SKIPPED"},
+    {"EVENT_NAME": "pull_request_target", "REUSE_RESULT": "success", "REUSED": "false",
+     "VERIFY_OUTCOME": "skipped", "VERIFIED": "", "VERIFY_RESULT": "PR_ALREADY_CLOSED_SKIPPED"},
+    {"EVENT_NAME": "pull_request_target", "REUSE_RESULT": "success", "REUSED": "false",
+     "VERIFY_OUTCOME": "success", "VERIFIED": "false", "VERIFY_RESULT": "VERIFIED"},
 ]
 
 
@@ -888,3 +995,22 @@ def test_negative_control_consumer_decision_ignoring_reuse_result_is_detected(tm
     env = FAILING[2]
     assert _verify_decide(tmp_path, env, mutated) == 0
     assert _verify_decide(tmp_path, env) != 0
+
+
+def test_negative_control_consumer_skip_accepted_on_dispatch_is_detected(tmp_path: Path) -> None:
+    text = _read(CONSUMER_EXAMPLE)
+    needle = '[ "$EVENT_NAME" = "pull_request_target" ] && [ "$VERIFY_OUTCOME" = "success" ] && [ "$VERIFY_RESULT"'
+    assert needle in text
+    mutated = text.replace(needle, needle.replace('[ "$EVENT_NAME" = "pull_request_target" ] && ', ""), 1)
+    env = {"EVENT_NAME": DISPATCH_TRIGGER, "REUSE_RESULT": "skipped", "REUSED": "",
+           "VERIFY_OUTCOME": "success", "VERIFIED": "false", "VERIFY_RESULT": "PR_ALREADY_CLOSED_SKIPPED"}
+    assert _verify_decide(tmp_path, env, mutated) == 0
+    assert _verify_decide(tmp_path, env) != 0
+
+
+def test_consumer_example_passes_the_gate_outcome_to_receipt_verify() -> None:
+    jobs = _jobs(_read(CONSUMER_EXAMPLE))
+    assert "      outcome: ${{ steps.gate.outputs.outcome }}\n" in jobs["run"]
+    step = _workflow_step(jobs["verify"], "Verify signed receipt")
+    assert "          gate-outcome: ${{ needs.run.outputs.outcome }}\n" in step
+    assert "      pull-requests: read" in jobs["verify"]

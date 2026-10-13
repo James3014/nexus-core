@@ -242,6 +242,7 @@ runs:
                     or not isinstance(repository, dict)
                     or repository.get("full_name") != repo
                     or not re.fullmatch(r"[0-9a-f]{40}", str(run.get("head_sha", "")))
+                    or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(run.get("created_at", "")))
                 ):
                     continue
                 qualifying.append(run)
@@ -282,6 +283,8 @@ runs:
                         "artifact-id": artifact["id"],
                         "artifact-name": artifact["name"],
                         "config-commit": run["head_sha"],
+                        # The run's creation precedes every attempt's Issue read.
+                        "run-created-at": run["created_at"],
                     },
                 )
                 raise SystemExit(0)
@@ -344,13 +347,16 @@ runs:
         API_URL: ${{ github.api_url }}
         REPO: ${{ inputs.github-repository }}
         ISSUE: ${{ steps.validate.outputs.issue-number }}
+        RUN_CREATED_AT: ${{ steps.find.outputs.run-created-at }}
         GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         python3 - <<'PY'
         import json
         import os
+        import re
         import urllib.request
+        from datetime import datetime
 
         def emit(text):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
@@ -374,6 +380,24 @@ runs:
         if not isinstance(issue, dict) or issue.get("state") != "open" or "pull_request" in issue:
             print("NEXUS_CORE_REUSE: REUSE_ISSUE_NOT_OPEN")
             emit("ok=false\nreason=REUSE_ISSUE_NOT_OPEN\n")
+            raise SystemExit(0)
+        # The full run binds the Issue contract (title, body, evidence universe marker,
+        # author) as it is at PR time; the precheck bound it when its run started. Reuse
+        # only if the Issue has not changed since the producing run was created. Any
+        # update (comments included) declines, which only falls back to the full run.
+        stamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+        def instant(value):
+            if not isinstance(value, str) or not stamp.fullmatch(value):
+                return None
+            return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+
+
+        updated, created = instant(issue.get("updated_at")), instant(os.environ.get("RUN_CREATED_AT"))
+        if updated is None or created is None or updated > created:
+            print(f"NEXUS_CORE_REUSE: REUSE_ISSUE_CHANGED_AFTER_PRECHECK updated_at={issue.get('updated_at')} run_created_at={os.environ.get('RUN_CREATED_AT')}")
+            emit("ok=false\nreason=REUSE_ISSUE_CHANGED_AFTER_PRECHECK\n")
             raise SystemExit(0)
         emit("ok=true\n")
         PY

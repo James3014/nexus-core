@@ -98,7 +98,10 @@ def test_gate_step_fails_closed_when_the_tool_fails(tmp_path: Path) -> None:
 
 def test_gate_step_reads_pr_head_and_repo_from_trusted_event_fields(tmp_path: Path) -> None:
     step = _step(ISSUE_GATE, "prstate")
-    assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    # The head is the gate's resolved target (#255): only the target step reads
+    # github.event.pull_request.head.sha; under pull_request events it is that value.
+    assert step["env"]["HEAD_SHA"] == "${{ steps.target.outputs.head-sha }}"
+    assert step["env"]["TARGET_MODE"] == "${{ steps.target.outputs.mode }}"
     assert step["env"]["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
     assert step["env"]["REPO"] == "${{ github.repository }}"
     assert step["env"]["GITHUB_API_URL"] == "${{ github.api_url }}"
@@ -120,6 +123,30 @@ def test_gate_step_rejects_non_numeric_pr_number(tmp_path: Path) -> None:
     result = _run_step(_step(ISSUE_GATE, "prstate"), context, tmp_path)
     assert result.returncode != 0
     assert not (tmp_path / "argv.json").exists()
+
+
+def test_gate_step_dispatch_mode_proceeds_without_any_pr_lookup(tmp_path: Path) -> None:
+    """#255: dispatch mode has no pull request; it never calls pr-state."""
+    argv_log = _fake_tool(tmp_path, stdout=json.dumps({"outcome": "PR_ALREADY_CLOSED_SKIPPED"}))
+    context = _context()
+    context["steps"]["target"]["outputs"]["mode"] = "dispatch"
+    # repository_dispatch: no pull request (GitHub expressions evaluate to '').
+    context["github"]["event"]["pull_request"] = {"number": "", "head": {"sha": ""}}
+    result = _run_step(_step(ISSUE_GATE, "prstate"), context, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.outputs == {"outcome": "PROCEED"}
+    assert not argv_log.exists()
+
+
+@pytest.mark.parametrize("mode", ["", "Dispatch", "pull_request_target", "dispatch\noutcome=PROCEED"])
+def test_gate_step_unknown_target_mode_fails_closed(tmp_path: Path, mode: str) -> None:
+    argv_log = _fake_tool(tmp_path, stdout=json.dumps({"outcome": "PROCEED"}))
+    context = _context()
+    context["steps"]["target"]["outputs"]["mode"] = mode
+    result = _run_step(_step(ISSUE_GATE, "prstate"), context, tmp_path)
+    assert result.returncode != 0
+    assert result.outputs == {}
+    assert not argv_log.exists()
 
 
 # ------------------------------------------------------------------------ receipt-verify
@@ -180,3 +207,14 @@ def test_verify_skip_step_rejects_non_numeric_pr_number(tmp_path: Path) -> None:
     result = _run_step(_step(RECEIPT_VERIFY, "skip"), context, tmp_path)
     assert result.returncode != 0
     assert not (tmp_path / "argv.json").exists()
+
+
+def test_verify_skip_step_fails_closed_under_dispatch_without_a_pull_request(tmp_path: Path) -> None:
+    """#255: repository_dispatch has no pull request, so a claimed skip cannot pass."""
+    argv_log = _fake_tool(tmp_path, stdout=json.dumps({"skip_accepted": True}))
+    context = _context(**_verify_inputs())
+    context["github"]["event"]["pull_request"] = {"number": "", "head": {"sha": ""}}
+    result = _run_step(_step(RECEIPT_VERIFY, "skip"), context, tmp_path)
+    assert result.returncode != 0
+    assert result.outputs == {}
+    assert not argv_log.exists()
