@@ -153,16 +153,11 @@ def test_emit_appends_fenced_blocks_so_markers_stay_visible(summary: Path) -> No
 def test_check_base_ref_not_ancestor_prints_base_sha_and_remedy(
     repo: Path, summary: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _git(repo, "stash")
-    _git(repo, "checkout", "-q", "-b", "feature")
-    (repo / "app.py").write_text("V = 3\n", encoding="utf-8")
-    _git(repo, "commit", "-qam", "feature")
-    _git(repo, "checkout", "-q", "main")
-    (repo / "other.txt").write_text("x\n", encoding="utf-8")
-    _git(repo, "add", "other.txt")
-    _git(repo, "commit", "-qm", "main moved")
+    # Since the #243 merge-base rule only unrelated history fails ancestry.
     tip = _git(repo, "rev-parse", "main")
-    _git(repo, "checkout", "-q", "feature")
+    _git(repo, "checkout", "-q", "--orphan", "feature")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "unrelated root")
     head = _git(repo, "rev-parse", "HEAD")
 
     assert cli.main(["check", "--repo", str(repo)]) == 2
@@ -171,7 +166,7 @@ def test_check_base_ref_not_ancestor_prints_base_sha_and_remedy(
         f"BASE_REF_NOT_ANCESTOR: HEAD does not descend from main at {tip}; "
         f"rebase onto {tip} (git rebase main) and push again"
     )
-    assert f"BASE_REF_NOT_ANCESTOR: main at {tip} is not an ancestor of HEAD {head}\n" in err
+    assert f"BASE_REF_NOT_ANCESTOR: main at {tip} shares no history with HEAD {head}\n" in err
     assert out == remedy + "\n"
     assert _summary_blocks(summary) == [remedy]
 

@@ -51,7 +51,7 @@ nexus-certify check
 
 `check` 不需要本機 HTTP service、bearer token 或 ledger。它會：
 
-1. 把設定的 base 解析成 commit，要求它是目前 `HEAD` 的 ancestor，並解析 source tree；
+1. 把設定的 base tip 解析成 commit，要求它與目前 `HEAD` 恰好有一個 merge-base（`HEAD` 必須從 base branch 上的某個 commit 長出來，不必是 tip；#243）。merge-base 即 source revision，所以 subject diff 是 `merge-base..HEAD`，與 GitHub PR diff 相同。受信任設定仍只從 base tip 讀取，ancestry 檢查也用同一個 tip commit；
 2. 使用 isolated temporary Git index，把目前真實 worktree state materialize 成 target state，包含 committed、staged、unstaged 與 untracked changes，同時不修改 caller 的 HEAD、一般 index 或 worktree；
 3. 從真實 Git object 推導 source-tree-to-target-tree manifest；
 4. 把 allowed path glob 投影成 exact changed paths，再放入 canonical `AcceptanceContract`；

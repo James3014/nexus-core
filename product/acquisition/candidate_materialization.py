@@ -816,7 +816,13 @@ def _check_physical_worktree_clean(
 def _validate_source_lineage(
     repo: Path, source_commit: str, candidate_head: str
 ) -> None:
-    """Fail closed unless ``source_commit`` is an ancestor of ``candidate_head``."""
+    """Fail closed unless ``source_commit`` is an ancestor of ``candidate_head``.
+
+    Deliberately strict (not the #243 merge-base rule): ``source_commit`` is the
+    caller's explicit ``expected_source_identity`` that the change set is diffed
+    from, not a moving base-branch tip, so a caller that wants merge-base semantics
+    passes the merge-base itself.
+    """
     result = _run_git(
         repo,
         "merge-base",

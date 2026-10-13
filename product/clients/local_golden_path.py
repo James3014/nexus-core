@@ -676,23 +676,43 @@ def _command_available(repo: Path, command: Sequence[str]) -> bool:
     return shutil.which(executable) is not None
 
 
-def _resolve_base_and_head(repo: Path, base_ref: str) -> tuple[str, str]:
-    base = _run_git(repo, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
-    if base.returncode != 0:
-        raise LocalCheckError("BASE_REF_UNRESOLVED", base_ref)
-    source_commit = base.stdout.strip()
+def _resolve_base_and_head(
+    repo: Path, base_ref: str, *, base_tip: str | None = None
+) -> tuple[str, str]:
+    """Return ``(source_commit, head)`` where ``source_commit`` is the PR merge-base.
+
+    Owner decision on #243: HEAD must descend from a commit on the base branch, not
+    necessarily from its current tip. ``source_commit`` is the single merge-base of
+    the base tip and HEAD, which is by construction an ancestor of the tip, so the
+    subject diff is ``merge-base..HEAD`` (the same as GitHub's pull-request diff).
+    Unrelated history, or more than one merge-base, fails ``BASE_REF_NOT_ANCESTOR``.
+
+    ``base_tip`` binds the ancestry check to the exact commit the trusted config
+    was read from; config trust itself never moves to the merge-base.
+    """
+
+    tip: str
+    if base_tip is None:
+        base = _run_git(repo, "rev-parse", "--verify", f"{base_ref}^{{commit}}")
+        if base.returncode != 0:
+            raise LocalCheckError("BASE_REF_UNRESOLVED", base_ref)
+        tip = str(base.stdout).strip()
+    else:
+        tip = base_tip
     head = _git_stdout(repo, "rev-parse", "HEAD^{commit}")
-    ancestor = _run_git(repo, "merge-base", "--is-ancestor", source_commit, head)
-    if ancestor.returncode == 1:
+    merge_base = _run_git(repo, "merge-base", "--all", tip, head)
+    if merge_base.returncode not in (0, 1):
+        detail = str(merge_base.stderr or merge_base.stdout).strip()
+        raise LocalCheckError("GIT_COMMAND_FAILED", detail)
+    bases: list[str] = str(merge_base.stdout).split() if merge_base.returncode == 0 else []
+    if len(bases) != 1 or _HEX40_RE.fullmatch(bases[0]) is None:
+        problem = "shares no history with" if not bases else f"has {len(bases)} merge-bases with"
         raise LocalCheckError(
             "BASE_REF_NOT_ANCESTOR",
-            f"{base_ref} at {source_commit} is not an ancestor of HEAD {head}",
-            remediation=gate_diagnostics.base_ref_not_ancestor(base_ref, source_commit),
+            f"{base_ref} at {tip} {problem} HEAD {head}",
+            remediation=gate_diagnostics.base_ref_not_ancestor(base_ref, tip),
         )
-    if ancestor.returncode != 0:
-        detail = (ancestor.stderr or ancestor.stdout).strip()
-        raise LocalCheckError("GIT_COMMAND_FAILED", detail)
-    return source_commit, head
+    return bases[0], head
 
 
 def doctor_repository(path: str | Path = ".") -> dict[str, Any]:
@@ -906,8 +926,8 @@ def _list_ignored_residue(repo: Path) -> list[str]:
     return ignored_paths
 
 
-def _snapshot(repo: Path, base_ref: str) -> _GitSnapshot:
-    source_commit, head = _resolve_base_and_head(repo, base_ref)
+def _snapshot(repo: Path, base_ref: str, *, base_tip: str | None = None) -> _GitSnapshot:
+    source_commit, head = _resolve_base_and_head(repo, base_ref, base_tip=base_tip)
 
     source_tree = _git_stdout(repo, "rev-parse", f"{source_commit}^{{tree}}")
     target_tree = _materialize_target_tree(repo, head)
@@ -1919,7 +1939,13 @@ def check_repository(
             )
 
     try:
-        snapshot = _snapshot(repo, config["base_ref"])
+        # Ancestry is checked against the exact base-tip commit the trusted config
+        # was read from, so config trust and the merge-base share one base tip.
+        snapshot = _snapshot(
+            repo,
+            config["base_ref"],
+            base_tip=config_source["commit"] if config_source["kind"] == "base-ref" else None,
+        )
     except LocalCheckError as exc:
         _raise_with_receipt(
             repo,

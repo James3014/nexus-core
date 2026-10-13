@@ -45,8 +45,12 @@ runs the verifier.
 
 `check` needs no local HTTP service, bearer token, or ledger. It:
 
-1. resolves the configured base to a commit, requires it to be an ancestor of
-   current `HEAD`, and resolves its tree;
+1. resolves the configured base tip to a commit and requires exactly one
+   merge-base between that tip and current `HEAD` (`HEAD` must descend from a
+   commit on the base branch, not necessarily its tip; #243). The merge-base is the
+   source revision, so the subject diff is `merge-base..HEAD`, the same as GitHub's
+   pull-request diff. The trusted config is still read only from the base tip, and
+   the ancestry check uses that exact tip commit;
 2. uses an isolated temporary Git index to materialize the current physical
    worktree state, including committed, staged, unstaged, and untracked changes,
    without changing the caller's HEAD, normal index, or worktree;
