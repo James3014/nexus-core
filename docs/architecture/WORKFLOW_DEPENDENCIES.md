@@ -14,8 +14,6 @@ Nexus Core verification and release workflows require that every external GitHub
 | `.github/workflows/publish.yml` | `astral-sh/setup-uv` | `d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86` | `v5` | Install pinned uv binary |
 | `.github/workflows/repository-intelligence.yml` | `James3014/repository-intelligence-engine` | `88285acf570688befbc8e36eb73f46987171bd4e` | `main` 2026-10-08 (v0.1.3 candidate, Issue #60) | Collect PR intelligence |
 | `.github/workflows/repository-intelligence.yml` | `actions/upload-artifact` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | `v4.6.1` | Upload intelligence report |
-| `.github/workflows/repository-intelligence.yml` | `James3014/repository-intelligence-engine/terminal` | `88285acf570688befbc8e36eb73f46987171bd4e` | `main` 2026-10-08 (v0.1.3 candidate, Issue #60) | Observe terminal checks |
-| `.github/workflows/repository-intelligence.yml` | `actions/upload-artifact` | `ea165f8d65b6e75b540449e92b4886f43607fa02` | `v4.6.1` | Upload terminal evidence |
 
 ## Enforcement & Anti-Regression Guard
 
