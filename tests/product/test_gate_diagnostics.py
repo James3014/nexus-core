@@ -421,6 +421,99 @@ def test_receipt_check_passing_receipt_emits_no_remediation(
     assert not summary.exists()
 
 
+# --- receipt-verify prints the receipt's own verdict first ---------------------------
+
+
+def _pre_request_failed_receipt(repo: Path) -> Path:
+    """A real receipt that failed closed before any Core request (FORBIDDEN_PATH)."""
+
+    body = "Change V\n\n" + _marker(_hash(repo))
+    reader = lambda r, n: _issue(body)  # noqa: E731
+    init_issue_binding(repo, issue_number=85, issue_reader=reader)
+    (repo / "other.py").write_text("X = 1\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(repo, issue_number=85, issue_reader=reader)
+    assert raised.value.reason_code == "FORBIDDEN_PATH"
+    receipt = raised.value.receipt_path
+    assert receipt is not None
+    payload = json.loads(Path(receipt).read_text(encoding="utf-8"))
+    assert payload["inputs"]["request"] is None
+    assert payload["outcome"]["status"] == "FAILED_CLOSED"
+    return Path(receipt)
+
+
+def test_receipt_check_prints_receipt_status_before_mismatches(
+    repo: Path, summary: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    receipt = _pre_request_failed_receipt(repo)
+    capsys.readouterr()
+
+    code, output, err = _receipt_check(
+        capsys, receipt, "--expect-status", "VERIFIED", "--expect-issue", "85"
+    )
+    # Fail-closed behaviour is unchanged: invalid receipt, exit 2.
+    assert (code, output["valid"]) == (2, False)
+    assert {
+        "ISSUE_VERIFICATION_MISMATCH",
+        "RECEIPT_FAILED_CLOSED_BEFORE_CORE_REQUEST",
+        "STATUS_MISMATCH",
+    } <= set(output["reason_codes"])
+    lines = err.splitlines()
+    assert lines[0] == (
+        "RECEIPT_STATUS: FAILED_CLOSED (reasons: FORBIDDEN_PATH); this is the gate's own "
+        "verdict, fix its reasons first; the mismatch lines that follow are consequences of it"
+    )
+    assert lines[1].startswith("reasons: ")
+    assert "MALFORMED_RECEIPT" not in err
+
+
+def test_receipt_status_line_is_silent_for_verified_and_unreadable_receipts() -> None:
+    assert gate_diagnostics.receipt_status_line({"outcome": {"status": "VERIFIED"}}) is None
+    assert gate_diagnostics.receipt_status_line({"outcome": {}}) is None
+    assert gate_diagnostics.receipt_status_line("not a receipt") is None
+    assert gate_diagnostics.receipt_status_line(
+        {"outcome": {"status": "FAILED_VERIFICATION", "reason_codes": ["A", "B"]}}
+    ) == (
+        "RECEIPT_STATUS: FAILED_VERIFICATION (reasons: A, B); this is the gate's own "
+        "verdict, fix its reasons first; the mismatch lines that follow are consequences of it"
+    )
+
+
+def _rewrite(path: Path, payload: dict[str, Any]) -> Path:
+    payload["receipt_hash"] = canonical_hash(
+        {key: value for key, value in payload.items() if key != "receipt_hash"}
+    )
+    out = path.with_name("rewritten.json")
+    out.write_text(json.dumps(payload), encoding="utf-8")
+    return out
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda p: p["outcome"].update(status="VERIFIED"), id="verified-no-request"),
+        pytest.param(lambda p: p["outcome"].update(reason_codes=[]), id="no-reason"),
+        pytest.param(lambda p: p["outcome"].update(reason_codes=["A", "B"]), id="two-reasons"),
+        pytest.param(lambda p: p.update(core_response={"x": 1}), id="core-response"),
+        pytest.param(lambda p: p.update(outcome="FAILED_CLOSED"), id="outcome-not-mapping"),
+    ],
+)
+def test_request_less_receipt_outside_exact_shape_stays_malformed(repo: Path, mutate: Any) -> None:
+    from product.clients.local_golden_path import validate_verification_receipt
+
+    receipt = _pre_request_failed_receipt(repo)
+    before = validate_verification_receipt(receipt)
+    assert before["valid"] is False
+    assert "RECEIPT_FAILED_CLOSED_BEFORE_CORE_REQUEST" in before["reason_codes"]
+    assert "MALFORMED_RECEIPT" not in before["reason_codes"]
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    mutate(payload)
+    result = validate_verification_receipt(_rewrite(receipt, payload))
+    assert result["valid"] is False
+    assert "MALFORMED_RECEIPT" in result["reason_codes"]
+    assert "RECEIPT_FAILED_CLOSED_BEFORE_CORE_REQUEST" not in result["reason_codes"]
+
+
 # --- #244: markers --issue N --check (read-only creation path) ---------------------
 
 

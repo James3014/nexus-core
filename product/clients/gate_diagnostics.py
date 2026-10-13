@@ -23,6 +23,7 @@ BASE_REF_NOT_ANCESTOR = "BASE_REF_NOT_ANCESTOR"
 PR_MISSING_CORE_ISSUE_BINDING = "PR_MISSING_CORE_ISSUE_BINDING"
 RECEIPT_ISSUE_BINDING_MISMATCH = "RECEIPT_ISSUE_BINDING_MISMATCH"
 REPOSITORY_VERIFICATION_NOT_VERIFIED = "REPOSITORY_VERIFICATION_NOT_VERIFIED"
+RECEIPT_STATUS = "RECEIPT_STATUS"
 
 SUMMARY_HEADING = "### Nexus Core gate: how to fix"
 
@@ -128,6 +129,25 @@ def receipt_remediations(payload: Any, *, expect_issue: int | None) -> list[str]
             "'Diagnose Core verifier failure' step, then re-run the gate"
         )
     return lines
+
+
+def receipt_status_line(receipt: Any) -> str | None:
+    """One line naming the receipt's own outcome, printed before any expectation mismatch.
+
+    Returns None for a VERIFIED receipt (passing output stays unchanged) and when the
+    receipt carries no readable outcome status.
+    """
+
+    outcome = _as_mapping(_as_mapping(receipt).get("outcome"))
+    status = outcome.get("status")
+    if not isinstance(status, str) or not status or status == "VERIFIED":
+        return None
+    reasons = outcome.get("reason_codes")
+    reason_text = ", ".join(str(item) for item in _as_sequence(reasons)) if reasons else "none"
+    return (
+        f"{RECEIPT_STATUS}: {status} (reasons: {reason_text}); this is the gate's own "
+        "verdict, fix its reasons first; the mismatch lines that follow are consequences of it"
+    )
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:

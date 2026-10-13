@@ -459,6 +459,11 @@ def cmd_receipt_check(args: argparse.Namespace) -> int:
             payload = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             payload = {}
+        # The receipt's own verdict comes first: every mismatch line below is a
+        # consequence of it when the gate itself did not reach VERIFIED.
+        status_line = gate_diagnostics.receipt_status_line(payload)
+        if status_line:
+            print(status_line, file=sys.stderr)
         evaluation = evaluate_receipt_expectations(payload, **wanted)
         result["expectations"] = evaluation["expectations"]
         result["reason_codes"] = sorted(
