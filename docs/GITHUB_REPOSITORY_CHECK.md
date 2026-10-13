@@ -78,8 +78,9 @@ exit code:
   a rerun keeps earlier attempts' artifacts in the same workflow run, so the name
   binds the producing attempt.
 - **`verify`** (`Nexus Core issue completion`, `needs: run`, `if: always()`) is
-  the required check. It runs `receipt-verify` with only `contents: read` and
-  `actions: read`: it requires the artifact name to bind this head, this
+  the required check. It runs `receipt-verify` with only `contents: read`,
+  `actions: read` and `pull-requests: read` (the last only for the
+  `PR_ALREADY_CLOSED_SKIPPED` live PR read): it requires the artifact name to bind this head, this
   workflow run and an attempt not after the current one (a verifier-only rerun
   keeps the producer's attempt from `needs.run.outputs`), resolves it through the
   GitHub API to exactly one unexpired artifact of this run (and to `artifact-id`
@@ -99,6 +100,34 @@ universe marker to be present and equal to the current verification contract. A
 repository-level `outcome.status` of `VERIFIED` with an unbound or stale marker is
 `UNVERIFIABLE` at the Issue level and fails `--expect-issue` and `--expect-status`
 (see Issue #134, a false green found in nexus-runtime PRs #89 and #91).
+
+### Runs that start after the PR closed (`PR_ALREADY_CLOSED_SKIPPED`)
+
+A queued or retried run often starts after its PR merged and auto-closed the
+Issue. Before binding the Issue, `issue-gate` reads the **live pull request**
+(`nexus-certify pr-state --mode gate`):
+
+- PR open: the gate runs as above. A closed Issue on an open PR still fails
+  `ISSUE_NOT_OPEN`; an Issue being closed is never success by itself.
+- PR merged or closed: the gate evaluates nothing, produces no receipt and
+  outputs `outcome: PR_ALREADY_CLOSED_SKIPPED` with the observed PR state in the
+  log and job summary. This is a neutral result, never a pass of the evidence.
+- PR state unreadable (API error, malformed payload): the gate fails closed.
+
+`receipt-verify` takes the gate's `outcome` as `gate-outcome`. For
+`PR_ALREADY_CLOSED_SKIPPED` it does not trust the claim: it re-reads the live PR
+(`nexus-certify pr-state --mode verify-skip`) and passes only when the PR is
+merged **and** its head equals `head-sha`. Its `verified` output stays `false`
+and its `outcome` output is `PR_ALREADY_CLOSED_SKIPPED`. A closed-unmerged PR,
+an open PR, a merge at another head, or an API failure fails the check.
+Consumers that do not pass `gate-outcome` get the old behaviour (a skipped run
+has no receipt, so the check fails closed).
+
+A skip pass binds this **head** to a **merged PR**; it does not bind the base
+ref, the base config or the Issue, and it is not completion evidence. Whatever
+governed the merge itself was the gate result that existed when the PR merged.
+The `verify` job needs `pull-requests: read` for the live PR read; without it the
+read fails (403/404 in private repositories) and the check fails closed.
 
 The signing identity is the workflow file on the default branch:
 
@@ -131,6 +160,7 @@ jobs:
       artifact-name: ${{ steps.gate.outputs.artifact-name }}
       artifact-id: ${{ steps.gate.outputs.artifact-id }}
       issue-number: ${{ steps.gate.outputs.issue-number }}
+      outcome: ${{ steps.gate.outputs.outcome }}
     steps:
       - id: gate
         uses: James3014/nexus-core/.github/actions/issue-gate@<40-hex-sha>
@@ -143,6 +173,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read  # PR_ALREADY_CLOSED_SKIPPED re-reads the live PR
     steps:
       - uses: James3014/nexus-core/.github/actions/receipt-verify@<40-hex-sha>
         with:
@@ -153,6 +184,7 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha }}
           base-sha: ${{ github.event.pull_request.base.sha }}
           issue-number: ${{ needs.run.outputs.issue-number }}
+          gate-outcome: ${{ needs.run.outputs.outcome }}
           nexus-certify-ref: "<40-hex-sha>"
 ```
 

@@ -44,12 +44,14 @@ RECEIPT_CHECK_EXPECTATIONS = (
 # exact ``- name:`` values; changing which steps see the token must update SECURITY.md.
 TOKEN_STEPS = {
     ISSUE_GATE: {
+        "Read live pull request state",
         "Acquire candidate head with plain Git (no submodule handling)",
         "Bind exact Issue contract",
         "Verify exact Issue-bound candidate",
     },
     RECEIPT_VERIFY: {
         "Resolve exact producer artifact",
+        "Confirm skipped PR merged at this head",
         "Resolve expected head tree",
     },
 }
@@ -355,3 +357,71 @@ def test_negative_control_token_drift_is_detected() -> None:
     )
     assert mutated != text
     assert token_violations(ISSUE_GATE, mutated)
+
+
+# --------------------------------------------------------------------------- #250 skip wiring
+
+SKIP_OUTCOME = "PR_ALREADY_CLOSED_SKIPPED"
+
+
+def pr_state_skip_violations(gate_text: str, verify_text: str) -> list[str]:
+    """#250: the closed-PR skip is neutral, live-checked on both sides, and never VERIFIED."""
+    violations: list[str] = []
+    gate_steps = _steps(gate_text)
+    names = [step["name"] for step in gate_steps]
+    preflight = [s for s in gate_steps if "nexus-certify pr-state" in _uncommented(s["text"])]
+    if len(preflight) != 1 or "--mode gate" not in preflight[0]["text"]:
+        violations.append(
+            "gate preflight: issue-gate must call 'nexus-certify pr-state --mode gate' once"
+        )
+    else:
+        index = names.index(preflight[0]["name"])
+        for guarded in (
+            "Acquire candidate head with plain Git (no submodule handling)",
+            "Bind exact Issue contract",
+            "Verify exact Issue-bound candidate",
+        ):
+            if guarded not in names or names.index(guarded) < index:
+                violations.append(f"gate preflight: {guarded!r} must run after the preflight")
+                continue
+            step = gate_steps[names.index(guarded)]
+            if "steps.prstate.outputs.outcome == 'PROCEED'" not in step["text"]:
+                violations.append(
+                    f"gate preflight: {guarded!r} must run only when the preflight said PROCEED"
+                )
+    verify_steps = _steps(verify_text)
+    skip_checks = [s for s in verify_steps if "nexus-certify pr-state" in _uncommented(s["text"])]
+    if len(skip_checks) != 1 or "--mode verify-skip" not in skip_checks[0]["text"]:
+        violations.append(
+            "verify skip: receipt-verify must re-read the live PR with "
+            "'nexus-certify pr-state --mode verify-skip' exactly once"
+        )
+    elif f"inputs.gate-outcome == '{SKIP_OUTCOME}'" not in skip_checks[0]["text"]:
+        violations.append("verify skip: the live check must run only for a declared skip")
+    else:
+        skip_text = _uncommented(skip_checks[0]["text"])
+        if "verified=true" in skip_text:
+            violations.append("verify skip: a skip must never set verified=true")
+    for step in verify_steps:
+        text = _uncommented(step["text"])
+        if "nexus-certify receipt-check" in text or "verified=true" in text:
+            if f"inputs.gate-outcome != '{SKIP_OUTCOME}'" not in step["text"]:
+                violations.append(f"verify skip: {step['name']!r} must not run for a declared skip")
+    return violations
+
+
+def test_closed_pr_skip_is_live_checked_and_never_verified() -> None:
+    assert pr_state_skip_violations(_read(ISSUE_GATE), _read(RECEIPT_VERIFY)) == []
+
+
+def test_negative_control_skip_wiring_mutations_are_detected() -> None:
+    gate, verify = _read(ISSUE_GATE), _read(RECEIPT_VERIFY)
+    mutated = gate.replace("steps.prstate.outputs.outcome == 'PROCEED'", "always()", 1)
+    assert mutated != gate
+    assert pr_state_skip_violations(mutated, verify)
+    mutated = verify.replace("--mode verify-skip", "--mode gate", 1)
+    assert mutated != verify
+    assert pr_state_skip_violations(gate, mutated)
+    mutated = verify.replace(f"inputs.gate-outcome != '{SKIP_OUTCOME}'", "always()")
+    assert mutated != verify
+    assert pr_state_skip_violations(gate, mutated)

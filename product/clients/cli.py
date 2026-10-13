@@ -708,6 +708,15 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "VERIFIED" else 1
 
 
+def cmd_pr_state(args: argparse.Namespace) -> int:
+    from product.clients import pr_state
+
+    action = pr_state.gate_preflight if args.mode == "gate" else pr_state.verify_skip
+    record = action(args.github_repo, args.pr, args.expect_head)
+    print(json.dumps(record, sort_keys=True))
+    return 0
+
+
 def _expected_config_hash(repo: str) -> str:
     config, _source, _worktree = _load_effective_config(Path(repo))
     return canonical_hash(config)
@@ -960,6 +969,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_issue_check.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
 
+    p_pr_state = subparsers.add_parser(
+        "pr-state",
+        help="Read the live PR state: 'gate' says PROCEED or PR_ALREADY_CLOSED_SKIPPED; "
+        "'verify-skip' accepts a skip only for a PR merged at --expect-head (read-only)",
+    )
+    p_pr_state.add_argument("--mode", required=True, choices=("gate", "verify-skip"))
+    p_pr_state.add_argument("--github-repo", required=True, help="GitHub repository owner/name")
+    p_pr_state.add_argument("--pr", required=True, type=int, help="Pull request number")
+    p_pr_state.add_argument(
+        "--expect-head", required=True, type=_hex40, help="40-hex head commit of this run"
+    )
+
     p_markers = subparsers.add_parser(
         "markers", help="Print the Issue-body and PR-body markers the gate expects (read-only)"
     )
@@ -1072,6 +1093,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_issue_init(args)
         elif args.command == "issue-check":
             return cmd_issue_check(args)
+        elif args.command == "pr-state":
+            return cmd_pr_state(args)
         elif args.command == "markers":
             return cmd_markers(args)
         elif args.command == "acquire":

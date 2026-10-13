@@ -46,6 +46,7 @@ jobs:
       artifact-name: ${{ steps.gate.outputs.artifact-name }}
       artifact-id: ${{ steps.gate.outputs.artifact-id }}
       issue-number: ${{ steps.gate.outputs.issue-number }}
+      outcome: ${{ steps.gate.outputs.outcome }}
     steps:
       - name: Checkout trusted base (gate action and tool source only)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
@@ -70,6 +71,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     steps:
       - name: Checkout trusted base (verify action and tool source only)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.2.2
@@ -88,5 +90,6 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha }}
           base-sha: ${{ github.event.pull_request.base.sha }}
           issue-number: ${{ needs.run.outputs.issue-number }}
+          gate-outcome: ${{ needs.run.outputs.outcome }}
           nexus-certify-source: path
           nexus-certify-path: ${{ github.workspace }}/trusted
