@@ -879,14 +879,13 @@ CASES: tuple[GoldenCase, ...] = (
         "PR gate workflow structure is enforced",
         "security",
         "authority_conflict",
-        "SECURITY.md 'PR gate': the workflow triggers only on pull_request_target; both the run and verify jobs carry the same-repository guard head.repo.full_name == github.repository (never head.repo.fork == false); issue-check runs with --require-trusted-config; receipt-verify's and receipt-reuse's receipt-check pass all eight expectation flags; and the Sigstore identity is pinned to this workflow on refs/heads/main. The reuse-enabled consumer example (#255) triggers only on pull_request_target and repository_dispatch (types [nexus-core-precheck]); its reuse, run and verify jobs carry exact conditions whose pull-request arm includes the same-repository guard and whose dispatch arm requires the default-branch ref, and receipt-verify is skipped only when the reuse job succeeded with reused == 'true'. Negative controls feed mutated workflow/action text to the same checkers and expect failure.",
+        "SECURITY.md 'PR gate': the workflow triggers only on pull_request_target; both the run and verify jobs carry the same-repository guard head.repo.full_name == github.repository (never head.repo.fork == false); issue-check runs with --require-trusted-config; receipt-verify's receipt-check pass all eight expectation flags; and the Sigstore identity is pinned to this workflow on refs/heads/main. The dispatch-enabled consumer example (#255) triggers only on pull_request_target and repository_dispatch (types [nexus-core-precheck]); its run and verify jobs carry exact conditions whose pull-request arm includes the same-repository guard and whose dispatch arm requires the default-branch ref. Negative controls feed mutated workflow/action text to the same checkers and expect failure.",
         (
             "SECURITY.md#Threat Model & Trust Boundaries",
             "docs/GITHUB_REPOSITORY_CHECK.md#Why fork pull requests are excluded",
             ".github/workflows/nexus-core-issue-completion.yml",
             ".github/actions/issue-gate/action.yml",
             ".github/actions/receipt-verify/action.yml",
-            ".github/actions/receipt-reuse/action.yml",
             "docs/examples/nexus-core-issue-completion.consumer.yml",
         ),
         (
@@ -904,7 +903,7 @@ CASES: tuple[GoldenCase, ...] = (
         "PR gate token exposure matches SECURITY.md",
         "compatibility",
         "normal",
-        "SECURITY.md 'PR gate' names every composite step that sees the GitHub token: in issue-gate the plain-Git candidate fetch (FETCH_TOKEN via an env-scoped http.extraheader, never written to .git/config) and issue-init/issue-check (GITHUB_TOKEN); in receipt-verify the artifact resolution and head-tree fetch; in receipt-reuse the prior-run lookup, the bare-repository lineage fetch, the Issue-state read and the artifact download. The set of token-referencing steps in each action equals that documented set, so drift fails.",
+        "SECURITY.md 'PR gate' names every composite step that sees the GitHub token: in issue-gate the plain-Git candidate fetch (FETCH_TOKEN via an env-scoped http.extraheader, never written to .git/config) and issue-init/issue-check (GITHUB_TOKEN); in receipt-verify the artifact resolution and head-tree fetch. The set of token-referencing steps in each action equals that documented set, so drift fails.",
         (
             "SECURITY.md#Threat Model & Trust Boundaries",
             "docs/GITHUB_REPOSITORY_CHECK.md#Candidate acquisition",

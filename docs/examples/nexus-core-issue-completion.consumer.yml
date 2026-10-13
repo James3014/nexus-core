@@ -1,28 +1,25 @@
 name: Nexus Core issue completion
 
-# Three-job consumer workflow with the early run and receipt reuse fast path
-# (Issue #255). Copy to .github/workflows/nexus-core-issue-completion.yml.
-# This file lives under docs/examples so it never runs in nexus-core itself;
-# nexus-core's own gate does not use reuse yet.
+# Two-job consumer workflow with the repository_dispatch early run (Issue #255).
+# Copy to .github/workflows/nexus-core-issue-completion.yml.
+# This file lives under docs/examples so it never runs in nexus-core itself.
 #
 # - repository_dispatch (type 'nexus-core-precheck', client_payload
 #   {"head_sha": "<40-hex>", "issue_number": <N>}) runs the heavy check early on
 #   the default branch; the head must be the tip of a branch of this repository.
 #   Sending it needs only 'contents: write'.
-# - On a pull request, 'reuse' accepts that signed receipt only when it is
-#   provably equivalent; otherwise 'run' does the full check.
-# - 'verify' is the required check: it passes only on a successful reuse with
-#   reused == 'true', on a receipt-verify that succeeded with verified == 'true',
-#   or (pull requests only) on receipt-verify's confirmed PR_ALREADY_CLOSED_SKIPPED.
+# - On a pull request, 'run' does the full check.
+# - 'verify' is the required check: it passes only on a receipt-verify that
+#   succeeded with verified == 'true', or (pull requests only) on receipt-verify's
+#   confirmed PR_ALREADY_CLOSED_SKIPPED.
 # Requires container isolation ([isolation] mode = "container") in the
 # repository's committed .nexus-core/config.toml. See
 # docs/GITHUB_REPOSITORY_CHECK.md.
 #
 # Adapt: replace OWNER/REPO in expected-identity; keep the file name (or change
-# both expected-identity and workflow-path to the new name); replace every
-# 0000...0000 placeholder with the same full 40-hex commit sha of
-# James3014/nexus-core (pin; never a tag/branch); list any other file your
-# verdict depends on under equivalence-paths.
+# expected-identity to the new name); replace every 0000...0000 placeholder with
+# the same full 40-hex commit sha of James3014/nexus-core (pin; never a
+# tag/branch).
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
@@ -39,39 +36,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  reuse:
-    name: Nexus Core receipt reuse
-    # Pull requests only, same-repository branches only (see the 'run' job).
-    if: github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
-      issues: read
-    outputs:
-      reused: ${{ steps.reuse.outputs.reused }}
-      reason: ${{ steps.reuse.outputs.reason }}
-    steps:
-      - name: Reuse signed precheck receipt
-        id: reuse
-        uses: James3014/nexus-core/.github/actions/receipt-reuse@0000000000000000000000000000000000000000  # pin: full 40-hex nexus-core commit
-        with:
-          workflow-path: .github/workflows/nexus-core-issue-completion.yml
-          github-repository: ${{ github.repository }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          default-branch: ${{ github.event.repository.default_branch }}
-          nexus-certify-ref: "0000000000000000000000000000000000000000"  # same sha
-
   run:
     name: Nexus Core issue run
-    needs: reuse
     # Same-repository branches only. Do not add `head.repo.fork == false`: when the
     # repository is itself a fork, that clause is true for every branch and skips the gate.
-    # Pull requests: only when the reuse job did not succeed with reused == 'true'.
-    # Dispatch: always (on the default branch; issue-gate re-asserts the ref).
-    if: (!cancelled()) && ((github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && !(needs.reuse.result == 'success' && needs.reuse.outputs.reused == 'true')) || (github.event_name == 'repository_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
+    # Dispatch: on the default branch only (issue-gate re-asserts the ref).
+    if: (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'repository_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -96,7 +66,7 @@ jobs:
 
   verify:
     name: Nexus Core issue completion   # the required status check
-    needs: [reuse, run]
+    needs: run
     if: always() && ((github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'repository_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -107,7 +77,6 @@ jobs:
     steps:
       - name: Verify signed receipt
         id: verify
-        if: github.event_name == 'repository_dispatch' || needs.reuse.result != 'success' || needs.reuse.outputs.reused != 'true'
         uses: James3014/nexus-core/.github/actions/receipt-verify@0000000000000000000000000000000000000000  # pin: same sha
         with:
           artifact-name: ${{ needs.run.outputs.artifact-name }}
@@ -126,30 +95,22 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REUSE_RESULT: ${{ needs.reuse.result }}
-          REUSED: ${{ needs.reuse.outputs.reused }}
-          REUSE_REASON: ${{ needs.reuse.outputs.reason }}
           VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           VERIFIED: ${{ steps.verify.outputs.verified }}
           VERIFY_RESULT: ${{ steps.verify.outputs.outcome }}
         run: |
           set -euo pipefail
-          # Pass only on (a) a reuse job that succeeded with reused == 'true' (pull
-          # requests only) or (b) a receipt-verify step that succeeded with verified == 'true'.
-          if [ "$EVENT_NAME" = "pull_request_target" ] && [ "$REUSE_RESULT" = "success" ] && [ "$REUSED" = "true" ]; then
-            echo "NEXUS_CORE_GATE: PASS via reused signed precheck receipt"
-            exit 0
-          fi
+          # Pass only on (a) a receipt-verify step that succeeded with verified == 'true'.
           if [ "$VERIFY_OUTCOME" = "success" ] && [ "$VERIFIED" = "true" ]; then
             echo "NEXUS_CORE_GATE: PASS via verified receipt from this run"
             exit 0
           fi
-          # (c) Pull requests only: receipt-verify confirmed the live PR was merged at this
+          # (b) Pull requests only: receipt-verify confirmed the live PR was merged at this
           # exact head before the gate ran (#250 neutral skip, not completion evidence).
           # Dispatch has no pull request, so a skip there never passes.
           if [ "$EVENT_NAME" = "pull_request_target" ] && [ "$VERIFY_OUTCOME" = "success" ] && [ "$VERIFY_RESULT" = "PR_ALREADY_CLOSED_SKIPPED" ]; then
             echo "NEXUS_CORE_GATE: NEUTRAL PR_ALREADY_CLOSED_SKIPPED (merged at this head before the gate ran)"
             exit 0
           fi
-          echo "NEXUS_CORE_GATE: FAIL (reuse=${REUSE_RESULT}/${REUSED:-}/${REUSE_REASON:-}, verify=${VERIFY_OUTCOME}/${VERIFIED:-}/${VERIFY_RESULT:-})" >&2
+          echo "NEXUS_CORE_GATE: FAIL (verify=${VERIFY_OUTCOME}/${VERIFIED:-}/${VERIFY_RESULT:-})" >&2
           exit 1

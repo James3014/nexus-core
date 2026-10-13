@@ -22,14 +22,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "nexus-core-issue-completion.yml"
 ISSUE_GATE = REPO_ROOT / ".github" / "actions" / "issue-gate" / "action.yml"
 RECEIPT_VERIFY = REPO_ROOT / ".github" / "actions" / "receipt-verify" / "action.yml"
-RECEIPT_REUSE = REPO_ROOT / ".github" / "actions" / "receipt-reuse" / "action.yml"
-# Issue #255: the reuse-enabled consumer layout. It is an example (never run in this
-# repository); nexus-core's own gate keeps the two-job layout above.
+# Issue #255: the repository_dispatch-enabled consumer layout. It is an example (never run
+# in this repository).
 CONSUMER_EXAMPLE = REPO_ROOT / "docs" / "examples" / "nexus-core-issue-completion.consumer.yml"
 
 SAME_REPO_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
 GATED_JOBS = ("run", "verify")
-CONSUMER_GATED_JOBS = ("reuse", "run", "verify")
+CONSUMER_GATED_JOBS = ("run", "verify")
 CONSUMER_PIN = "0" * 40
 CONSUMER_IDENTITY = (
     "https://github.com/OWNER/REPO/.github/workflows/"
@@ -49,21 +48,11 @@ DISPATCH_GUARD = (
     f"github.event_name == '{DISPATCH_TRIGGER}' && github.ref == "
     "format('refs/heads/{0}', github.event.repository.default_branch)"
 )
-REUSED_OK = "needs.reuse.result == 'success' && needs.reuse.outputs.reused == 'true'"
 # Exact job conditions: any widening (an extra '||' arm, a dropped guard) is drift.
 EXPECTED_JOB_IFS = {
-    "reuse": f"{PR_EVENT} && {SAME_REPO_GUARD}",
-    "run": (
-        f"(!cancelled()) && (({PR_EVENT} && {SAME_REPO_GUARD} && !({REUSED_OK})) "
-        f"|| ({DISPATCH_GUARD}))"
-    ),
+    "run": f"({PR_EVENT} && {SAME_REPO_GUARD}) || ({DISPATCH_GUARD})",
     "verify": f"always() && (({PR_EVENT} && {SAME_REPO_GUARD}) || ({DISPATCH_GUARD}))",
 }
-# receipt-verify is skipped only when the reuse job succeeded with reused == 'true'.
-VERIFY_STEP_IF = (
-    f"github.event_name == '{DISPATCH_TRIGGER}' || needs.reuse.result != 'success' "
-    "|| needs.reuse.outputs.reused != 'true'"
-)
 EXPECTED_IDENTITY = (
     "https://github.com/James3014/nexus-core/.github/workflows/"
     "nexus-core-issue-completion.yml@refs/heads/main"
@@ -92,12 +81,6 @@ TOKEN_STEPS = {
         "Resolve exact producer artifact",
         "Confirm skipped PR merged at this head",
         "Resolve expected head tree",
-    },
-    RECEIPT_REUSE: {
-        "Find prior signed receipt for this head",
-        "Check config lineage and trust-file equivalence",
-        "Check Issue is still open",
-        "Download prior receipt artifact",
     },
 }
 _TOKEN_REFERENCE = re.compile(r"github\.token|GITHUB_TOKEN|GH_TOKEN|secrets\.")
@@ -236,7 +219,7 @@ def workflow_violations(text: str) -> list[str]:
 
 
 def consumer_workflow_violations(text: str) -> list[str]:
-    """Invariants of the reuse-enabled consumer example (Issue #255)."""
+    """Invariants of the dispatch-enabled consumer example (Issue #255)."""
     violations: list[str] = []
     on_block = _top_level_block(text, "on")
     triggers = set(re.findall(r"^  ([A-Za-z_]+):", on_block, flags=re.MULTILINE))
@@ -288,23 +271,13 @@ def consumer_workflow_violations(text: str) -> list[str]:
         )
     if _consumer_action("issue-gate") not in _uncommented(jobs.get("run", "")):
         violations.append("run job must use the trusted issue-gate action")
-    if _consumer_action("receipt-reuse") not in _uncommented(jobs.get("reuse", "")):
-        violations.append("reuse job must use the trusted receipt-reuse action")
-    if not re.search(r"(?m)^    needs: \[reuse, run\]\s*$", verify):
-        violations.append("receipt authority: verify job must need exactly [reuse, run]")
-    if not re.search(r"(?m)^    needs: reuse\s*$", jobs.get("run", "")):
-        violations.append("run job must need reuse")
+    if not re.search(r"(?m)^    needs: run\s*$", verify):
+        violations.append("receipt authority: verify job must need exactly run")
     try:
-        verify_if = _step_if(_workflow_step(verify, "Verify signed receipt"))
         decide = _workflow_step(verify, "Decide required check")
     except AssertionError as error:
         violations.append(f"receipt authority: {error}")
     else:
-        if verify_if != VERIFY_STEP_IF:
-            violations.append(
-                "receipt authority: receipt-verify may be skipped only when reuse succeeded "
-                f"with reused == 'true' (if: {VERIFY_STEP_IF!r}), found {verify_if!r}"
-            )
         if _step_if(decide) != "always()":
             violations.append("receipt authority: the final decision step must run always()")
     return violations
@@ -405,10 +378,6 @@ def test_receipt_verify_passes_all_eight_expectations() -> None:
     assert receipt_verify_violations(_read(RECEIPT_VERIFY)) == []
 
 
-def test_receipt_reuse_passes_all_eight_expectations() -> None:
-    assert receipt_verify_violations(_read(RECEIPT_REUSE)) == []
-
-
 def test_token_exposure_matches_security_documentation() -> None:
     for path in TOKEN_STEPS:
         assert token_violations(path, _read(path)) == []
@@ -495,30 +464,19 @@ def test_negative_control_consumer_removed_fork_guard_is_detected() -> None:
     assert any("'run'" in v and "same-repository guard" in v for v in violations), violations
     assert any("'run'" in v and "head.repo.fork" in v for v in violations), violations
 
-    reuse_if = f"    if: {EXPECTED_JOB_IFS['reuse']}\n"
-    mutated = text.replace(reuse_if, reuse_if.replace(f" && {SAME_REPO_GUARD}", ""), 1)
-    assert mutated != text
-    violations = consumer_workflow_violations(mutated)
-    assert any("'reuse'" in v and "same-repository guard" in v for v in violations), violations
 
-
-def test_negative_control_consumer_widened_or_reuse_bypass_conditions_are_detected() -> None:
+def test_negative_control_consumer_widened_conditions_are_detected() -> None:
     text = _read(CONSUMER_EXAMPLE)
     verify_if = f"    if: {EXPECTED_JOB_IFS['verify']}\n"
     mutated = text.replace(verify_if, verify_if.rstrip("\n") + " || true\n", 1)
     assert any(v.startswith("job condition:") and "'verify'" in v for v in consumer_workflow_violations(mutated))
-    # Running 'run' even when reused, or skipping it whenever reuse merely produced output.
     run_if = f"    if: {EXPECTED_JOB_IFS['run']}\n"
-    mutated = text.replace(run_if, run_if.replace("needs.reuse.result == 'success' && ", ""), 1)
-    assert any(v.startswith("job condition:") and "'run'" in v for v in consumer_workflow_violations(mutated))
-    # Skipping receipt-verify without requiring the reuse job to have succeeded.
-    mutated = text.replace(
-        f"        if: {VERIFY_STEP_IF}\n        uses: James3014/nexus-core/.github/actions/receipt-verify@",
-        "        if: needs.reuse.outputs.reused != 'true'\n        uses: James3014/nexus-core/.github/actions/receipt-verify@",
-        1,
-    )
+    mutated = text.replace(run_if, run_if.rstrip("\n") + " || true\n", 1)
     assert mutated != text
-    assert any("receipt-verify may be skipped" in v for v in consumer_workflow_violations(mutated))
+    assert any(v.startswith("job condition:") and "'run'" in v for v in consumer_workflow_violations(mutated))
+    mutated = text.replace("    needs: run\n", "", 1)
+    assert mutated != text
+    assert any("verify job must need exactly run" in v for v in consumer_workflow_violations(mutated))
 
 
 def test_negative_control_consumer_trigger_and_identity_mutations_are_detected() -> None:
@@ -541,7 +499,7 @@ def test_negative_control_missing_expectations_are_detected() -> None:
     assert mutated != issue_gate
     assert issue_gate_violations(mutated)
 
-    for action in (RECEIPT_VERIFY, RECEIPT_REUSE):
+    for action in (RECEIPT_VERIFY,):
         original = _read(action)
         for flag in RECEIPT_CHECK_EXPECTATIONS:
             line = f"          {flag}"
