@@ -158,6 +158,8 @@ The workflow has two jobs:
 - **`run`** uses `James3014/nexus-core/.github/actions/issue-gate@<sha>`. It installs the pinned tool, then runs the verifier from the base-branch config inside a container. Then it signs the receipt with Sigstore keyless signing and uploads it. It needs `id-token: write`.
 - **`verify`** uses `James3014/nexus-core/.github/actions/receipt-verify@<sha>`. It has no write access and sees no pull request code. It checks the signature, then checks that the receipt matches this exact head, this base config and this Issue.
 
+Optional fast path (#255): the same workflow can also run on `repository_dispatch` on the default branch when an agent reports completion, and a third job, **`reuse`** (`receipt-reuse@<sha>`), lets the pull request reuse that signed receipt when it is provably equivalent; otherwise the full run decides. Copy [`docs/examples/nexus-core-issue-completion.consumer.yml`](docs/examples/nexus-core-issue-completion.consumer.yml) to adopt it; Nexus Core's own gate does not use reuse yet.
+
 The workflow must run on `pull_request_target`, and it skips pull requests from forks. Full details: [`docs/GITHUB_REPOSITORY_CHECK.md`](docs/GITHUB_REPOSITORY_CHECK.md).
 
 Your config needs container isolation for GitHub-hosted runners. See [Config reference](#config-reference).
