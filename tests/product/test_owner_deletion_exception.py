@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,23 @@ from product.clients.local_golden_path import (
     validate_verification_receipt,
 )
 
-pytestmark = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="needs ssh-keygen")
+
+def _ssh_keygen_usable() -> bool:
+    """ssh-keygen exits 255 when the uid has no passwd entry (e.g. container sandboxes)."""
+
+    if shutil.which("ssh-keygen") is None:
+        return False
+    with tempfile.TemporaryDirectory() as directory:
+        probe = subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(Path(directory) / "probe")],
+            capture_output=True,
+        )
+    return probe.returncode == 0
+
+
+pytestmark = pytest.mark.skipif(
+    not _ssh_keygen_usable(), reason="needs a usable ssh-keygen (uid with a passwd entry)"
+)
 
 NAMESPACE = "nexus-core-deletion@v1"
 
