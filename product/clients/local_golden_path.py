@@ -2706,9 +2706,35 @@ def _validate_verification_receipt_payload(
                     reasons.append("GIT_MANIFEST_MISMATCH")
             except (LocalCheckError, KeyError, TypeError):
                 reasons.append("GIT_MANIFEST_MISMATCH")
+    elif request is None and _is_pre_request_failed_closed(payload):
+        # A check that failed closed before any Core request was built (protected
+        # path, deletion policy, config drift, ...) writes a well-formed receipt
+        # without inputs.request. It is still never valid; name it for what it is
+        # instead of calling it malformed.
+        reasons.append(RECEIPT_FAILED_CLOSED_BEFORE_CORE_REQUEST)
     else:
         reasons.append("MALFORMED_RECEIPT")
     return {"valid": not reasons, "reason_codes": sorted(set(reasons))}
+
+
+RECEIPT_FAILED_CLOSED_BEFORE_CORE_REQUEST = "RECEIPT_FAILED_CLOSED_BEFORE_CORE_REQUEST"
+
+
+def _is_pre_request_failed_closed(payload: Mapping[str, Any]) -> bool:
+    """Exact shape written by _raise_with_receipt: FAILED_CLOSED, one reason, no Core call."""
+
+    outcome = payload.get("outcome")
+    if not isinstance(outcome, dict):
+        return False
+    outcome = cast("dict[str, Any]", outcome)
+    reason_codes = outcome.get("reason_codes")
+    return (
+        outcome.get("status") == "FAILED_CLOSED"
+        and isinstance(reason_codes, list)
+        and len(cast("list[Any]", reason_codes)) == 1
+        and all(isinstance(code, str) and code for code in cast("list[Any]", reason_codes))
+        and payload.get("core_response") is None
+    )
 
 
 def validate_verification_receipt(
