@@ -107,6 +107,8 @@ Issue body: <!-- NEXUS_CORE_EVIDENCE_UNIVERSE: sha256:<config hash> -->
 
 Paste that marker line into the Issue body. The command is read-only. It prints a warning on stderr if the config is not yet committed on the base branch, because the hash changes once it is.
 
+The default is fail closed: without this exact line the Issue stays `UNVERIFIABLE`. A repository may instead opt in with `--evidence-universe trusted-config` on `issue-init` and `issue-check` (action input `evidence-universe`), which derives the universe from the trusted base config so no marker is needed; it gives up the step where the Issue author re-acknowledges the current verification contract. See [GitHub Repository Gate](docs/GITHUB_REPOSITORY_CHECK.md#opt-in-trusted-config-evidence-universe-no-issue-marker).
+
 If the work advances a pinned `[[materials]]` identity (for example a dependency commit), also authorize that change in the Issue:
 
 ```bash

@@ -27,6 +27,13 @@ inputs:
     description: "Trusted local source directory (used when nexus-certify-source is 'path'; must NOT be the candidate)."
     required: false
     default: ""
+  evidence-universe:
+    description: >-
+      'issue-marker' (default, fail closed) requires the Issue body to carry the
+      NEXUS_CORE_EVIDENCE_UNIVERSE marker. 'trusted-config' derives the evidence universe
+      from the trusted base config (no Issue marker; gives up the agent re-acknowledgement step).
+    required: false
+    default: issue-marker
   python-version:
     description: Python version installed by uv.
     required: false
@@ -203,9 +210,10 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         CANDIDATE: ${{ inputs.candidate-path }}
         ISSUE: ${{ steps.resolve.outputs.issue-number }}
+        EVIDENCE_UNIVERSE: ${{ inputs.evidence-universe }}
       run: |
         set -euo pipefail
-        nexus-certify issue-init --repo "$CANDIDATE" --issue "$ISSUE"
+        nexus-certify issue-init --repo "$CANDIDATE" --issue "$ISSUE" --evidence-universe "$EVIDENCE_UNIVERSE"
 
     - name: Verify exact Issue-bound candidate
       shell: bash
@@ -213,9 +221,10 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         CANDIDATE: ${{ inputs.candidate-path }}
         ISSUE: ${{ steps.resolve.outputs.issue-number }}
+        EVIDENCE_UNIVERSE: ${{ inputs.evidence-universe }}
       run: |
         set -euo pipefail
-        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --require-trusted-config
+        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --evidence-universe "$EVIDENCE_UNIVERSE" --require-trusted-config
 
     - name: Sign newest receipt (Sigstore keyless)
       id: sign

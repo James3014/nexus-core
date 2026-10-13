@@ -191,3 +191,46 @@ def test_markers_material_transition_json_and_unknown_material(pin_repo, capsys)
 def test_markers_without_transition_flag_is_unchanged(pin_repo, capsys) -> None:
     assert cli.main(["markers", "--repo", str(pin_repo)]) == 0
     assert "NEXUS_CORE_MATERIAL_TRANSITION" not in capsys.readouterr().out
+
+
+def test_issue_cli_evidence_universe_flag_parsing(repo, monkeypatch, capsys) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_init(*args, **kwargs):
+        seen["init"] = kwargs.get("evidence_universe")
+        raise cli.CertifyCLIError("stop", exit_code=2)
+
+    monkeypatch.setattr(cli, "init_issue_binding", fake_init)
+    base = ["issue-init", "--repo", str(repo), "--issue", "85"]
+    cli.main(base)
+    assert seen["init"] == "issue-marker"
+    cli.main([*base, "--evidence-universe", "trusted-config"])
+    assert seen["init"] == "trusted-config"
+    with pytest.raises(SystemExit):
+        cli.main([*base, "--evidence-universe", "bogus"])
+
+    def fake_check(*args, **kwargs):
+        seen["check"] = kwargs.get("evidence_universe")
+        raise cli.CertifyCLIError("stop", exit_code=2)
+
+    monkeypatch.setattr(cli, "check_issue", fake_check)
+    cbase = ["issue-check", "--repo", str(repo), "--issue", "85"]
+    cli.main(cbase)
+    assert seen["check"] == "issue-marker"
+    cli.main([*cbase, "--evidence-universe", "trusted-config"])
+    assert seen["check"] == "trusted-config"
+
+
+def test_issue_init_trusted_config_has_no_marker_hint(repo, monkeypatch, capsys) -> None:
+    _patch_reader(monkeypatch, "Change V")
+    code = cli.main([
+        "issue-init",
+        "--repo",
+        str(repo),
+        "--issue",
+        "85",
+        "--evidence-universe",
+        "trusted-config",
+    ])
+    assert code == 0
+    assert "hint:" not in capsys.readouterr().out

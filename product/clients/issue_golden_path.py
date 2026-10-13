@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -39,6 +40,9 @@ ISSUE_EVIDENCE_MARKER_PREFIX = gate_diagnostics.EVIDENCE_MARKER_PREFIX
 ISSUE_EVIDENCE_MARKER_SUFFIX = gate_diagnostics.EVIDENCE_MARKER_SUFFIX
 ISSUE_MATERIAL_TRANSITION_TOKEN = "NEXUS_CORE_MATERIAL_TRANSITION"
 ISSUE_MATERIAL_TRANSITION_SOURCE = "issue-contract-marker"
+EVIDENCE_UNIVERSE_SOURCE_MARKER = "issue-contract-marker"
+EVIDENCE_UNIVERSE_SOURCE_TRUSTED_CONFIG = "trusted-base-config"
+EVIDENCE_UNIVERSE_MODES = ("issue-marker", "trusted-config")
 _MATERIAL_TRANSITION_RE = re.compile(
     r"<!-- NEXUS_CORE_MATERIAL_TRANSITION: (\S+) (\S+) -> (\S+) -->"
 )
@@ -346,6 +350,31 @@ def _evidence_sufficiency_binding(
     }
 
 
+def _trusted_config_evidence_binding(repo: Path, issue_contract_hash: str) -> dict[str, Any]:
+    return {
+        **_verification_contract_identity(repo),
+        "source": EVIDENCE_UNIVERSE_SOURCE_TRUSTED_CONFIG,
+        "issue_contract_hash": issue_contract_hash,
+    }
+
+
+def _check_evidence_universe_mode(mode: str) -> None:
+    if mode not in EVIDENCE_UNIVERSE_MODES:
+        raise LocalCheckError("INVALID_EVIDENCE_UNIVERSE_MODE", str(mode))
+
+
+def _advisory_marker_warning(contract: Mapping[str, Any], current_hash: str) -> str | None:
+    """In trusted-config mode a bad or stale marker is advisory only (never an error)."""
+
+    try:
+        declared = _issue_evidence_universe_marker(contract)
+    except LocalCheckError as exc:
+        return f"ignoring malformed NEXUS_CORE_EVIDENCE_UNIVERSE marker ({exc.detail})"
+    if declared is not None and declared != current_hash:
+        return "ignoring stale NEXUS_CORE_EVIDENCE_UNIVERSE marker (not used in trusted-config mode)"
+    return None
+
+
 def _hash_without_binding(payload: Mapping[str, Any]) -> str:
     return canonical_hash({key: value for key, value in payload.items() if key != "binding_hash"})
 
@@ -371,7 +400,10 @@ def _validate_evidence_sufficiency(
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unsupported evidence sufficiency binding")
     if value.get("config_path") != f"{CONFIG_DIRECTORY}/{CONFIG_FILENAME}":
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "unexpected verification config path")
-    if value.get("source") != "issue-contract-marker":
+    if value.get("source") not in {
+        EVIDENCE_UNIVERSE_SOURCE_MARKER,
+        EVIDENCE_UNIVERSE_SOURCE_TRUSTED_CONFIG,
+    }:
         raise LocalCheckError("ISSUE_BINDING_MALFORMED", "invalid evidence sufficiency source")
     if value.get("issue_contract_hash") != issue_contract_hash:
         raise LocalCheckError(
@@ -423,7 +455,9 @@ def init_issue_binding(
     github_repo: str | None = None,
     force: bool = False,
     issue_reader: IssueReader | None = None,
+    evidence_universe: str = "issue-marker",
 ) -> Path:
+    _check_evidence_universe_mode(evidence_universe)
     if issue_number < 1:
         raise LocalCheckError("INVALID_ISSUE_NUMBER", str(issue_number))
     repo = _repo_root(path)
@@ -439,7 +473,16 @@ def init_issue_binding(
     if target.exists() and not force:
         raise LocalCheckError("ISSUE_BINDING_EXISTS", str(target))
     issue_contract_hash = canonical_hash(contract)
-    declared_config_identity = _issue_evidence_universe_marker(contract)
+    trusted = evidence_universe == "trusted-config"
+    declared_config_identity: str | None = None
+    if trusted:
+        warning = _advisory_marker_warning(
+            contract, _verification_contract_identity(repo)["config_hash"]
+        )
+        if warning is not None:
+            print(f"warning: {warning}", file=sys.stderr)
+    else:
+        declared_config_identity = _issue_evidence_universe_marker(contract)
     payload = {
         "schema": ISSUE_BINDING_SCHEMA,
         "version": 2,
@@ -450,7 +493,9 @@ def init_issue_binding(
         "issue_contract_hash": issue_contract_hash,
         "github_updated_at": raw.get("updated_at"),
         "evidence_sufficiency": (
-            _evidence_sufficiency_binding(
+            _trusted_config_evidence_binding(repo, issue_contract_hash)
+            if trusted
+            else _evidence_sufficiency_binding(
                 repo,
                 issue_contract_hash,
                 declared_config_identity=declared_config_identity,
@@ -484,7 +529,10 @@ def check_issue(
     issue_reader: IssueReader | None = None,
     require_trusted_config: bool = False,
     expect_config_commit: str | None = None,
+    evidence_universe: str = "issue-marker",
 ) -> dict[str, Any]:
+    _check_evidence_universe_mode(evidence_universe)
+    trusted = evidence_universe == "trusted-config"
     repo = _repo_root(path)
     binding = load_issue_binding(repo, issue_number)
     github_repo = _resolve_github_repo(repo, binding["github_repository"])
@@ -497,12 +545,33 @@ def check_issue(
             "ISSUE_REBIND_REQUIRED",
             f"{github_repo}#{issue_number} contract changed since binding",
         )
-    declared_config_identity = _issue_evidence_universe_marker(current)
     sufficiency = (
         binding.get("evidence_sufficiency")
         if binding.get("schema") == ISSUE_BINDING_SCHEMA
         else None
     )
+    bound_source = sufficiency["source"] if sufficiency is not None else None
+    if trusted:
+        if sufficiency is not None and bound_source != EVIDENCE_UNIVERSE_SOURCE_TRUSTED_CONFIG:
+            raise LocalCheckError(
+                "ISSUE_EVIDENCE_UNIVERSE_MODE_MISMATCH",
+                "binding was created in issue-marker mode; re-run issue-init --force "
+                "with --evidence-universe trusted-config",
+            )
+        declared_config_identity = sufficiency["config_hash"] if sufficiency is not None else None
+        warning = _advisory_marker_warning(
+            current, _verification_contract_identity(repo)["config_hash"]
+        )
+        if warning is not None:
+            print(f"warning: {warning}", file=sys.stderr)
+    else:
+        if bound_source == EVIDENCE_UNIVERSE_SOURCE_TRUSTED_CONFIG:
+            raise LocalCheckError(
+                "ISSUE_EVIDENCE_UNIVERSE_MODE_MISMATCH",
+                "binding was created in trusted-config mode; "
+                "pass --evidence-universe trusted-config",
+            )
+        declared_config_identity = _issue_evidence_universe_marker(current)
     sufficiency_status = "UNBOUND"
     stale_detail: str | None = None
     stale_remediation: str | None = None
@@ -516,13 +585,22 @@ def check_issue(
         if sufficiency["config_hash"] != current_verification_contract["config_hash"]:
             sufficiency_status = "STALE"
             current_hash = current_verification_contract["config_hash"]
-            stale_detail = (
-                "verification contract changed since Issue evidence sufficiency was bound; "
-                f"expected Issue body line: {gate_diagnostics.evidence_marker_line(current_hash)}"
-            )
-            stale_remediation = gate_diagnostics.stale_evidence_universe(
-                issue_number, current_hash
-            )
+            if trusted:
+                stale_detail = (
+                    "verification contract changed since the trusted-config evidence "
+                    "universe was bound; re-run issue-init --force "
+                    "--evidence-universe trusted-config"
+                )
+                stale_remediation = gate_diagnostics.stale_trusted_config_universe(issue_number)
+            else:
+                stale_detail = (
+                    "verification contract changed since Issue evidence sufficiency was bound; "
+                    "expected Issue body line: "
+                    f"{gate_diagnostics.evidence_marker_line(current_hash)}"
+                )
+                stale_remediation = gate_diagnostics.stale_evidence_universe(
+                    issue_number, current_hash
+                )
         else:
             sufficiency_status = "BOUND"
 
@@ -542,6 +620,7 @@ def check_issue(
         "github_repository": github_repo,
         "issue_contract_hash": binding["issue_contract_hash"],
         "evidence_universe": sufficiency_status,
+        **({"evidence_universe_source": bound_source} if trusted and bound_source else {}),
         "claim_ceiling": (
             "ISSUE_VERIFIED_NOT_RELEASED"
             if sufficiency_status == "BOUND"

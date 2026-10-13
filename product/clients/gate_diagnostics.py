@@ -49,6 +49,16 @@ def stale_evidence_universe(issue_number: int | None, config_hash: str) -> str:
     )
 
 
+def stale_trusted_config_universe(issue_number: int | None) -> str:
+    target = f"Issue #{issue_number}" if issue_number is not None else "the Issue"
+    return (
+        f"{ISSUE_EVIDENCE_UNIVERSE_STALE}: the verification contract changed since {target} was "
+        "bound in trusted-config mode (no Issue marker is used); re-run "
+        "'nexus-certify issue-init --force --evidence-universe trusted-config', "
+        "then re-run the gate"
+    )
+
+
 def malformed_evidence_universe(issue_number: int, config_hash: str) -> str:
     return (
         f"{ISSUE_EVIDENCE_UNIVERSE_MALFORMED}: keep exactly one NEXUS_CORE_EVIDENCE_UNIVERSE "
