@@ -2524,7 +2524,7 @@ def _validate_verification_receipt_payload(
     bound: dict[str, Any] | None = payload.get("issue_verification")
     bound_transitions: list[Any] = bound.get("material_transitions", []) if isinstance(bound, dict) else []
     if isinstance(bound, dict) and bound.get("evidence_universe_source") == "trusted-base-config":
-        universe_source = payload.get("config_source")
+        universe_source: dict[str, Any] | None = payload.get("config_source")
         if not isinstance(universe_source, dict) or universe_source.get("kind") != "base-ref":
             reasons.append("EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG")
     if transitions or bound_transitions:
