@@ -1564,6 +1564,10 @@ _ISSUE_VERIFICATION_KEYS = {
 }
 
 
+_ISSUE_OPTIONAL_VERDICT_KEYS = {"material_transitions", "evidence_universe_source"}
+_ISSUE_UNIVERSE_SOURCES = {"trusted-base-config"}
+
+
 def _issue_status_from(repo_status: str, universe: Any) -> str:
     if repo_status == "VERIFIED":
         return "VERIFIED" if universe == "BOUND" else "UNVERIFIABLE"
@@ -1597,6 +1601,8 @@ def derive_issue_verification(
         "github_repository": issue_input["github_repository"],
         "issue_contract_hash": issue_input["issue_contract_hash"],
     }
+    if issue_input.get("evidence_universe_source"):
+        verdict["evidence_universe_source"] = issue_input["evidence_universe_source"]
     if issue_input.get("material_transitions"):
         verdict["material_transitions"] = [dict(item) for item in issue_input["material_transitions"]]
     return verdict
@@ -1605,10 +1611,14 @@ def derive_issue_verification(
 def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
     if (
         not isinstance(value, dict)
-        or set(cast("dict[str, Any]", value)) - {"material_transitions"} != _ISSUE_VERIFICATION_KEYS
+        or set(cast("dict[str, Any]", value)) - _ISSUE_OPTIONAL_VERDICT_KEYS != _ISSUE_VERIFICATION_KEYS
     ):
         return False
     value = cast("dict[str, Any]", value)
+    if "evidence_universe_source" in value and (
+        value["evidence_universe_source"] not in _ISSUE_UNIVERSE_SOURCES
+    ):
+        return False
     if "material_transitions" in value:
         try:
             if not value["material_transitions"] or _normalize_material_transitions(
@@ -2513,6 +2523,10 @@ def _validate_verification_receipt_payload(
         reasons.append("MALFORMED_RECEIPT")
     bound: dict[str, Any] | None = payload.get("issue_verification")
     bound_transitions: list[Any] = bound.get("material_transitions", []) if isinstance(bound, dict) else []
+    if isinstance(bound, dict) and bound.get("evidence_universe_source") == "trusted-base-config":
+        universe_source: dict[str, Any] | None = payload.get("config_source")
+        if not isinstance(universe_source, dict) or universe_source.get("kind") != "base-ref":
+            reasons.append("EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG")
     if transitions or bound_transitions:
         if not isinstance(bound, dict) or bound_transitions != transitions:
             reasons.append("MATERIAL_TRANSITION_UNBOUND")

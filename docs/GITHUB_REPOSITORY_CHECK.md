@@ -63,6 +63,43 @@ These lines are diagnostics only; the marker must still match exactly. Since #24
 one merge behind passes, its subject diff is `merge-base..HEAD`, and the trusted
 config is still read from the current base tip.
 
+### Opt-in: trusted-config evidence universe (no Issue marker)
+
+The default is fail closed: an Issue without the exact `NEXUS_CORE_EVIDENCE_UNIVERSE`
+line is `UNVERIFIABLE`, and a stale or malformed line fails. A repository can opt in to a
+second mode in which the evidence universe is derived from the `.nexus-core/config.toml` committed on the base ref
+instead, so Issues need no hand-written marker:
+
+```bash
+nexus-certify issue-init  --issue <number> --evidence-universe trusted-config
+nexus-certify issue-check --issue <number> --evidence-universe trusted-config --require-trusted-config
+```
+
+In the `issue-gate` action, set the input `evidence-universe: trusted-config` (default
+`issue-marker`); both commands receive it through `env:`. Use the same mode for init and
+check: a binding created in one mode is refused (`ISSUE_EVIDENCE_UNIVERSE_MODE_MISMATCH`) by the other.
+
+The mode requires trusted config: `issue-init` refuses (`CONFIG_UNTRUSTED`) unless the effective
+config is committed on the base ref (a plain branch name; a worktree-only config or a revision
+expression such as `HEAD~1` is refused), and `issue-check` fails closed with
+`EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG` unless `--require-trusted-config` is given (it is
+not forced silently). Receipts claiming `trusted-base-config` are rejected by `receipt-verify`
+unless their `config_source.kind` is `base-ref`. A legacy schema-1 Issue binding carries no
+evidence-sufficiency binding, so in this mode it stays UNBOUND and its Issue is UNVERIFIABLE.
+
+In this mode the universe is bound to the verification contract hash of that base-ref config
+(recorded with `source = "trusted-base-config"`), so the Issue status follows the repository
+verification: `VERIFIED` exactly when the repository check is `VERIFIED`. A marker that is
+present but stale or malformed only prints a warning on stderr and is ignored. Receipts
+record `issue_verification.evidence_universe_source`; receipts without the key (every
+default-mode receipt) stay valid.
+
+What it gives up: in the default mode the Issue author (often an agent) must re-acknowledge
+the current verification contract by pasting a fresh marker whenever the base config changes.
+Trusted-config mode removes that step, so a base-config change is no longer re-acknowledged
+per Issue. The trust moves entirely to the base branch config and its review. Keep the
+default unless that trade is intended.
+
 ## Two jobs: run and verify
 
 The gate is two jobs, so that the required status check never rests on a bare

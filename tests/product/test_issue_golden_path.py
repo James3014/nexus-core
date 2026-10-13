@@ -989,3 +989,241 @@ def test_issue_check_rejects_binding_repository_that_differs_from_origin(
         check_issue(issue_repo, issue_number=85, issue_reader=spy)
     assert raised.value.reason_code == "GITHUB_REPOSITORY_MISMATCH"
     assert seen == []
+
+
+# --- opt-in trusted-config evidence universe -------------------------------------------------
+
+_TC = "trusted-config"
+
+
+def _trusted_reader(body: str = "Change VALUE", number: int = 85):
+    def reader(github_repo: str, issue_number: int) -> dict[str, object]:
+        return {**_issue(body=body), "number": number}
+
+    return reader
+
+
+def _tc_init(repo: Path, reader: Any, number: int = 85, **kwargs: Any) -> Path:
+    return init_issue_binding(
+        repo, issue_number=number, issue_reader=reader, evidence_universe=_TC, **kwargs
+    )
+
+
+def _tc_check(repo: Path, reader: Any, number: int = 85, **kwargs: Any) -> dict[str, Any]:
+    return check_issue(
+        repo,
+        issue_number=number,
+        issue_reader=reader,
+        evidence_universe=_TC,
+        require_trusted_config=True,
+        **kwargs,
+    )
+
+
+@pytest.fixture
+def trusted_repo(issue_repo: Path) -> Path:
+    """Config committed on main; the candidate change lives on a feature branch."""
+
+    _git(issue_repo, "add", ".nexus-core/config.toml")
+    _git(issue_repo, "commit", "-m", "config")
+    _git(issue_repo, "checkout", "-b", "feature")
+    return issue_repo
+
+
+def test_trusted_config_mode_without_marker_is_verified(trusted_repo: Path) -> None:
+    reader = _trusted_reader()
+    path = _tc_init(trusted_repo, reader)
+    binding = json.loads(path.read_text(encoding="utf-8"))
+    assert binding["evidence_sufficiency"]["source"] == "trusted-base-config"
+    result = _tc_check(trusted_repo, reader)
+    assert result["repository_evidence_status"] == "VERIFIED"
+    assert result["status"] == "VERIFIED"
+    assert result["issue_evidence_sufficiency_status"] == "BOUND"
+    assert result["claim_ceiling"] == "ISSUE_VERIFIED_NOT_RELEASED"
+
+
+def test_trusted_config_mode_stale_marker_warns_and_verifies(
+    trusted_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stale = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: sha256:" + "0" * 64 + " -->"
+    reader = _trusted_reader(f"Change VALUE\n\n{stale}")
+    _tc_init(trusted_repo, reader)
+    assert "stale NEXUS_CORE_EVIDENCE_UNIVERSE marker" in capsys.readouterr().err
+    result = _tc_check(trusted_repo, reader)
+    assert result["status"] == "VERIFIED"
+    assert "stale NEXUS_CORE_EVIDENCE_UNIVERSE marker" in capsys.readouterr().err
+
+
+def test_trusted_config_mode_malformed_marker_warns_and_verifies(
+    trusted_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reader = _trusted_reader("Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: nonsense -->")
+    _tc_init(trusted_repo, reader)
+    assert "malformed NEXUS_CORE_EVIDENCE_UNIVERSE marker" in capsys.readouterr().err
+    assert _tc_check(trusted_repo, reader)["status"] == "VERIFIED"
+
+
+def test_trusted_config_mode_follows_repository_verification(trusted_repo: Path) -> None:
+    reader = _trusted_reader()
+    _tc_init(trusted_repo, reader)
+    (trusted_repo / "other.py").write_text("X = 1\n", encoding="utf-8")
+    with pytest.raises(LocalCheckError) as raised:
+        _tc_check(trusted_repo, reader)
+    assert raised.value.reason_code == "FORBIDDEN_PATH"
+
+
+def test_trusted_config_binding_goes_stale_when_base_config_changes(trusted_repo: Path) -> None:
+    reader = _trusted_reader()
+    _tc_init(trusted_repo, reader)
+    # A new commit on the base branch changes the trusted verification contract.
+    _git(trusted_repo, "checkout", "main")
+    config = trusted_repo / ".nexus-core" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "timeout_seconds = 300", "timeout_seconds = 301"
+        ),
+        encoding="utf-8",
+    )
+    _git(trusted_repo, "add", ".nexus-core/config.toml")
+    _git(trusted_repo, "commit", "-m", "change base config")
+    _git(trusted_repo, "checkout", "feature")
+    with pytest.raises(LocalCheckError) as raised:
+        _tc_check(trusted_repo, reader)
+    assert raised.value.reason_code == issue_gp.ISSUE_EVIDENCE_STALE_REASON
+    assert "trusted-config" in (raised.value.remediation or "")
+
+
+def test_trusted_config_requires_trusted_config_flag_on_check(trusted_repo: Path) -> None:
+    reader = _trusted_reader()
+    _tc_init(trusted_repo, reader)
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(trusted_repo, issue_number=85, issue_reader=reader, evidence_universe=_TC)
+    assert raised.value.reason_code == "EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG"
+
+
+def test_trusted_config_init_refuses_worktree_only_config(issue_repo: Path) -> None:
+    # issue_repo's config is untracked: effective source kind is "worktree".
+    with pytest.raises(LocalCheckError) as raised:
+        _tc_init(issue_repo, _trusted_reader())
+    assert raised.value.reason_code == "CONFIG_UNTRUSTED"
+
+
+def test_trusted_config_init_refuses_revision_expression_base_ref(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.test")
+    _git(repo, "config", "user.name", "Test User")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/project.git")
+    (repo / "app.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    _git(repo, "commit", "-m", "one")
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "commit", "-am", "two")
+    init_repository(
+        repo,
+        base_ref="HEAD~1",
+        allowed_patterns=("app.py",),
+        verifier_command=(sys.executable, "-c", "raise SystemExit(0)"),
+    )
+    _git(repo, "add", ".nexus-core/config.toml")
+    _git(repo, "commit", "-m", "config")
+    with pytest.raises(LocalCheckError) as raised:
+        _tc_init(repo, _trusted_reader())
+    assert raised.value.reason_code == "CONFIG_UNTRUSTED"
+
+
+def test_default_mode_still_fails_without_marker_and_on_bad_markers(issue_repo: Path) -> None:
+    reader = _trusted_reader()
+    init_issue_binding(issue_repo, issue_number=85, issue_reader=reader)
+    result = check_issue(issue_repo, issue_number=85, issue_reader=reader)
+    assert result["issue_evidence_sufficiency_status"] == "UNBOUND"
+    assert result["status"] == "UNVERIFIABLE"
+    stale = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: sha256:" + "0" * 64 + " -->"
+    with pytest.raises(LocalCheckError) as raised:
+        init_issue_binding(
+            issue_repo,
+            issue_number=86,
+            issue_reader=_trusted_reader(f"x\n\n{stale}", 86),
+        )
+    assert raised.value.reason_code == issue_gp.ISSUE_EVIDENCE_STALE_REASON
+    with pytest.raises(LocalCheckError) as raised:
+        init_issue_binding(
+            issue_repo,
+            issue_number=87,
+            issue_reader=_trusted_reader("x\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: bad -->", 87),
+        )
+    assert raised.value.reason_code == "ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED"
+
+
+def test_mode_mismatch_between_init_and_check_fails_closed(trusted_repo: Path) -> None:
+    reader = _trusted_reader()
+    _tc_init(trusted_repo, reader)
+    with pytest.raises(LocalCheckError) as raised:
+        check_issue(trusted_repo, issue_number=85, issue_reader=reader)
+    assert raised.value.reason_code == "ISSUE_EVIDENCE_UNIVERSE_MODE_MISMATCH"
+    marker_reader = _bound_reader(trusted_repo)
+    init_issue_binding(trusted_repo, issue_number=85, issue_reader=marker_reader, force=True)
+    with pytest.raises(LocalCheckError) as raised:
+        _tc_check(trusted_repo, marker_reader)
+    assert raised.value.reason_code == "ISSUE_EVIDENCE_UNIVERSE_MODE_MISMATCH"
+
+
+def test_invalid_evidence_universe_mode_rejected(issue_repo: Path) -> None:
+    with pytest.raises(LocalCheckError) as raised:
+        init_issue_binding(
+            issue_repo,
+            issue_number=85,
+            issue_reader=_trusted_reader(),
+            evidence_universe="anything",
+        )
+    assert raised.value.reason_code == "INVALID_EVIDENCE_UNIVERSE_MODE"
+
+
+def test_trusted_config_receipt_round_trip_and_old_receipts_stay_valid(
+    trusted_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from product.clients.local_golden_path import validate_verification_receipt_payload
+
+    reader = _trusted_reader()
+    _tc_init(trusted_repo, reader)
+    result = _tc_check(trusted_repo, reader)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    assert receipt["config_source"]["kind"] == "base-ref"
+    assert receipt["issue_verification"]["evidence_universe_source"] == "trusted-base-config"
+    assert validate_verification_receipt_payload(receipt)["valid"] is True
+    code, output = _receipt_check(
+        capsys,
+        result["receipt_path"],
+        trusted_repo,
+        "--expect-issue",
+        "85",
+        "--expect-status",
+        "VERIFIED",
+    )
+    assert (code, output["valid"]) == (0, True)
+
+    bad = json.loads(json.dumps(receipt))
+    bad["issue_verification"]["evidence_universe_source"] = "made-up"
+    assert validate_verification_receipt_payload(_rehash(bad))["valid"] is False
+    marker_claim = json.loads(json.dumps(receipt))
+    marker_claim["issue_verification"]["evidence_universe_source"] = "issue-contract-marker"
+    assert validate_verification_receipt_payload(_rehash(marker_claim))["valid"] is False
+
+    # A worktree-sourced receipt cannot claim the trusted-base-config source.
+    forged = json.loads(json.dumps(receipt))
+    forged["config_source"]["kind"] = "worktree"
+    verdict = validate_verification_receipt_payload(_rehash(forged))
+    assert verdict["valid"] is False
+    assert "EVIDENCE_UNIVERSE_REQUIRES_TRUSTED_CONFIG" in verdict["reason_codes"]
+
+    # Default-mode (old-shaped) receipts carry no source key and still validate.
+    identity = issue_gp._verification_contract_identity(trusted_repo)["config_hash"]
+    marker_reader = _trusted_reader(
+        f"Change VALUE\n\n<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: {identity} -->", 86
+    )
+    init_issue_binding(trusted_repo, issue_number=86, issue_reader=marker_reader)
+    old = check_issue(trusted_repo, issue_number=86, issue_reader=marker_reader)
+    old_receipt = json.loads(old["receipt_path"].read_text(encoding="utf-8"))
+    assert "evidence_universe_source" not in old_receipt["issue_verification"]
+    assert validate_verification_receipt_payload(old_receipt)["valid"] is True

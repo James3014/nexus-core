@@ -552,6 +552,7 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
         issue_number=args.issue,
         github_repo=args.github_repo,
         force=args.force,
+        evidence_universe=args.evidence_universe,
     )
     print(f"issue binding initialized: {path}")
     binding: Any
@@ -696,6 +697,7 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
         issue_number=args.issue,
         require_trusted_config=_require_trusted_config(args),
         expect_config_commit=pin,
+        evidence_universe=args.evidence_universe,
     )
     print(f"issue verification: {result['status']} (not RELEASED)")
     _print_config_source(result, pin)
@@ -950,6 +952,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="GitHub repository owner/name (default: derive from origin)",
     )
     p_issue_init.add_argument("--force", action="store_true", help="Replace existing binding")
+    p_issue_init.add_argument(
+        "--evidence-universe",
+        choices=issue_golden_path.EVIDENCE_UNIVERSE_MODES,
+        default="issue-marker",
+        help="issue-marker (default, fail closed): the Issue body must carry the "
+        "NEXUS_CORE_EVIDENCE_UNIVERSE marker; trusted-config: derive the universe from the "
+        "trusted base config (no Issue marker; gives up the agent re-acknowledgement step)",
+    )
 
     p_issue_check = subparsers.add_parser(
         "issue-check", help="Verify the current repository change against a bound GitHub Issue"
@@ -968,6 +978,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(obtain it outside the candidate's control; env NEXUS_CERTIFY_EXPECT_CONFIG_COMMIT)",
     )
     p_issue_check.add_argument("--issue", required=True, type=int, help="GitHub Issue number")
+    p_issue_check.add_argument(
+        "--evidence-universe",
+        choices=issue_golden_path.EVIDENCE_UNIVERSE_MODES,
+        default="issue-marker",
+        help="must match the mode used by issue-init (default: issue-marker)",
+    )
 
     p_pr_state = subparsers.add_parser(
         "pr-state",
