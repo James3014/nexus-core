@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, cast
 
+from product.clients import gate_diagnostics
 from product.clients.local_golden_path import (
     _MATERIAL_IDENTITY_RE,  # pyright: ignore[reportPrivateUsage]
     CONFIG_DIRECTORY,
@@ -34,8 +35,8 @@ LEGACY_ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v1"
 ISSUE_BINDING_SCHEMA = "nexus.core.issue-binding.v2"
 ISSUE_CONTEXT_SCHEMA = "nexus.core.issue-binding-context.v2"
 ISSUE_EVIDENCE_SUFFICIENCY_SCHEMA = "nexus.core.issue-evidence-sufficiency.v1"
-ISSUE_EVIDENCE_MARKER_PREFIX = "<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: "
-ISSUE_EVIDENCE_MARKER_SUFFIX = " -->"
+ISSUE_EVIDENCE_MARKER_PREFIX = gate_diagnostics.EVIDENCE_MARKER_PREFIX
+ISSUE_EVIDENCE_MARKER_SUFFIX = gate_diagnostics.EVIDENCE_MARKER_SUFFIX
 ISSUE_MATERIAL_TRANSITION_TOKEN = "NEXUS_CORE_MATERIAL_TRANSITION"
 ISSUE_MATERIAL_TRANSITION_SOURCE = "issue-contract-marker"
 _MATERIAL_TRANSITION_RE = re.compile(
@@ -325,12 +326,18 @@ def _evidence_sufficiency_binding(
     issue_contract_hash: str,
     *,
     declared_config_identity: str,
+    issue_number: int,
 ) -> dict[str, Any]:
     identity = _verification_contract_identity(repo)
     if identity["config_hash"] != declared_config_identity:
+        expected = gate_diagnostics.evidence_marker_line(identity["config_hash"])
         raise LocalCheckError(
             ISSUE_EVIDENCE_STALE_REASON,
-            "Issue evidence-universe marker does not match current verification contract",
+            "Issue evidence-universe marker does not match current verification contract; "
+            f"expected Issue body line: {expected}",
+            remediation=gate_diagnostics.stale_evidence_universe(
+                issue_number, identity["config_hash"]
+            ),
         )
     return {
         **identity,
@@ -447,6 +454,7 @@ def init_issue_binding(
                 repo,
                 issue_contract_hash,
                 declared_config_identity=declared_config_identity,
+                issue_number=issue_number,
             )
             if declared_config_identity is not None
             else None
@@ -497,6 +505,7 @@ def check_issue(
     )
     sufficiency_status = "UNBOUND"
     stale_detail: str | None = None
+    stale_remediation: str | None = None
     if sufficiency is not None:
         if declared_config_identity != sufficiency["config_hash"]:
             raise LocalCheckError(
@@ -506,7 +515,14 @@ def check_issue(
         current_verification_contract = _verification_contract_identity(repo)
         if sufficiency["config_hash"] != current_verification_contract["config_hash"]:
             sufficiency_status = "STALE"
-            stale_detail = "verification contract changed since Issue evidence sufficiency was bound"
+            current_hash = current_verification_contract["config_hash"]
+            stale_detail = (
+                "verification contract changed since Issue evidence sufficiency was bound; "
+                f"expected Issue body line: {gate_diagnostics.evidence_marker_line(current_hash)}"
+            )
+            stale_remediation = gate_diagnostics.stale_evidence_universe(
+                issue_number, current_hash
+            )
         else:
             sufficiency_status = "BOUND"
 
@@ -577,6 +593,7 @@ def check_issue(
             ISSUE_EVIDENCE_STALE_REASON,
             stale_detail,
             receipt_path=result["receipt_path"],
+            remediation=stale_remediation,
         )
     verdict = result["issue_verification"]
     return {

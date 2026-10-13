@@ -3,7 +3,7 @@
 ## Checklist for a new repository
 
 1. Run `nexus-certify init`, add a version 2 `[isolation]` section with a digest-pinned container `image`, and merge `.nexus-core/config.toml` into the base branch.
-2. Run `nexus-certify markers` and paste the `NEXUS_CORE_EVIDENCE_UNIVERSE` line into the Issue body.
+2. Run `nexus-certify markers` and paste the `NEXUS_CORE_EVIDENCE_UNIVERSE` line into the Issue body (check it with `nexus-certify markers --issue <number> --check`; see [Core-ready Issues](#core-ready-issues-and-failure-remediation)).
 3. Copy [`examples/github-repository-check.yml`](examples/github-repository-check.yml) to `.github/workflows/`, set `expected-identity` to that workflow file on `refs/heads/main`, and pin both actions and `nexus-certify-ref` to one full 40-hex commit.
 4. Merge the workflow into the base branch (the gate runs from the base ref).
 5. Require the status check `Nexus Core issue completion` in the branch protection or ruleset, and set fork pull request workflows to require approval.
@@ -19,6 +19,47 @@ A successful result is `VERIFIED (not CERTIFIED)`: the base-ref verification
 contract passed inside the configured isolation against this exact tree. It is not
 approval, Candidate acceptance, merge authority, release authority, semantic proof
 that the Issue is complete, or a production claim.
+
+## Core-ready Issues and failure remediation
+
+Every Issue the gate binds needs one exact `NEXUS_CORE_EVIDENCE_UNIVERSE` line.
+Start new Issues from this body (for example in `.github/ISSUE_TEMPLATE/`), with
+the placeholder replaced by the line `nexus-certify markers` prints on an
+up-to-date base branch:
+
+```markdown
+## Problem
+
+## Acceptance
+
+<!-- Paste the line printed by `nexus-certify markers` (do not edit it by hand): -->
+<!-- NEXUS_CORE_EVIDENCE_UNIVERSE: sha256:<64 hex from nexus-certify markers> -->
+```
+
+The hash changes whenever `.nexus-core/config.toml` changes on the base branch, so
+a template cannot carry a fixed value. Check a live Issue read-only with:
+
+```bash
+nexus-certify markers --issue <number> --check   # exit 0 = marker matches, 1 = fix needed
+```
+
+It reads the Issue body with the same GitHub reader as `issue-init`, prints the
+expected line, and writes nothing. When the gate fails, `nexus-certify` and both
+actions print one remediation line (and append it to the job summary) next to the
+unchanged fail-closed reason codes:
+
+| Remediation code | Meaning and fix |
+| --- | --- |
+| `BASE_REF_NOT_ANCESTOR` | HEAD does not descend from the base tip; the line names the base SHA and the rebase command (`git fetch origin && git rebase origin/<base>`). |
+| `ISSUE_MISSING_EVIDENCE_UNIVERSE` | The Issue has no marker (`UNVERIFIABLE`); the line contains the exact marker to add. |
+| `ISSUE_EVIDENCE_UNIVERSE_STALE` | The config changed since the marker was written; the line contains the replacement marker. |
+| `ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED` | More than one or a malformed marker; keep exactly the printed line. |
+| `PR_MISSING_CORE_ISSUE_BINDING` | The PR body (or the receipt) names no Issue; add `<!-- NEXUS_CORE_ISSUE: N -->`. |
+| `RECEIPT_ISSUE_BINDING_MISMATCH` | The receipt is bound to a different Issue than the PR. |
+| `REPOSITORY_VERIFICATION_NOT_VERIFIED` | The verifier itself did not pass; see the receipt / "Diagnose Core verifier failure" step. |
+
+These lines are diagnostics only. No check is relaxed: the base tip must still be
+an ancestor of HEAD, and the marker must still match exactly.
 
 ## Two jobs: run and verify
 

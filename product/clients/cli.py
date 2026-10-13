@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, NoReturn
 
+from product.clients import gate_diagnostics, issue_golden_path
 from product.clients.issue_golden_path import (
     ISSUE_EVIDENCE_MARKER_PREFIX,
     ISSUE_EVIDENCE_MARKER_SUFFIX,
@@ -468,6 +469,12 @@ def cmd_receipt_check(args: argparse.Namespace) -> int:
             expectations_failed = True
         if result["reason_codes"]:
             print("reasons: " + ", ".join(result["reason_codes"]), file=sys.stderr)
+        if expectations_failed:
+            # stdout stays one JSON document; remediation goes to stderr and the job summary.
+            gate_diagnostics.emit(
+                gate_diagnostics.receipt_remediations(payload, expect_issue=args.expect_issue),
+                stream=sys.stderr,
+            )
     print(json.dumps(result, sort_keys=True))
     if result.get("valid") is True:
         return 0
@@ -558,6 +565,7 @@ def cmd_issue_init(args: argparse.Namespace) -> int:
             "'nexus-certify markers' and paste the line into the Issue body, "
             "then re-run issue-init --force"
         )
+        print(gate_diagnostics.missing_evidence_universe(args.issue, _expected_config_hash(args.repo)))
     return 0
 
 
@@ -604,6 +612,9 @@ def cmd_markers(args: argparse.Namespace) -> int:
     issue_marker = f"{ISSUE_EVIDENCE_MARKER_PREFIX}{config_hash}{ISSUE_EVIDENCE_MARKER_SUFFIX}"
     pr_marker = f"<!-- NEXUS_CORE_ISSUE: {args.issue} -->" if args.issue is not None else None
     transition_markers = _material_transition_markers(config, args.material_transition or [])
+    if args.check and args.issue is None:
+        raise CertifyCLIError("usage error: markers --check requires --issue N", exit_code=2)
+    check = _check_issue_marker(args, config_hash) if args.check else None
     if source.get("kind") != "base-ref":
         print(
             f"warning: config is not committed on {config['base_ref']}; "
@@ -619,18 +630,63 @@ def cmd_markers(args: argparse.Namespace) -> int:
                     "issue_marker": issue_marker,
                     "pr_marker": pr_marker,
                     "material_transition_markers": transition_markers,
+                    **({"issue_check": check} if check is not None else {}),
                 },
                 indent=2,
                 sort_keys=True,
             )
         )
-        return 0
+        return 0 if check is None or check["status"] == "MATCH" else 1
     print(f"Issue body: {issue_marker}")
     for marker in transition_markers:
         print(f"Issue body: {marker}")
     if pr_marker is not None:
         print(f"PR body:    {pr_marker}")
-    return 0
+    if check is None:
+        return 0
+    if check["status"] == "MATCH":
+        print(f"check: Issue #{args.issue} evidence-universe marker matches ({config_hash})")
+        return 0
+    print(check["remediation"])
+    return 1
+
+
+def _check_issue_marker(args: argparse.Namespace, config_hash: str) -> dict[str, Any]:
+    """Read-only: compare the live Issue body's marker with the expected one."""
+
+    repo = issue_golden_path._repo_root(args.repo)  # pyright: ignore[reportPrivateUsage]
+    github_repo = issue_golden_path._resolve_github_repo(  # pyright: ignore[reportPrivateUsage]
+        repo, args.github_repo
+    )
+    raw = issue_golden_path._default_issue_reader(  # pyright: ignore[reportPrivateUsage]
+        github_repo, args.issue
+    )
+    contract = issue_golden_path._issue_contract(  # pyright: ignore[reportPrivateUsage]
+        github_repo, args.issue, raw
+    )
+    try:
+        declared = issue_golden_path._issue_evidence_universe_marker(  # pyright: ignore[reportPrivateUsage]
+            contract
+        )
+    except LocalCheckError:
+        return {
+            "status": "MALFORMED",
+            "declared": None,
+            "remediation": gate_diagnostics.malformed_evidence_universe(args.issue, config_hash),
+        }
+    if declared is None:
+        return {
+            "status": "MISSING",
+            "declared": None,
+            "remediation": gate_diagnostics.missing_evidence_universe(args.issue, config_hash),
+        }
+    if declared != config_hash:
+        return {
+            "status": "STALE",
+            "declared": declared,
+            "remediation": gate_diagnostics.stale_evidence_universe(args.issue, config_hash),
+        }
+    return {"status": "MATCH", "declared": declared, "remediation": None}
 
 
 def cmd_issue_check(args: argparse.Namespace) -> int:
@@ -647,7 +703,31 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
+    if result["status"] != "VERIFIED":
+        gate_diagnostics.emit(_issue_check_remediations(args, result))
     return 0 if result["status"] == "VERIFIED" else 1
+
+
+def _expected_config_hash(repo: str) -> str:
+    config, _source, _worktree = _load_effective_config(Path(repo))
+    return canonical_hash(config)
+
+
+def _issue_check_remediations(args: argparse.Namespace, result: dict[str, Any]) -> list[str]:
+    reasons: list[str] = list(result.get("reason_codes") or [])
+    if result.get("issue_evidence_sufficiency_status") == "UNBOUND" and (
+        result.get("repository_evidence_status") == "VERIFIED"
+    ):
+        return [
+            gate_diagnostics.missing_evidence_universe(
+                args.issue, _expected_config_hash(args.repo)
+            )
+        ]
+    return [
+        f"{gate_diagnostics.REPOSITORY_VERIFICATION_NOT_VERIFIED}: repository verification is "
+        f"{result.get('repository_evidence_status')} (reasons: {', '.join(reasons) or 'none'}); "
+        f"fix the cause recorded in receipt {result.get('receipt_path')}, then re-run the gate"
+    ]
 
 
 def cmd_handoff_init(args: argparse.Namespace) -> int:
@@ -894,6 +974,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also print a NEXUS_CORE_MATERIAL_TRANSITION marker moving this material's "
         "pinned identity from the trusted config value to TO_IDENTITY (repeatable)",
     )
+    p_markers.add_argument(
+        "--check",
+        action="store_true",
+        help="Read the live Issue (--issue N) and exit 1 unless its "
+        "NEXUS_CORE_EVIDENCE_UNIVERSE marker matches; prints the expected line (read-only)",
+    )
+    p_markers.add_argument(
+        "--github-repo",
+        default=None,
+        help="GitHub repository owner/name for --check (default: derive from origin)",
+    )
     p_markers.add_argument("--json", action="store_true", help="Emit JSON")
 
     # Machine-readable candidate acquisition (issue-1312).
@@ -1001,6 +1092,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"{exc.reason_code}: {exc.detail}\n")
         if exc.receipt_path is not None:
             sys.stderr.write(f"receipt: {exc.receipt_path}\n")
+        if exc.remediation is not None:
+            gate_diagnostics.emit([exc.remediation])
         return 2
     except KeyboardInterrupt:
         sys.stderr.write("interrupted\n")

@@ -120,6 +120,18 @@ runs:
                 "NEXUS_CORE_ISSUE_BINDING_REQUIRED: PR body must contain exactly one "
                 "'<!-- NEXUS_CORE_ISSUE: <number> -->' marker.\n"
             )
+            remedy = (
+                "PR_MISSING_CORE_ISSUE_BINDING: add exactly one line "
+                "<!-- NEXUS_CORE_ISSUE: N --> (N = the Issue number) to the PR body, "
+                f"then re-run the gate (found {len(matches)})"
+            )
+            sys.stderr.write(remedy + "\n")
+            summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary:
+                with open(summary, "a", encoding="utf-8") as handle:
+                    handle.write(
+                        "### Nexus Core gate: how to fix\n\n```text\n" + remedy + "\n```\n\n"
+                    )
             raise SystemExit(1)
         print(matches[0])
         PY
