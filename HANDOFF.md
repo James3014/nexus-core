@@ -1,13 +1,13 @@
 # HANDOFF
 
-更新：2026-10-13 · by Claude · HEAD `cfcf147`
+更新：2026-10-13 · by Claude · HEAD `9942db7`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
 #243 issue gate 診斷改善：`BASE_REF_NOT_ANCESTOR` 要用最新 base 還是 merge-base，等 Owner 決定；之後讓錯誤訊息直接印出 rebase 目標與正確的 evidence-universe marker。
 
 ## 進行中
-- 無工程中項目。
+- #250：issue gate 先讀 live PR 狀態；PR 已合併/關閉時給中性 `PR_ALREADY_CLOSED_SKIPPED`（不是 PASS），receipt-verify 只在「已合併且 head 相同」時放行。PR 已開，等 Owner 審；合併後 Nexus-new 要升 Core pin 並在 run→verify 傳 `gate-outcome`。
 
 ## 待確認（沒有 Issue 號）
 - Nexus Verify 的 Sigstore 驗證沒有做成 `[verify]` extra：改 `uv.lock` 會破壞 `python-oci-pytest-v1` 的鎖定 digest。要加 extra 必須同時重新釘選該 profile。
