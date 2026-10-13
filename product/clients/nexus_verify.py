@@ -611,13 +611,33 @@ def evaluate_code_change_evidence_subject(
     expected_source_revision = f"git-commit:{acquired_subject['current_base_sha']}"
     expected_source_tree = f"git-tree:{acquired_subject['current_base_tree']}"
     expected_target_tree = f"git-tree:{acquired_subject['current_head_tree']}"
+    config_commit: object = cast("Mapping[str, Any]", config_source).get("commit")
 
-    if (
-        binding["source_revision"] != expected_source_revision
-        or binding["change_source_revision"] != expected_source_revision
-        or binding["source_tree"] != expected_source_tree
-        or binding["manifest_source_tree"] != expected_source_tree
-    ):
+    if binding["source_revision"] == expected_source_revision:
+        # Tip mode: the receipt's source is the current base tip itself.
+        source_ok = (
+            binding["change_source_revision"] == expected_source_revision
+            and binding["source_tree"] == expected_source_tree
+            and binding["manifest_source_tree"] == expected_source_tree
+        )
+    else:
+        # Merge-base mode (#243): the producer took the source as the unique
+        # merge-base of HEAD and the exact base tip it read the trusted config
+        # from, so the source is an ancestor of that tip by construction. The
+        # receipt applies only while that tip is still the current base tip; a
+        # receipt made before the base tip (and so possibly its config) moved is
+        # stale. The source must also be internally consistent, and the receipt
+        # must describe this exact head commit: the merge-base is a function of
+        # (tip, head), so a different head with the same tree and paths could
+        # have a different merge-base and must not reuse this receipt.
+        source_ok = (
+            config_commit == acquired_subject["current_base_sha"]
+            and receipt.get("subject_head")
+            == f"git-commit:{acquired_subject['current_head_sha']}"
+            and binding["change_source_revision"] == binding["source_revision"]
+            and binding["manifest_source_tree"] == binding["source_tree"]
+        )
+    if not source_ok:
         return _result(
             subject=public_subject,
             receipt_integrity="VALID",
@@ -626,10 +646,7 @@ def evaluate_code_change_evidence_subject(
             reason_codes=("RECEIPT_SOURCE_DOES_NOT_MATCH_CURRENT_PR",),
         )
 
-    if (
-        config_source.get("commit")  # pyright: ignore[reportUnknownMemberType]
-        != acquired_subject["current_base_sha"]
-    ):
+    if config_commit != acquired_subject["current_base_sha"]:
         return _result(
             subject=public_subject,
             receipt_integrity="VALID",

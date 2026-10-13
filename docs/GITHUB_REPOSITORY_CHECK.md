@@ -50,7 +50,7 @@ unchanged fail-closed reason codes:
 
 | Remediation code | Meaning and fix |
 | --- | --- |
-| `BASE_REF_NOT_ANCESTOR` | HEAD does not descend from the base tip; the line names the base SHA and the rebase command (`git fetch origin && git rebase origin/<base>`). |
+| `BASE_REF_NOT_ANCESTOR` | HEAD shares no single merge-base with the base tip (unrelated or criss-cross history); the line names the base SHA and the rebase command (`git fetch origin && git rebase origin/<base>`). |
 | `ISSUE_MISSING_EVIDENCE_UNIVERSE` | The Issue has no marker (`UNVERIFIABLE`); the line contains the exact marker to add. |
 | `ISSUE_EVIDENCE_UNIVERSE_STALE` | The config changed since the marker was written; the line contains the replacement marker. |
 | `ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED` | More than one or a malformed marker; keep exactly the printed line. |
@@ -58,8 +58,10 @@ unchanged fail-closed reason codes:
 | `RECEIPT_ISSUE_BINDING_MISMATCH` | The receipt is bound to a different Issue than the PR. |
 | `REPOSITORY_VERIFICATION_NOT_VERIFIED` | The verifier itself did not pass; see the receipt / "Diagnose Core verifier failure" step. |
 
-These lines are diagnostics only. No check is relaxed: the base tip must still be
-an ancestor of HEAD, and the marker must still match exactly.
+These lines are diagnostics only; the marker must still match exactly. Since #243
+(Owner decision) HEAD need only descend from a commit on the base branch: a branch
+one merge behind passes, its subject diff is `merge-base..HEAD`, and the trusted
+config is still read from the current base tip.
 
 ## Two jobs: run and verify
 
@@ -171,8 +173,9 @@ trusted base checkout instead of a pinned ref.
    yet.
 2. **Runner, candidate fetch.** The candidate head is checked out into
    `./candidate` (full history, no persisted credentials) and the base is pinned to
-   `pull_request.base.sha`. A base that is not an ancestor of head is reported by
-   Core as `BASE_REF_NOT_ANCESTOR`.
+   `pull_request.base.sha`. Core takes the single merge-base of that tip and head as
+   the source revision (the PR diff); head with no single merge-base is reported as
+   `BASE_REF_NOT_ANCESTOR`. Config trust stays on the base tip.
 3. **Core.** `issue-init` and `issue-check --require-trusted-config` run with
    `GITHUB_TOKEN` available only to read the Issue. The configuration is read from
    the base ref; an untracked or base-missing config fails with `CONFIG_UNTRUSTED`.
