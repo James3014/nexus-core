@@ -236,9 +236,15 @@ def _sibling_weak_branch(repo: Path, marker: Path) -> tuple[str, str]:
     return main_sha, weak_sha
 
 
-def test_d_candidate_created_sibling_base_ref_is_unpinned_not_trusted(
+def test_d_unpinned_sibling_base_ref_is_advisory_only(
     repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Without --expect-config-commit a local named ref is advisory (NCGF-002).
+
+    The run may use the candidate's weak config and even verify; it is reported as
+    ``base-ref, unpinned`` and never as ``trusted``. Enforcement is the pin (next test).
+    """
+
     marker = tmp_path / "weak-verifier-ran"
     _main_sha, weak_sha = _sibling_weak_branch(repo, marker)
 
@@ -247,6 +253,7 @@ def test_d_candidate_created_sibling_base_ref_is_unpinned_not_trusted(
     out = capsys.readouterr().out
     assert f"config: base-ref, unpinned (weak@{weak_sha[:12]})" in out
     assert "config: trusted" not in out
+    assert marker.exists()  # advisory only: the unpinned weak verifier did run
 
 
 def test_d_pin_rejects_candidate_created_sibling_base_ref_before_verifier(
@@ -264,6 +271,45 @@ def test_d_pin_rejects_candidate_created_sibling_base_ref_before_verifier(
     receipt = _receipt(raised.value.receipt_path)
     assert receipt["outcome"]["reason_codes"] == ["CONFIG_SOURCE_MISMATCH"]
     assert receipt["config_source"]["commit"] == weak_sha
+
+
+# shallow clone ---------------------------------------------------------------------
+
+
+def test_shallow_clone_branch_behind_main_fails_closed(repo: Path, tmp_path: Path) -> None:
+    branch_point = _git(repo, "rev-parse", "main")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit_file(repo, "app.py", "VALUE = 2\n", "feature change")
+    _git(repo, "checkout", "-q", "main")
+    for index in range(3):
+        _commit_file(repo, "README.md", f"moved {index}\n", f"main moves {index}")
+    clone = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "2", "--no-single-branch", f"file://{repo}", str(clone)],
+        check=True,
+        capture_output=True,
+    )
+    _git(clone, "checkout", "-q", "feature")
+    _git(clone, "branch", "-f", "main", "origin/main")
+    tip = _git(clone, "rev-parse", "main")
+    assert _git(clone, "rev-parse", "--is-shallow-repository") == "true"
+    # The real merge-base exists upstream but is cut off in this clone.
+    assert (
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{branch_point}^{{commit}}"], cwd=clone
+        ).returncode
+        == 0
+    )
+    assert (
+        subprocess.run(
+            ["git", "merge-base", tip, "HEAD"], cwd=clone, capture_output=True
+        ).returncode
+        != 0
+    )
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(clone, expect_config_commit=tip)
+    assert raised.value.reason_code == "BASE_REF_NOT_ANCESTOR"
 
 
 # (e) -------------------------------------------------------------------------------
@@ -317,6 +363,33 @@ def test_e_merge_base_receipt_is_stale_once_the_base_tip_moves_again(repo: Path)
     newer_tip = _git(repo, "rev-parse", "main")
     _git(repo, "checkout", "-q", "feature")
     port = FakeGitHubPort(repo, receipt, source_sha=newer_tip, source_tree=_tree(repo, newer_tip))
+    arguments, authenticator = _signed_args(receipt)
+
+    result = verify_code_change_evidence(arguments, github_port=port, authenticator=authenticator)
+
+    assert result["evidence_applicability"] == "STALE_SOURCE"
+    assert result["reason_codes"] == ["RECEIPT_SOURCE_DOES_NOT_MATCH_CURRENT_PR"]
+
+
+def test_e_merge_base_receipt_does_not_apply_to_another_head_with_the_same_tree(
+    repo: Path,
+) -> None:
+    config_commit = _git(repo, "rev-parse", "main")
+    _commit_file(repo, "app.py", "VALUE = 5\n", "bp: app=5")
+    _git(repo, "checkout", "-q", "-b", "feature-a")
+    _commit_file(repo, "app.py", "VALUE = 2\n", "A: app=2")
+    _git(repo, "checkout", "-q", "main")
+    tip = _commit_file(repo, "README.md", "moved\n", "tip")
+    _git(repo, "checkout", "-q", "feature-a")
+    receipt = _receipt(check_repository(repo, expect_config_commit=tip)["receipt_path"])
+    tree_a = _git(repo, "rev-parse", "HEAD^{tree}")
+
+    # headB: same tree and changed paths as A, but its merge-base is config_commit.
+    head_b = _git(repo, "commit-tree", tree_a, "-p", config_commit, "-m", "B")
+    _git(repo, "checkout", "-q", head_b)
+    port = FakeGitHubPort(repo, receipt, source_sha=tip, source_tree=_tree(repo, tip))
+    assert port.head_sha == head_b
+    assert list(port.changed_paths) == ["app.py"]
     arguments, authenticator = _signed_args(receipt)
 
     result = verify_code_change_evidence(arguments, github_port=port, authenticator=authenticator)

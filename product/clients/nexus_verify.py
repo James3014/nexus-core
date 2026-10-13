@@ -626,9 +626,14 @@ def evaluate_code_change_evidence_subject(
         # from, so the source is an ancestor of that tip by construction. The
         # receipt applies only while that tip is still the current base tip; a
         # receipt made before the base tip (and so possibly its config) moved is
-        # stale. The source must also be internally consistent.
+        # stale. The source must also be internally consistent, and the receipt
+        # must describe this exact head commit: the merge-base is a function of
+        # (tip, head), so a different head with the same tree and paths could
+        # have a different merge-base and must not reuse this receipt.
         source_ok = (
             config_commit == acquired_subject["current_base_sha"]
+            and receipt.get("subject_head")
+            == f"git-commit:{acquired_subject['current_head_sha']}"
             and binding["change_source_revision"] == binding["source_revision"]
             and binding["manifest_source_tree"] == binding["source_tree"]
         )
