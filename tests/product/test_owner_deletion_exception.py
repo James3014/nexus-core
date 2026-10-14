@@ -487,3 +487,150 @@ def test_advisory_annotation_cannot_inject_workflow_commands(
     assert lines[0].startswith("owner signature: ADVISORY ")
     assert lines[1].startswith("::warning title=Nexus Core owner signature (advisory)::")
     assert "%250A" in lines[1]
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "key"),
+    [
+        ('deletion_policy = "FORBID"', 'deletion_policy = "ALLOW"', "deletion_policy"),
+        ('enforcement = "ADVISORY"', 'enforcement = "ENFORCED"', "deletion_exception"),
+        (
+            'protected_paths = [".github/workflows/core.yml"]',
+            "protected_paths = []",
+            "deletion_exception",
+        ),
+    ],
+)
+def test_advisory_never_covers_a_trust_root_edit(
+    advisory_world: dict[str, object], old: str, new: str, key: str
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    config = repo / ".nexus-core" / "config.toml"
+    text = config.read_text(encoding="utf-8")
+    assert old in text
+    config.write_text(text.replace(old, new), encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "unsigned trust-root edit")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "TRUST_ROOT_CHANGE_REQUIRES_OWNER_SIGNATURE"
+    assert key in raised.value.detail
+    assert "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE" in raised.value.detail
+
+
+def test_advisory_never_covers_a_new_signer(advisory_world: dict[str, object]) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    config = repo / ".nexus-core" / "config.toml"
+    text = config.read_text(encoding="utf-8")
+    owner_line = text.split("allowed_signers = [", 1)[1].split("]", 1)[0]
+    agent = f'"agent {advisory_world["agent_public"]}"'
+    config.write_text(text.replace(owner_line, f"{owner_line}, {agent}"), encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "unsigned signer addition")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "TRUST_ROOT_CHANGE_REQUIRES_OWNER_SIGNATURE"
+
+
+def test_advisory_never_covers_an_unparseable_config(advisory_world: dict[str, object]) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    (repo / ".nexus-core" / "config.toml").write_text("not = [toml\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "broken config")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code in {
+        "TRUST_ROOT_CHANGE_REQUIRES_OWNER_SIGNATURE",
+        "INVALID_CONFIG",
+    }
+
+
+def test_advisory_keeps_non_signature_manifest_failures(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    directory = repo / ".nexus-core" / "deletions"
+    directory.mkdir(parents=True)
+    (directory / "a.json").write_text("{}\n", encoding="utf-8")
+    (directory / "b.json").write_text("{}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "two manifests")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "DELETION_MANIFEST_COUNT_INVALID"
+
+
+def _rewrite(result: dict[str, object], name: str, mutate) -> Path:  # type: ignore[no-untyped-def]
+    from product.clients.local_golden_path import _receipt_hash
+
+    receipt = _receipt(result)
+    mutate(receipt)
+    receipt["receipt_hash"] = _receipt_hash(receipt)
+    path = Path(str(result["receipt_path"])).with_name(name)
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    return path
+
+
+def test_advisory_record_cannot_be_stripped(advisory_world: dict[str, object]) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _edit_protected_workflow(repo)
+    result = check_repository(repo, require_trusted_config=True)
+    stripped = _rewrite(result, "stripped.json", lambda r: r.pop("owner_signature_advisory"))
+    validation = validate_verification_receipt(stripped, repo=repo)
+    assert validation["valid"] is False
+    assert "OWNER_SIGNATURE_ADVISORY_MISSING" in validation["reason_codes"]
+
+
+def test_advisory_record_reason_must_be_a_signature_code(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _edit_protected_workflow(repo)
+    result = check_repository(repo, require_trusted_config=True)
+
+    def forge(receipt: dict[str, object]) -> None:
+        receipt["owner_signature_advisory"]["reason_code"] = "ANYTHING"  # type: ignore[index]
+
+    validation = validate_verification_receipt(_rewrite(result, "f.json", forge), repo=repo)
+    assert validation["valid"] is False
+    assert "OWNER_SIGNATURE_ADVISORY_MALFORMED" in validation["reason_codes"]
+
+
+def test_advisory_record_must_name_a_touched_config(advisory_world: dict[str, object]) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    config = repo / ".nexus-core" / "config.toml"
+    config.write_text(config.read_text(encoding="utf-8") + "# note\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "unsigned config comment")
+    result = check_repository(repo, require_trusted_config=True)
+
+    def hide(receipt: dict[str, object]) -> None:
+        receipt["owner_signature_advisory"]["protected_paths_touched"] = []  # type: ignore[index]
+
+    validation = validate_verification_receipt(_rewrite(result, "h.json", hide), repo=repo)
+    assert validation["valid"] is False
+    assert "OWNER_SIGNATURE_ADVISORY_MALFORMED" in validation["reason_codes"]
+
+
+def test_cli_failure_detail_cannot_inject_workflow_commands(
+    advisory_world: dict[str, object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    from product.clients.cli import main
+
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _git(repo, "checkout", "-q", "main")
+    (repo / "evil\n::error::forged").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "evil path on main")
+    _git(repo, "checkout", "-q", "-B", "deletion-pr", "main")
+    _git(repo, "rm", "-q", "evil\n::error::forged")
+    _git(repo, "commit", "-q", "-m", "delete evil path")
+    code = main(["check", "--repo", str(repo), "--require-trusted-config"])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert all(not line.lstrip().startswith("::") for line in err.splitlines())
+    assert "FORBIDDEN_DELETION" in err

@@ -34,8 +34,12 @@ or a missing manifest signature) as an advisory finding instead of failing the
 change: :func:`advisory_finding` names the reason code and every protected
 path and manifest the change touched. A change that deletes files is never
 advisory: ``deletion_policy = "FORBID"`` still fails it unless a valid
-owner-signed manifest admits the deletions. The mode is read only from the
-trusted base config, so a candidate cannot select it for itself.
+owner-signed manifest admits the deletions. A config.toml edit of
+``deletion_policy`` or ``[deletion_exception]`` (the trust root) is never
+advisory either. Only the owner-signature reason codes in
+``ADVISORY_REASON_CODES`` are. The mode is read from the effective config,
+which under ``--require-trusted-config`` is the base-ref config, so a
+candidate cannot select it for itself there.
 """
 
 from __future__ import annotations
@@ -46,6 +50,7 @@ import json
 import re
 import subprocess
 import tempfile
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -301,6 +306,65 @@ def _touched_manifest_dir(
     return sorted(entry["path"] for entry in entries if entry["path"].startswith(prefix))
 
 
+def _manifest_adds(
+    section: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    prefix = _manifest_prefix(section)
+    return [
+        entry
+        for entry in entries
+        if entry["change_type"] == "ADD"
+        and entry["path"].startswith(prefix)
+        and entry["path"].endswith(".json")
+        and "/" not in entry["path"][len(prefix) :]
+    ]
+
+
+# Only a missing, unverifiable-by-the-owner or absent owner signature is advisory.
+# Every other failure (malformed or duplicate manifests, archive, dedication, oid
+# mismatches, an unavailable signature verifier) still fails the change.
+ADVISORY_REASON_CODES = frozenset(
+    {
+        "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+        "DELETION_MANIFEST_SIGNATURE_MISSING",
+        "DELETION_MANIFEST_SIGNATURE_INVALID",
+    }
+)
+TRUST_ROOT_REASON = "TRUST_ROOT_CHANGE_REQUIRES_OWNER_SIGNATURE"
+_TRUST_ROOT_KEYS = ("deletion_policy", SECTION)
+
+
+def trust_root_change(
+    trusted_config: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    read_blob: Callable[[str], bytes],
+    exempt_paths: frozenset[str],
+) -> str | None:
+    """Name the trust-root key a change edits in config.toml, else None.
+
+    ``deletion_policy`` and ``[deletion_exception]`` (signers, protected paths,
+    enforcement) are never advisory: otherwise an unsigned change could relax
+    FORBID or the signer list for every later change. An unreadable or
+    unparseable candidate config counts as a trust-root change (fail closed).
+    """
+
+    if CONFIG_PATH in exempt_paths:
+        return None
+    for entry in entries:
+        if entry["path"] != CONFIG_PATH:
+            continue
+        if entry["change_type"] == "DELETE" or not entry.get("after_oid"):
+            return "config.toml removed"
+        try:
+            candidate = tomllib.loads(read_blob(entry["after_oid"]).decode("utf-8"))
+        except (DeletionExceptionError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            return f"candidate config.toml unreadable ({type(exc).__name__})"
+        for key in _TRUST_ROOT_KEYS:
+            if candidate.get(key) != trusted_config.get(key):
+                return key
+    return None
+
+
 def advisory_finding(
     section: Mapping[str, Any],
     entries: Sequence[Mapping[str, Any]],
@@ -311,12 +375,16 @@ def advisory_finding(
     """Return the advisory record for ``error`` in ADVISORY mode, else None.
 
     None means the error must still fail the change: the trusted config is
-    ENFORCED, or the change deletes a file (``FORBID`` is never advisory).
+    ENFORCED, the change deletes a file (``FORBID`` is never advisory), or the
+    error is not an owner-signature failure. The caller checks trust-root edits
+    (:func:`trust_root_change`) first.
     """
 
     if section.get("enforcement", ENFORCED) != ADVISORY:
         return None
     if any(entry["change_type"] == "DELETE" for entry in entries):
+        return None
+    if error.reason_code not in ADVISORY_REASON_CODES:
         return None
     return {
         "schema": ADVISORY_SCHEMA,
@@ -329,10 +397,34 @@ def advisory_finding(
 
 
 def advisory_binding_reasons(
-    section: Mapping[str, Any], record: Any, entries: Sequence[Mapping[str, Any]]
+    section: Mapping[str, Any],
+    record: Any,
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    exempt_paths: frozenset[str],
+    has_deletion_record: bool,
 ) -> list[str]:
-    """Receipt-side check that an advisory record was allowed for this change."""
+    """Receipt-side check that an advisory record is present exactly when due.
 
+    The record is required when the trusted config is ADVISORY, the change
+    deletes nothing, carries no owner-signed record, and would have been
+    evaluated (it touches a non-exempt protected path or adds a manifest). Its
+    touched-path lists must equal the ones recomputed from the change manifest.
+    """
+
+    advisory = section.get("enforcement", ENFORCED) == ADVISORY
+    deletes = any(entry.get("change_type") == "DELETE" for entry in entries)
+    touched_protected = _touched_protected(section, entries, exempt_paths)
+    due = (
+        advisory
+        and not deletes
+        and not has_deletion_record
+        and bool(touched_protected or _manifest_adds(section, entries))
+    )
+    if record is None:
+        return ["OWNER_SIGNATURE_ADVISORY_MISSING"] if due else []
+    if not due:
+        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
     if (
         not isinstance(record, dict)
         or set(record)
@@ -346,34 +438,11 @@ def advisory_binding_reasons(
         }
         or record["schema"] != ADVISORY_SCHEMA
         or record["enforcement"] != ADVISORY
-        or not isinstance(record["reason_code"], str)
-        or not record["reason_code"]
+        or record["reason_code"] not in ADVISORY_REASON_CODES
         or not isinstance(record["detail"], str)
-        or not isinstance(record["protected_paths_touched"], list)
-        or not isinstance(record["manifest_paths_touched"], list)
-    ):
-        return ["OWNER_SIGNATURE_ADVISORY_MALFORMED"]
-    if section.get("enforcement", ENFORCED) != ADVISORY or any(
-        entry.get("change_type") == "DELETE" for entry in entries
-    ):
-        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
-    paths = {entry.get("path") for entry in entries}
-    protected = set(section["protected_paths"])
-    prefix = _manifest_prefix(section)
-    touched_protected = record["protected_paths_touched"]
-    touched_manifests = record["manifest_paths_touched"]
-    if (
-        any(
-            not isinstance(p, str) or p not in paths or p not in protected
-            for p in touched_protected
-        )
-        or any(
-            not isinstance(p, str) or p not in paths or not p.startswith(prefix)
-            for p in touched_manifests
-        )
-        or touched_manifests != _touched_manifest_dir(section, entries)
-        or not set(touched_protected)
-        >= set(_touched_protected(section, entries, frozenset({CONFIG_PATH})))
+        or not record["detail"]
+        or record["protected_paths_touched"] != touched_protected
+        or record["manifest_paths_touched"] != _touched_manifest_dir(section, entries)
     ):
         return ["OWNER_SIGNATURE_ADVISORY_MALFORMED"]
     return []
@@ -400,14 +469,7 @@ def evaluate(
     deletes = [entry for entry in entries if entry["change_type"] == "DELETE"]
     touched_protected = _touched_protected(section, entries, exempt_paths)
     prefix = _manifest_prefix(section)
-    manifest_adds = [
-        entry
-        for entry in entries
-        if entry["change_type"] == "ADD"
-        and entry["path"].startswith(prefix)
-        and entry["path"].endswith(".json")
-        and "/" not in entry["path"][len(prefix) :]
-    ]
+    manifest_adds = _manifest_adds(section, entries)
     if not deletes and not touched_protected and not manifest_adds:
         return None
     if len(manifest_adds) != 1:

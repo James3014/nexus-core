@@ -448,6 +448,17 @@ def _print_owner_signature_advisory(result: dict[str, Any]) -> None:
     print(f"::warning title=Nexus Core owner signature (advisory)::{message}")
 
 
+def _print_failed_run_advisory(receipt_path: str | Path) -> None:
+    """A run that fails later (e.g. a verifier) still shows its advisory finding."""
+
+    try:
+        payload: Any = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(payload, dict):
+        _print_owner_signature_advisory(cast("dict[str, Any]", payload))
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     pin = _expect_config_commit(args)
     result = check_repository(
@@ -1165,9 +1176,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"{exc.message}\n")
         return exc.exit_code
     except LocalCheckError as exc:
-        sys.stderr.write(f"{exc.reason_code}: {exc.detail}\n")
+        # The detail can carry candidate paths; keep it on one inert line.
+        sys.stderr.write(f"{exc.reason_code}: {_annotation_text(exc.detail)}\n")
         if exc.receipt_path is not None:
             sys.stderr.write(f"receipt: {exc.receipt_path}\n")
+            _print_failed_run_advisory(exc.receipt_path)
         if exc.remediation is not None:
             gate_diagnostics.emit([exc.remediation])
         return 2

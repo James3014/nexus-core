@@ -1778,6 +1778,15 @@ def _raise_with_receipt(
     raise LocalCheckError(reason, detail, receipt_path=path, remediation=remediation)
 
 
+def _read_deletion_blob(repo: Path, oid: str) -> bytes:
+    shown = _run_git(repo, "cat-file", "blob", oid, text=False)
+    if shown.returncode != 0:
+        raise owner_deletion_exception.DeletionExceptionError(
+            "DELETION_MANIFEST_MALFORMED", f"blob {oid} unreadable"
+        )
+    return shown.stdout
+
+
 def _evaluate_deletion_exception(
     repo: Path,
     config: Mapping[str, Any],
@@ -1790,12 +1799,7 @@ def _evaluate_deletion_exception(
     section = owner_deletion_exception.validate_section(config["deletion_exception"])
 
     def read_blob(oid: str) -> bytes:
-        shown = _run_git(repo, "cat-file", "blob", oid, text=False)
-        if shown.returncode != 0:
-            raise owner_deletion_exception.DeletionExceptionError(
-                "DELETION_MANIFEST_MALFORMED", f"blob {oid} unreadable"
-            )
-        return shown.stdout
+        return _read_deletion_blob(repo, oid)
 
     def tree_entry(commit: str, path: str) -> tuple[str, str] | None:
         listed = _run_git(repo, "ls-tree", "-z", commit, "--", path, text=False)
@@ -2005,22 +2009,35 @@ def check_repository(
         except owner_deletion_exception.DeletionExceptionError as exc:
             # ADVISORY (trusted base config only): a change that deletes nothing
             # records the failed owner-signature check and continues. Deletions
-            # are never advisory, so FORBID still fails them below.
-            owner_signature_advisory = owner_deletion_exception.advisory_finding(
-                owner_deletion_exception.validate_section(config["deletion_exception"]),
-                snapshot.manifest["entries"],
-                exc,
-                exempt_paths=(
-                    frozenset({owner_deletion_exception.CONFIG_PATH})
-                    if transitions
-                    else frozenset()
-                ),
+            # and trust-root edits are never advisory, so FORBID still fails them.
+            section = owner_deletion_exception.validate_section(config["deletion_exception"])
+            exempt: frozenset[str] = (
+                frozenset({owner_deletion_exception.CONFIG_PATH}) if transitions else frozenset()
             )
+            entries = snapshot.manifest["entries"]
+            reason_code, detail = exc.reason_code, exc.detail
+            if section["enforcement"] == owner_deletion_exception.ADVISORY:
+                try:
+                    trust_root = owner_deletion_exception.trust_root_change(
+                        config, entries, lambda oid: _read_deletion_blob(repo, oid), exempt
+                    )
+                except owner_deletion_exception.DeletionExceptionError as root_exc:
+                    trust_root = root_exc.detail
+                if trust_root is not None:
+                    reason_code = owner_deletion_exception.TRUST_ROOT_REASON
+                    detail = (
+                        f"{owner_deletion_exception.CONFIG_PATH} changes {trust_root} "
+                        f"({exc.reason_code}: {exc.detail})"
+                    )
+                else:
+                    owner_signature_advisory = owner_deletion_exception.advisory_finding(
+                        section, entries, exc, exempt_paths=exempt
+                    )
             if owner_signature_advisory is None:
                 _raise_with_receipt(
                     repo,
-                    exc.reason_code,
-                    exc.detail,
+                    reason_code,
+                    detail,
                     config=config,
                     config_hash=config_hash,
                     config_source=config_source,
@@ -2466,34 +2483,49 @@ def _deletion_policy_binding_reasons(
 def _owner_signature_advisory_binding_reasons(
     config: Any, request: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> list[str]:
-    """An advisory owner-signature record needs a trusted ADVISORY config and no deletion."""
+    """The advisory record must be present exactly when an ADVISORY config made one due."""
 
-    if "owner_signature_advisory" not in payload:
-        return []
-    record = payload["owner_signature_advisory"]
+    record: Any = payload.get("owner_signature_advisory")
+    trusted: dict[str, Any] = cast(dict[str, Any], config) if isinstance(config, dict) else {}
+    if trusted.get("deletion_policy") != "FORBID" or "deletion_exception" not in trusted:
+        return [] if record is None else ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+    config = trusted
     try:
         contract_policy = request["acceptance_contract"]["deletion_policy"]
         entries = request["change_manifest"]["entries"]
     except (KeyError, TypeError):
         return ["CONFIG_BINDING_MISMATCH"]
-    if not isinstance(config, dict) or not isinstance(entries, list):
-        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
-    config = cast(dict[str, Any], config)
+    if not isinstance(entries, list):
+        return ["CONFIG_BINDING_MISMATCH"]
     entry_list = cast(list[Any], entries)
-    if (
-        config.get("deletion_policy") != "FORBID"
-        or "deletion_exception" not in config
-        or payload.get("deletion_exception") is not None
-        or contract_policy != "FORBID"
-        or any(not isinstance(entry, dict) for entry in entry_list)
+    if any(
+        not isinstance(entry, dict)
+        or not isinstance(cast(dict[str, Any], entry).get("path"), str)
+        or not isinstance(cast(dict[str, Any], entry).get("change_type"), str)
+        for entry in entry_list
     ):
+        return ["CONFIG_BINDING_MISMATCH"]
+    if record is not None and contract_policy != "FORBID":
         return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
     try:
         section = owner_deletion_exception.validate_section(config["deletion_exception"])
     except owner_deletion_exception.DeletionExceptionError:
         return ["CONFIG_BINDING_MISMATCH"]
+    inputs: Any = payload.get("inputs")
+    transitions: Any = (
+        cast(dict[str, Any], inputs).get("material_transitions")
+        if isinstance(inputs, dict)
+        else None
+    )
+    exempt: frozenset[str] = (
+        frozenset({owner_deletion_exception.CONFIG_PATH}) if transitions else frozenset()
+    )
     return owner_deletion_exception.advisory_binding_reasons(
-        section, record, cast(list[dict[str, Any]], entry_list)
+        section,
+        record,
+        cast(list[dict[str, Any]], entry_list),
+        exempt_paths=exempt,
+        has_deletion_record=payload.get("deletion_exception") is not None,
     )
 
 
