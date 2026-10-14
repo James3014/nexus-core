@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 from product.clients import gate_diagnostics, issue_golden_path
 from product.clients.issue_golden_path import (
@@ -418,6 +418,36 @@ def _print_config_source(result: dict[str, Any], pin: str | None = None) -> None
         print(f"config: untrusted (not committed on {result.get('base_ref', 'base ref')})")
 
 
+def _annotation_text(value: Any) -> str:
+    """One-line, workflow-command-safe text (candidate-controlled paths reach it)."""
+
+    text = "".join(
+        char if char.isprintable() and char not in "\r\n" else "?" for char in str(value)
+    )
+    return text.replace("%", "%25")
+
+
+def _print_owner_signature_advisory(result: dict[str, Any]) -> None:
+    """Report an ADVISORY owner-signature finding as a GitHub warning, not a failure."""
+
+    raw: Any = result.get("owner_signature_advisory")
+    if not isinstance(raw, dict):
+        return
+    record = cast("dict[str, Any]", raw)
+    touched: list[Any] = [
+        *(record.get("protected_paths_touched") or []),
+        *(record.get("manifest_paths_touched") or []),
+    ]
+    paths = ", ".join(str(path) for path in touched)
+    message = _annotation_text(
+        f"{record.get('reason_code')}: {record.get('detail')}; touched: "
+        f"{paths or 'none'} "
+        "(advisory: the trusted config sets [deletion_exception] enforcement = ADVISORY)"
+    )
+    print(f"owner signature: ADVISORY {message}")
+    print(f"::warning title=Nexus Core owner signature (advisory)::{message}")
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     pin = _expect_config_commit(args)
     result = check_repository(
@@ -430,6 +460,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
+    _print_owner_signature_advisory(result)
     return 0 if result["status"] == "VERIFIED" else 1
 
 
@@ -710,6 +741,7 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
+    _print_owner_signature_advisory(result)
     if result["status"] != "VERIFIED":
         gate_diagnostics.emit(_issue_check_remediations(args, result))
     return 0 if result["status"] == "VERIFIED" else 1

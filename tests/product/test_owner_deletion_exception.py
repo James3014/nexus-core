@@ -62,7 +62,7 @@ def _sign(key: Path, payload: bytes) -> bytes:
     return result.stdout
 
 
-def _config(owner_public: str) -> str:
+def _config(owner_public: str, enforcement: str | None = None) -> str:
     return "\n".join(
         [
             "version = 2",
@@ -78,6 +78,7 @@ def _config(owner_public: str) -> str:
             f'signature_namespace = "{NAMESPACE}"',
             f'allowed_signers = ["owner {owner_public}"]',
             'protected_paths = [".github/workflows/core.yml"]',
+            *([f'enforcement = "{enforcement}"'] if enforcement is not None else []),
             "",
             "[[verifiers]]",
             'id = "behavior"',
@@ -94,6 +95,15 @@ def _config(owner_public: str) -> str:
 
 @pytest.fixture
 def world(tmp_path: Path) -> dict[str, object]:
+    return _world(tmp_path)
+
+
+@pytest.fixture
+def advisory_world(tmp_path: Path) -> dict[str, object]:
+    return _world(tmp_path, enforcement="ADVISORY")
+
+
+def _world(tmp_path: Path, enforcement: str | None = None) -> dict[str, object]:
     keys = tmp_path / "keys"
     keys.mkdir()
     owner_key, owner_public = _keypair(keys, "owner")
@@ -107,7 +117,9 @@ def world(tmp_path: Path) -> dict[str, object]:
     (repo / "old.txt").write_text("retired\n", encoding="utf-8")
     (repo / "ARCHIVED.md").write_text("# Archived\n", encoding="utf-8")
     (repo / ".nexus-core").mkdir()
-    (repo / ".nexus-core" / "config.toml").write_text(_config(owner_public), encoding="utf-8")
+    (repo / ".nexus-core" / "config.toml").write_text(
+        _config(owner_public, enforcement), encoding="utf-8"
+    )
     (repo / ".github" / "workflows").mkdir(parents=True)
     (repo / ".github" / "workflows" / "core.yml").write_text("pin: a\n", encoding="utf-8")
     _git(repo, "add", ".")
@@ -260,3 +272,218 @@ def test_protected_paths_require_owner_signature(world: dict[str, object], path:
     with pytest.raises(LocalCheckError) as raised:
         check_repository(repo, require_trusted_config=True)
     assert raised.value.reason_code == "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE"
+
+
+# --- [deletion_exception] enforcement = "ADVISORY" -------------------------------
+
+
+def _edit_protected_workflow(repo: Path) -> None:
+    (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "unsigned workflow pin change")
+
+
+def _receipt(result: dict[str, object]) -> dict[str, object]:
+    return json.loads(Path(str(result["receipt_path"])).read_text(encoding="utf-8"))
+
+
+def test_advisory_protected_path_without_signature_is_reported_not_failed(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _edit_protected_workflow(repo)
+    result = check_repository(repo, require_trusted_config=True)
+    assert result["status"] == "VERIFIED"
+    advisory = result["owner_signature_advisory"]
+    assert advisory["reason_code"] == "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE"
+    assert advisory["protected_paths_touched"] == [".github/workflows/core.yml"]
+    assert ".github/workflows/core.yml" in advisory["detail"]
+    receipt = _receipt(result)
+    assert receipt["owner_signature_advisory"] == advisory
+    assert receipt["inputs"]["request"]["acceptance_contract"]["deletion_policy"] == "FORBID"
+    assert "deletion_exception" not in receipt
+    assert validate_verification_receipt(result["receipt_path"], repo=repo)["valid"] is True
+
+
+def test_advisory_config_change_without_signature_is_reported_not_failed(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    config = repo / ".nexus-core" / "config.toml"
+    config.write_text(config.read_text(encoding="utf-8") + "# note\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "unsigned config change")
+    result = check_repository(repo, require_trusted_config=True)
+    assert result["status"] == "VERIFIED"
+    assert result["owner_signature_advisory"]["protected_paths_touched"] == [
+        ".nexus-core/config.toml"
+    ]
+
+
+def test_advisory_unsigned_manifest_is_reported_not_failed(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    directory = repo / ".nexus-core" / "deletions"
+    directory.mkdir(parents=True)
+    (directory / "pin.json").write_text("{}\n", encoding="utf-8")
+    (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "workflow change with unsigned manifest")
+    result = check_repository(repo, require_trusted_config=True)
+    assert result["status"] == "VERIFIED"
+    advisory = result["owner_signature_advisory"]
+    assert advisory["reason_code"] == "DELETION_MANIFEST_SIGNATURE_MISSING"
+    assert advisory["manifest_paths_touched"] == [".nexus-core/deletions/pin.json"]
+    assert advisory["protected_paths_touched"] == [".github/workflows/core.yml"]
+    assert validate_verification_receipt(result["receipt_path"], repo=repo)["valid"] is True
+
+
+def test_advisory_never_admits_an_unsigned_deletion(advisory_world: dict[str, object]) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _git(repo, "rm", "-q", "old.txt")
+    _git(repo, "commit", "-q", "-m", "plain deletion")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "FORBIDDEN_DELETION"
+
+
+def test_advisory_never_admits_a_deletion_with_protected_path_edit(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _git(repo, "rm", "-q", "old.txt")
+    (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "deletion plus workflow edit")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "FORBIDDEN_DELETION"
+
+
+def test_advisory_never_admits_an_agent_signed_deletion(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _stage_deletion(advisory_world, key=advisory_world["agent_key"])  # type: ignore[arg-type]
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "DELETION_MANIFEST_SIGNATURE_INVALID"
+
+
+def test_advisory_keeps_owner_signed_deletion_verified(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _stage_deletion(advisory_world, key=advisory_world["owner_key"])  # type: ignore[arg-type]
+    result = check_repository(repo, require_trusted_config=True)
+    assert result["status"] == "VERIFIED"
+    assert "owner_signature_advisory" not in result
+    assert validate_verification_receipt(result["receipt_path"], repo=repo)["valid"] is True
+
+
+def test_candidate_cannot_switch_itself_to_advisory(world: dict[str, object]) -> None:
+    repo = world["repo"]
+    assert isinstance(repo, Path)
+    config = repo / ".nexus-core" / "config.toml"
+    text = config.read_text(encoding="utf-8").replace(
+        'protected_paths = [".github/workflows/core.yml"]',
+        'protected_paths = [".github/workflows/core.yml"]\nenforcement = "ADVISORY"',
+    )
+    config.write_text(text, encoding="utf-8")
+    (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "self-relaxing change")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE"
+
+
+def test_advisory_record_is_rejected_under_enforced_config(world: dict[str, object]) -> None:
+    from product.clients import owner_deletion_exception as ode
+    from product.clients.local_golden_path import _receipt_hash
+
+    repo = world["repo"]
+    assert isinstance(repo, Path)
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "ordinary change")
+    result = check_repository(repo, require_trusted_config=True)
+    receipt = _receipt(result)
+    receipt["owner_signature_advisory"] = {
+        "schema": ode.ADVISORY_SCHEMA,
+        "enforcement": "ADVISORY",
+        "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+        "detail": "x",
+        "protected_paths_touched": [],
+        "manifest_paths_touched": [],
+    }
+    receipt["receipt_hash"] = _receipt_hash(receipt)
+    forged = Path(str(result["receipt_path"])).with_name("forged.json")
+    forged.write_text(json.dumps(receipt), encoding="utf-8")
+    validation = validate_verification_receipt(forged, repo=repo)
+    assert validation["valid"] is False
+    assert "OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED" in validation["reason_codes"]
+
+
+def test_advisory_record_must_name_touched_protected_paths(
+    advisory_world: dict[str, object],
+) -> None:
+    from product.clients.local_golden_path import _receipt_hash
+
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _edit_protected_workflow(repo)
+    result = check_repository(repo, require_trusted_config=True)
+    receipt = _receipt(result)
+    receipt["owner_signature_advisory"]["protected_paths_touched"] = []
+    receipt["receipt_hash"] = _receipt_hash(receipt)
+    hidden = Path(str(result["receipt_path"])).with_name("hidden.json")
+    hidden.write_text(json.dumps(receipt), encoding="utf-8")
+    validation = validate_verification_receipt(hidden, repo=repo)
+    assert validation["valid"] is False
+    assert "OWNER_SIGNATURE_ADVISORY_MALFORMED" in validation["reason_codes"]
+
+
+def test_invalid_enforcement_value_is_rejected() -> None:
+    from product.clients import owner_deletion_exception as ode
+
+    section = {
+        "mode": "OWNER_SIGNED_ARCHIVE",
+        "manifest_dir": ".nexus-core/deletions",
+        "signature_namespace": NAMESPACE,
+        "allowed_signers": ["owner ssh-ed25519 AAAA"],
+        "protected_paths": [],
+        "enforcement": "OFF",
+    }
+    with pytest.raises(ode.DeletionExceptionError) as raised:
+        ode.validate_section(section)
+    assert raised.value.reason_code == "INVALID_CONFIG"
+    section["enforcement"] = "ADVISORY"
+    assert ode.validate_section(section)["enforcement"] == "ADVISORY"
+    del section["enforcement"]
+    assert ode.validate_section(section)["enforcement"] == "ENFORCED"
+
+
+def test_advisory_annotation_cannot_inject_workflow_commands(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from product.clients.cli import _print_owner_signature_advisory
+
+    _print_owner_signature_advisory(
+        {
+            "owner_signature_advisory": {
+                "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+                "detail": "a\n::error::forged\r\n##[error]x %0A",
+                "protected_paths_touched": ["p\n::set-output name=x::y"],
+                "manifest_paths_touched": [],
+            }
+        }
+    )
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("owner signature: ADVISORY ")
+    assert lines[1].startswith("::warning title=Nexus Core owner signature (advisory)::")
+    assert "%250A" in lines[1]

@@ -1658,6 +1658,7 @@ def _base_receipt(
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
     deletion_exception: Mapping[str, Any] | None = None,
+    owner_signature_advisory: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_version = config.get("version") if isinstance(config, Mapping) else None
     receipt: dict[str, Any] = {
@@ -1698,6 +1699,8 @@ def _base_receipt(
         receipt["residue_policy"] = RESIDUE_POLICY
     if deletion_exception is not None:
         receipt["deletion_exception"] = dict(deletion_exception)
+    if owner_signature_advisory is not None:
+        receipt["owner_signature_advisory"] = dict(owner_signature_advisory)
     if config_version in {None, CONFIG_VERSION}:
         receipt["verifier"] = dict(artifacts[0]) if artifacts else None
     else:
@@ -1753,6 +1756,7 @@ def _raise_with_receipt(
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
     remediation: str | None = None,
+    owner_signature_advisory: Mapping[str, Any] | None = None,
 ) -> NoReturn:
     receipt = _base_receipt(
         repo=repo,
@@ -1768,6 +1772,7 @@ def _raise_with_receipt(
         config_source=config_source,
         issue_verification=issue_verification,
         material_transitions=material_transitions,
+        owner_signature_advisory=owner_signature_advisory,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path, remediation=remediation)
@@ -1991,24 +1996,39 @@ def check_repository(
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
     ]
     deletion_exception: dict[str, Any] | None = None
+    owner_signature_advisory: dict[str, Any] | None = None
     if config["deletion_policy"] == "FORBID" and "deletion_exception" in config:
         try:
             deletion_exception = _evaluate_deletion_exception(
                 repo, config, snapshot, exempt_config=bool(transitions)
             )
         except owner_deletion_exception.DeletionExceptionError as exc:
-            _raise_with_receipt(
-                repo,
-                exc.reason_code,
-                exc.detail,
-                config=config,
-                config_hash=config_hash,
-                config_source=config_source,
-                snapshot=snapshot,
-                requirements_context=requirements_context,
-                issue_verification=issue_verification,
-                material_transitions=transitions,
+            # ADVISORY (trusted base config only): a change that deletes nothing
+            # records the failed owner-signature check and continues. Deletions
+            # are never advisory, so FORBID still fails them below.
+            owner_signature_advisory = owner_deletion_exception.advisory_finding(
+                owner_deletion_exception.validate_section(config["deletion_exception"]),
+                snapshot.manifest["entries"],
+                exc,
+                exempt_paths=(
+                    frozenset({owner_deletion_exception.CONFIG_PATH})
+                    if transitions
+                    else frozenset()
+                ),
             )
+            if owner_signature_advisory is None:
+                _raise_with_receipt(
+                    repo,
+                    exc.reason_code,
+                    exc.detail,
+                    config=config,
+                    config_hash=config_hash,
+                    config_source=config_source,
+                    snapshot=snapshot,
+                    requirements_context=requirements_context,
+                    issue_verification=issue_verification,
+                    material_transitions=transitions,
+                )
     if deleted and config["deletion_policy"] == "FORBID" and deletion_exception is None:
         _raise_with_receipt(
             repo,
@@ -2063,6 +2083,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
         except subprocess.TimeoutExpired as exc:
             _raise_with_receipt(
@@ -2077,6 +2098,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
         except OSError as exc:
             _raise_with_receipt(
@@ -2091,6 +2113,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
 
         if config["version"] == CONFIG_VERSION:
@@ -2126,6 +2149,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
@@ -2142,6 +2166,7 @@ def check_repository(
             requirements_context=requirements_context,
             issue_verification=issue_verification,
             material_transitions=transitions,
+            owner_signature_advisory=owner_signature_advisory,
         )
 
     request = _build_request(
@@ -2169,6 +2194,7 @@ def check_repository(
             requirements_context=requirements_context,
             issue_verification=issue_verification,
             material_transitions=transitions,
+            owner_signature_advisory=owner_signature_advisory,
             deletion_exception=deletion_exception,
         )
         path_out = _write_receipt(repo, receipt)
@@ -2186,6 +2212,7 @@ def check_repository(
         requirements_context=requirements_context,
         issue_verification=issue_verification,
         material_transitions=transitions,
+        owner_signature_advisory=owner_signature_advisory,
         request=request,
         response=response,
         status=status,
@@ -2206,6 +2233,11 @@ def check_repository(
         "subject_head": receipt.get("subject_head"),
         "subject_head_tree": receipt.get("subject_head_tree"),
         "subject_clean": receipt.get("subject_clean"),
+        **(
+            {"owner_signature_advisory": receipt["owner_signature_advisory"]}
+            if "owner_signature_advisory" in receipt
+            else {}
+        ),
         **(
             {"issue_verification": receipt["issue_verification"]}
             if "issue_verification" in receipt
@@ -2431,6 +2463,40 @@ def _deletion_policy_binding_reasons(
     return owner_deletion_exception.revalidate_record(section, record, entries)
 
 
+def _owner_signature_advisory_binding_reasons(
+    config: Any, request: Mapping[str, Any], payload: Mapping[str, Any]
+) -> list[str]:
+    """An advisory owner-signature record needs a trusted ADVISORY config and no deletion."""
+
+    if "owner_signature_advisory" not in payload:
+        return []
+    record = payload["owner_signature_advisory"]
+    try:
+        contract_policy = request["acceptance_contract"]["deletion_policy"]
+        entries = request["change_manifest"]["entries"]
+    except (KeyError, TypeError):
+        return ["CONFIG_BINDING_MISMATCH"]
+    if not isinstance(config, dict) or not isinstance(entries, list):
+        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+    config = cast(dict[str, Any], config)
+    entry_list = cast(list[Any], entries)
+    if (
+        config.get("deletion_policy") != "FORBID"
+        or "deletion_exception" not in config
+        or payload.get("deletion_exception") is not None
+        or contract_policy != "FORBID"
+        or any(not isinstance(entry, dict) for entry in entry_list)
+    ):
+        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+    try:
+        section = owner_deletion_exception.validate_section(config["deletion_exception"])
+    except owner_deletion_exception.DeletionExceptionError:
+        return ["CONFIG_BINDING_MISMATCH"]
+    return owner_deletion_exception.advisory_binding_reasons(
+        section, record, cast(list[dict[str, Any]], entry_list)
+    )
+
+
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
@@ -2603,6 +2669,7 @@ def _validate_verification_receipt_payload(
         if status != 200 or recomputed != payload.get("core_response"):
             reasons.append("CORE_RESPONSE_MISMATCH")
         reasons.extend(_deletion_policy_binding_reasons(config, request, payload))
+        reasons.extend(_owner_signature_advisory_binding_reasons(config, request, payload))
 
         try:
             observations = request["evidence_bundle"]["observations"]
