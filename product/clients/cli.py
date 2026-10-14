@@ -418,7 +418,7 @@ def _print_config_source(result: dict[str, Any], pin: str | None = None) -> None
         print(f"config: untrusted (not committed on {result.get('base_ref', 'base ref')})")
 
 
-def _annotation_text(value: Any) -> str:
+def annotation_text(value: Any) -> str:
     """One-line, workflow-command-safe text (candidate-controlled paths reach it)."""
 
     text = "".join(
@@ -427,7 +427,7 @@ def _annotation_text(value: Any) -> str:
     return text.replace("%", "%25")
 
 
-def _print_owner_signature_advisory(result: dict[str, Any]) -> None:
+def print_owner_signature_advisory(result: dict[str, Any]) -> None:
     """Report an ADVISORY owner-signature finding as a GitHub warning, not a failure."""
 
     raw: Any = result.get("owner_signature_advisory")
@@ -439,7 +439,7 @@ def _print_owner_signature_advisory(result: dict[str, Any]) -> None:
         *(record.get("manifest_paths_touched") or []),
     ]
     paths = ", ".join(str(path) for path in touched)
-    message = _annotation_text(
+    message = annotation_text(
         f"{record.get('reason_code')}: {record.get('detail')}; touched: "
         f"{paths or 'none'} "
         "(advisory: the trusted config sets [deletion_exception] enforcement = ADVISORY)"
@@ -448,7 +448,7 @@ def _print_owner_signature_advisory(result: dict[str, Any]) -> None:
     print(f"::warning title=Nexus Core owner signature (advisory)::{message}")
 
 
-def _print_failed_run_advisory(receipt_path: str | Path) -> None:
+def print_failed_run_advisory(receipt_path: str | Path) -> None:
     """A run that fails later (e.g. a verifier) still shows its advisory finding."""
 
     try:
@@ -456,7 +456,7 @@ def _print_failed_run_advisory(receipt_path: str | Path) -> None:
     except (OSError, ValueError):
         return
     if isinstance(payload, dict):
-        _print_owner_signature_advisory(cast("dict[str, Any]", payload))
+        print_owner_signature_advisory(cast("dict[str, Any]", payload))
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -471,7 +471,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
-    _print_owner_signature_advisory(result)
+    print_owner_signature_advisory(result)
     return 0 if result["status"] == "VERIFIED" else 1
 
 
@@ -752,7 +752,7 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
-    _print_owner_signature_advisory(result)
+    print_owner_signature_advisory(result)
     if result["status"] != "VERIFIED":
         gate_diagnostics.emit(_issue_check_remediations(args, result))
     return 0 if result["status"] == "VERIFIED" else 1
@@ -1177,10 +1177,10 @@ def main(argv: list[str] | None = None) -> int:
         return exc.exit_code
     except LocalCheckError as exc:
         # The detail can carry candidate paths; keep it on one inert line.
-        sys.stderr.write(f"{exc.reason_code}: {_annotation_text(exc.detail)}\n")
+        sys.stderr.write(f"{exc.reason_code}: {annotation_text(exc.detail)}\n")
         if exc.receipt_path is not None:
             sys.stderr.write(f"receipt: {exc.receipt_path}\n")
-            _print_failed_run_advisory(exc.receipt_path)
+            print_failed_run_advisory(exc.receipt_path)
         if exc.remediation is not None:
             gate_diagnostics.emit([exc.remediation])
         return 2

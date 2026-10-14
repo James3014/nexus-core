@@ -316,16 +316,24 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--token-file is not accepted with --repository-check")
         if args.receipt_output_file is not None:
             parser.error("--receipt-output-file is not accepted with --repository-check")
+        from product.clients.cli import (
+            annotation_text,
+            print_failed_run_advisory,
+            print_owner_signature_advisory,
+        )
+
         try:
             result = run_repository_check(args.repo)
         except LocalCheckError as exc:
-            sys.stderr.write(f"{exc.reason_code}: {exc.detail}\n")
+            sys.stderr.write(f"{exc.reason_code}: {annotation_text(exc.detail)}\n")
             if exc.receipt_path is not None:
                 sys.stderr.write(f"receipt: {exc.receipt_path}\n")
+                print_failed_run_advisory(exc.receipt_path)
             return 2
         status = result["result"]["status"]
         print(f"verification: {status} (not CERTIFIED)")
         print(f"receipt: {result['outputs']['receipt-file']}")
+        print_owner_signature_advisory(result["result"])
         return 0 if status == "VERIFIED" else 1
 
     if args.token_file is None:

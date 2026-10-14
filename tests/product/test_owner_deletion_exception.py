@@ -574,13 +574,13 @@ def test_invalid_enforcement_value_is_rejected() -> None:
 def test_advisory_annotation_cannot_inject_workflow_commands(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from product.clients.cli import _print_owner_signature_advisory
+    from product.clients.cli import print_owner_signature_advisory
 
-    _print_owner_signature_advisory(
+    print_owner_signature_advisory(
         {
             "owner_signature_advisory": {
                 "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
-                "detail": "a\n::error::forged\r\n##[error]x %0A",
+                "detail": "a\n::error::forged\r\n##[error]x %0A\u2028::error::y\u0085::z",
                 "protected_paths_touched": ["p\n::set-output name=x::y"],
                 "manifest_paths_touched": [],
             }
@@ -794,7 +794,7 @@ def test_signed_record_replaces_advisory_only_for_its_own_manifest() -> None:
 def test_failed_run_still_prints_its_advisory(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from product.clients.cli import _print_failed_run_advisory
+    from product.clients.cli import print_failed_run_advisory
 
     receipt = tmp_path / "r.json"
     receipt.write_text(
@@ -810,8 +810,8 @@ def test_failed_run_still_prints_its_advisory(
         ),
         encoding="utf-8",
     )
-    _print_failed_run_advisory(receipt)
-    _print_failed_run_advisory(tmp_path / "missing.json")
+    print_failed_run_advisory(receipt)
+    print_failed_run_advisory(tmp_path / "missing.json")
     out = capsys.readouterr().out
     assert "::warning title=Nexus Core owner signature (advisory)::" in out
     assert ".github/workflows/core.yml" in out
@@ -834,3 +834,107 @@ def test_advisory_receipt_for_an_executable_signature_stays_valid(
         "DELETION_MANIFEST_SIGNATURE_MISSING"
     )
     assert validate_verification_receipt(result["receipt_path"], repo=repo)["valid"] is True
+
+
+def test_advisory_annotation_has_no_unicode_line_breaks(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from product.clients.cli import print_owner_signature_advisory
+
+    print_owner_signature_advisory(
+        {
+            "owner_signature_advisory": {
+                "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+                "detail": "a\u2028::error::b\u2029c\u0085d\x1be",
+                "protected_paths_touched": [],
+                "manifest_paths_touched": [],
+            }
+        }
+    )
+    out = capsys.readouterr().out
+    for separator in ("\u2028", "\u2029", "\u0085", "\x1b"):
+        assert separator not in out
+
+
+def test_manifest_only_advisory_record_cannot_be_stripped(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _write_manifest(repo, "pin", str(advisory_world["base"]), "app.py")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "unsigned manifest only")
+    result = check_repository(repo, require_trusted_config=True)
+    assert result["owner_signature_advisory"]["manifest_paths_touched"] == [
+        ".nexus-core/deletions/pin.json"
+    ]
+    stripped = _rewrite(result, "m.json", lambda r: r.pop("owner_signature_advisory"))
+    validation = validate_verification_receipt(stripped, repo=repo)
+    assert "OWNER_SIGNATURE_ADVISORY_MISSING" in validation["reason_codes"]
+
+    def hide(receipt: dict[str, object]) -> None:
+        receipt["owner_signature_advisory"]["manifest_paths_touched"] = []  # type: ignore[index]
+
+    validation = validate_verification_receipt(_rewrite(result, "m2.json", hide), repo=repo)
+    assert "OWNER_SIGNATURE_ADVISORY_MALFORMED" in validation["reason_codes"]
+
+
+def test_repo_validator_rechecks_an_unsigned_manifest(advisory_world: dict[str, object]) -> None:
+    from product.clients.local_golden_path import _advisory_trust_root_reasons
+
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _write_manifest(repo, "pin", str(advisory_world["base"]), "app.py")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "unsigned manifest only")
+    result = check_repository(repo, require_trusted_config=True)
+    receipt = _receipt(result)
+    trusted = receipt["inputs"]["config"]  # type: ignore[index]
+    manifest = receipt["inputs"]["request"]["change_manifest"]  # type: ignore[index]
+    assert _advisory_trust_root_reasons(repo, trusted, receipt, manifest) == []
+    bad_oid = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        input="{}",
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    for entry in manifest["entries"]:
+        if entry["path"] == ".nexus-core/deletions/pin.json":
+            entry["after_oid"] = bad_oid
+    assert _advisory_trust_root_reasons(repo, trusted, receipt, manifest) == [
+        "OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"
+    ]
+
+
+def test_cli_failure_prints_the_receipt_advisory(
+    advisory_world: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from product.clients import cli
+
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    receipt = repo / "r.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "owner_signature_advisory": {
+                    "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+                    "detail": "core.yml",
+                    "protected_paths_touched": [".github/workflows/core.yml"],
+                    "manifest_paths_touched": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def failing(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise LocalCheckError("VERIFIER_TIMEOUT", "behavior", receipt_path=str(receipt))
+
+    monkeypatch.setattr(cli, "check_repository", failing)
+    assert cli.main(["check", "--repo", str(repo)]) == 2
+    assert "Nexus Core owner signature (advisory)" in capsys.readouterr().out
