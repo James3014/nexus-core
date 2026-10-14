@@ -1807,7 +1807,9 @@ def _advisory_manifest_check(
         if not entry["path"].startswith(prefix) or "/" in entry["path"][len(prefix) :]:
             continue
         try:
-            owner_deletion_exception.parse_manifest(_read_deletion_blob(repo, entry["after_oid"]))
+            owner_deletion_exception.check_unsigned_manifest(
+                entry["path"], _read_deletion_blob(repo, entry["after_oid"]), section
+            )
         except owner_deletion_exception.DeletionExceptionError as malformed:
             return malformed.reason_code, f"{entry['path']}: {malformed.detail}"
     return exc.reason_code, exc.detail
@@ -2531,8 +2533,22 @@ def _advisory_trust_root_reasons(
             lambda oid: _read_deletion_blob(repo_root, oid),
             exempt,
         )
+        if changed is None and "deletion_exception" in config:
+            section = owner_deletion_exception.validate_section(config["deletion_exception"])
+            prefix = section["manifest_dir"].rstrip("/") + "/"
+            for entry in manifest["entries"]:
+                path = entry["path"]
+                if (
+                    entry["change_type"] == "ADD"
+                    and path.startswith(prefix)
+                    and path.endswith(".json")
+                    and "/" not in path[len(prefix) :]
+                ):
+                    owner_deletion_exception.check_unsigned_manifest(
+                        path, _read_deletion_blob(repo_root, entry["after_oid"]), section
+                    )
     except owner_deletion_exception.DeletionExceptionError:
-        changed = "unreadable"
+        changed = "unreadable or malformed"
     return [] if changed is None else ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
 
 

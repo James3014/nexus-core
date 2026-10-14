@@ -396,6 +396,24 @@ def advisory_finding(
     }
 
 
+def _signed_record_manifest(record: Any) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    try:
+        raw = base64.b64decode(cast(dict[str, Any], record)["manifest_base64"], validate=True)
+        return _parse_manifest(raw)
+    except (KeyError, TypeError, ValueError, DeletionExceptionError):
+        return None
+
+
+def check_unsigned_manifest(path: str, raw: bytes, section: Mapping[str, Any]) -> None:
+    """An added manifest without a valid signature must still be well formed and named."""
+
+    manifest = _parse_manifest(raw)
+    if path != f"{_manifest_prefix(section)}{manifest['id']}.json":
+        raise _fail("DELETION_MANIFEST_MALFORMED", "manifest file name must be <id>.json")
+
+
 def _expected_advisory_reason(
     manifest_adds: Sequence[str], entries: Sequence[Mapping[str, Any]]
 ) -> str | None:
@@ -405,19 +423,18 @@ def _expected_advisory_reason(
         return "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE"
     if len(manifest_adds) != 1:
         return None
-    signature = manifest_adds[0] + ".sig"
-    signed = any(
-        entry.get("path") == signature and entry.get("change_type") == "ADD" for entry in entries
+    # Same condition as ``evaluate``: both files added with mode 100644.
+    by_path = {entry.get("path"): entry for entry in entries}
+    manifest_entry = by_path.get(manifest_adds[0]) or {}
+    signature_entry = by_path.get(manifest_adds[0] + ".sig") or {}
+    signed = (
+        signature_entry.get("change_type") == "ADD"
+        and signature_entry.get("after_mode") == "100644"
+        and manifest_entry.get("after_mode") == "100644"
     )
     return (
         "DELETION_MANIFEST_SIGNATURE_INVALID" if signed else "DELETION_MANIFEST_SIGNATURE_MISSING"
     )
-
-
-def parse_manifest(raw: bytes) -> dict[str, Any]:
-    """Public strict manifest parser (raises DELETION_MANIFEST_MALFORMED)."""
-
-    return _parse_manifest(raw)
 
 
 def advisory_binding_reasons(
@@ -443,11 +460,13 @@ def advisory_binding_reasons(
     if advisory and not deletes and deletion_record is not None:
         # An owner-signed record replaces the advisory only when it is this
         # change's own manifest and covers every touched protected path.
+        # Paths come from the signed manifest bytes, not from receipt fields.
+        signed_manifest = _signed_record_manifest(deletion_record)
         if (
-            not isinstance(deletion_record, dict)
-            or cast(dict[str, Any], deletion_record).get("manifest_path") not in manifest_adds
+            signed_manifest is None
+            or f"{_manifest_prefix(section)}{signed_manifest['id']}.json" not in manifest_adds
             or not set(touched_protected)
-            <= set(cast(dict[str, Any], deletion_record).get("companion_paths") or [])
+            <= {item["path"] for item in signed_manifest["companion_changes"]}
         ):
             return ["OWNER_SIGNATURE_ADVISORY_MISSING"]
     due = (

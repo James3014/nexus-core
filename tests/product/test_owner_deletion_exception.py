@@ -375,6 +375,21 @@ def test_advisory_rejects_a_malformed_unsigned_manifest(
     assert raised.value.reason_code == "DELETION_MANIFEST_MALFORMED"
 
 
+def test_advisory_rejects_a_misnamed_unsigned_manifest(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    path = _write_manifest(repo, "pin", str(advisory_world["base"]), ".github/workflows/core.yml")
+    path.rename(path.with_name("other.json"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "misnamed manifest")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "DELETION_MANIFEST_MALFORMED"
+
+
 def test_advisory_reason_must_match_the_manifest_shape(
     advisory_world: dict[str, object],
 ) -> None:
@@ -743,9 +758,31 @@ def test_signed_record_replaces_advisory_only_for_its_own_manifest() -> None:
         {"path": ".nexus-core/deletions/a.json", "change_type": "ADD"},
         {"path": ".nexus-core/deletions/a.json.sig", "change_type": "ADD"},
     ]
-    own = {"manifest_path": ".nexus-core/deletions/a.json", "companion_paths": [entries[0]["path"]]}
-    unrelated = {"manifest_path": ".nexus-core/deletions/old.json", "companion_paths": []}
-    uncovered = {"manifest_path": ".nexus-core/deletions/a.json", "companion_paths": []}
+    import base64
+
+    def record(manifest_id: str, companions: list[str], claimed: list[str]) -> dict[str, object]:
+        manifest = {
+            "schema": "nexus.core.deletion-manifest.v1",
+            "id": manifest_id,
+            "reason": "r",
+            "archive": {"ref": "refs/heads/archive/x", "commit": "0" * 40},
+            "deletions": [],
+            "companion_changes": [
+                {"path": path, "change_type": "MODIFY", "after_oid": "1" * 40}
+                for path in companions
+            ],
+        }
+        return {
+            "manifest_base64": base64.b64encode(json.dumps(manifest).encode()).decode(),
+            # Receipt-claimed fields are ignored; only the signed bytes count.
+            "manifest_path": ".nexus-core/deletions/a.json",
+            "companion_paths": claimed,
+        }
+
+    workflow = entries[0]["path"]
+    own = record("a", [workflow], [workflow])
+    unrelated = record("old", [workflow], [workflow])
+    uncovered = record("a", ["other.txt"], [workflow])
     kwargs = {"exempt_paths": frozenset()}
     assert ode.advisory_binding_reasons(section, None, entries, deletion_record=own, **kwargs) == []
     for record in (unrelated, uncovered):
