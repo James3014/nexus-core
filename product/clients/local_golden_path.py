@@ -2516,8 +2516,10 @@ def _advisory_trust_root_reasons(
     """With the repository at hand, re-run the runner's trust-root and manifest checks.
 
     Without a repository the candidate config and manifest blobs are not in the
-    receipt, so these two refusals are not repeated; receipt authenticity then
-    rests on the Sigstore signature of the gate workflow.
+    receipt, so these two refusals are not repeated. A receipt that claims
+    material transitions also skips the config.toml re-check (those claims are
+    receipt-asserted). In both cases receipt authenticity rests on the Sigstore
+    signature of the gate workflow, not on this re-check.
     """
 
     if payload.get("owner_signature_advisory") is None or not isinstance(config, dict):

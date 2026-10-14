@@ -938,3 +938,41 @@ def test_cli_failure_prints_the_receipt_advisory(
     monkeypatch.setattr(cli, "check_repository", failing)
     assert cli.main(["check", "--repo", str(repo)]) == 2
     assert "Nexus Core owner signature (advisory)" in capsys.readouterr().out
+
+
+def test_github_action_repository_check_reports_the_advisory(
+    advisory_world: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from product.clients import github_action
+
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _edit_protected_workflow(repo)
+    monkeypatch.setattr(
+        github_action,
+        "validate_repository_check_environment",
+        lambda: {"repository": "o/r", "event_name": "pull_request"},
+    )
+    monkeypatch.setattr(github_action, "write_github_output", lambda outputs: None)
+
+    def trusted(path: object) -> dict[str, object]:
+        return check_repository(path, require_trusted_config=True)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(github_action, "check_repository", trusted)
+    assert github_action.main(["--repository-check", "--repo", str(repo)]) == 0
+    assert "::warning title=Nexus Core owner signature (advisory)::" in capsys.readouterr().out
+
+    def failing(path: object) -> dict[str, object]:
+        result = trusted(path)
+        raise LocalCheckError(
+            "VERIFIER_TIMEOUT", "evil\n::error::forged", receipt_path=result["receipt_path"]
+        )
+
+    monkeypatch.setattr(github_action, "check_repository", failing)
+    assert github_action.main(["--repository-check", "--repo", str(repo)]) == 2
+    captured = capsys.readouterr()
+    assert "::warning title=Nexus Core owner signature (advisory)::" in captured.out
+    assert "evil?::error::forged" in captured.err
+    assert all(not line.lstrip().startswith("::") for line in captured.err.splitlines())
