@@ -2513,7 +2513,12 @@ def _deletion_policy_binding_reasons(
 def _advisory_trust_root_reasons(
     repo_root: Path, config: Any, payload: Mapping[str, Any], manifest: Mapping[str, Any]
 ) -> list[str]:
-    """With the repository at hand, re-run the runner's trust-root refusal."""
+    """With the repository at hand, re-run the runner's trust-root and manifest checks.
+
+    Without a repository the candidate config and manifest blobs are not in the
+    receipt, so these two refusals are not repeated; receipt authenticity then
+    rests on the Sigstore signature of the gate workflow.
+    """
 
     if payload.get("owner_signature_advisory") is None or not isinstance(config, dict):
         return []

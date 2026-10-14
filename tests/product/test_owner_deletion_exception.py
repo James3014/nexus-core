@@ -815,3 +815,22 @@ def test_failed_run_still_prints_its_advisory(
     out = capsys.readouterr().out
     assert "::warning title=Nexus Core owner signature (advisory)::" in out
     assert ".github/workflows/core.yml" in out
+
+
+def test_advisory_receipt_for_an_executable_signature_stays_valid(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    path = _write_manifest(repo, "pin", str(advisory_world["base"]), ".github/workflows/core.yml")
+    sig = path.with_name("pin.json.sig")
+    sig.write_bytes(_sign(advisory_world["agent_key"], path.read_bytes()))  # type: ignore[arg-type]
+    sig.chmod(0o755)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "manifest with executable signature")
+    result = check_repository(repo, require_trusted_config=True)
+    assert result["owner_signature_advisory"]["reason_code"] == (
+        "DELETION_MANIFEST_SIGNATURE_MISSING"
+    )
+    assert validate_verification_receipt(result["receipt_path"], repo=repo)["valid"] is True
