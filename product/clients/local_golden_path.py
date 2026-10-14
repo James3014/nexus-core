@@ -1787,6 +1787,32 @@ def _read_deletion_blob(repo: Path, oid: str) -> bytes:
     return shown.stdout
 
 
+def _advisory_manifest_check(
+    repo: Path,
+    section: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    exc: owner_deletion_exception.DeletionExceptionError,
+) -> tuple[str, str]:
+    """A manifest added without a valid owner signature must still be well formed."""
+
+    if exc.reason_code not in {
+        "DELETION_MANIFEST_SIGNATURE_MISSING",
+        "DELETION_MANIFEST_SIGNATURE_INVALID",
+    }:
+        return exc.reason_code, exc.detail
+    for entry in entries:
+        if entry["change_type"] != "ADD" or not entry["path"].endswith(".json"):
+            continue
+        prefix = section["manifest_dir"].rstrip("/") + "/"
+        if not entry["path"].startswith(prefix) or "/" in entry["path"][len(prefix) :]:
+            continue
+        try:
+            owner_deletion_exception.parse_manifest(_read_deletion_blob(repo, entry["after_oid"]))
+        except owner_deletion_exception.DeletionExceptionError as malformed:
+            return malformed.reason_code, f"{entry['path']}: {malformed.detail}"
+    return exc.reason_code, exc.detail
+
+
 def _evaluate_deletion_exception(
     repo: Path,
     config: Mapping[str, Any],
@@ -2030,9 +2056,11 @@ def check_repository(
                         f"({exc.reason_code}: {exc.detail})"
                     )
                 else:
-                    owner_signature_advisory = owner_deletion_exception.advisory_finding(
-                        section, entries, exc, exempt_paths=exempt
-                    )
+                    reason_code, detail = _advisory_manifest_check(repo, section, entries, exc)
+                    if reason_code == exc.reason_code:
+                        owner_signature_advisory = owner_deletion_exception.advisory_finding(
+                            section, entries, exc, exempt_paths=exempt
+                        )
             if owner_signature_advisory is None:
                 _raise_with_receipt(
                     repo,
@@ -2480,6 +2508,34 @@ def _deletion_policy_binding_reasons(
     return owner_deletion_exception.revalidate_record(section, record, entries)
 
 
+def _advisory_trust_root_reasons(
+    repo_root: Path, config: Any, payload: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> list[str]:
+    """With the repository at hand, re-run the runner's trust-root refusal."""
+
+    if payload.get("owner_signature_advisory") is None or not isinstance(config, dict):
+        return []
+    inputs: Any = payload.get("inputs")
+    transitions: Any = (
+        cast(dict[str, Any], inputs).get("material_transitions")
+        if isinstance(inputs, dict)
+        else None
+    )
+    exempt: frozenset[str] = (
+        frozenset({owner_deletion_exception.CONFIG_PATH}) if transitions else frozenset()
+    )
+    try:
+        changed = owner_deletion_exception.trust_root_change(
+            cast(dict[str, Any], config),
+            manifest["entries"],
+            lambda oid: _read_deletion_blob(repo_root, oid),
+            exempt,
+        )
+    except owner_deletion_exception.DeletionExceptionError:
+        changed = "unreadable"
+    return [] if changed is None else ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+
+
 def _owner_signature_advisory_binding_reasons(
     config: Any, request: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> list[str]:
@@ -2525,7 +2581,7 @@ def _owner_signature_advisory_binding_reasons(
         record,
         cast(list[dict[str, Any]], entry_list),
         exempt_paths=exempt,
-        has_deletion_record=payload.get("deletion_exception") is not None,
+        deletion_record=payload.get("deletion_exception"),
     )
 
 
@@ -2803,6 +2859,7 @@ def _validate_verification_receipt_payload(
                 physical = _manifest_from_trees(repo_root, source_tree, target_tree)
                 if physical != manifest:
                     reasons.append("GIT_MANIFEST_MISMATCH")
+                reasons.extend(_advisory_trust_root_reasons(repo_root, config, payload, manifest))
             except (LocalCheckError, KeyError, TypeError):
                 reasons.append("GIT_MANIFEST_MISMATCH")
     elif request is None and _is_pre_request_failed_closed(payload):

@@ -325,10 +325,8 @@ def test_advisory_unsigned_manifest_is_reported_not_failed(
 ) -> None:
     repo = advisory_world["repo"]
     assert isinstance(repo, Path)
-    directory = repo / ".nexus-core" / "deletions"
-    directory.mkdir(parents=True)
-    (directory / "pin.json").write_text("{}\n", encoding="utf-8")
     (repo / ".github" / "workflows" / "core.yml").write_text("pin: b\n", encoding="utf-8")
+    _write_manifest(repo, "pin", str(advisory_world["base"]), ".github/workflows/core.yml")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "workflow change with unsigned manifest")
     result = check_repository(repo, require_trusted_config=True)
@@ -338,6 +336,97 @@ def test_advisory_unsigned_manifest_is_reported_not_failed(
     assert advisory["manifest_paths_touched"] == [".nexus-core/deletions/pin.json"]
     assert advisory["protected_paths_touched"] == [".github/workflows/core.yml"]
     assert validate_verification_receipt(result["receipt_path"], repo=repo)["valid"] is True
+
+
+def _write_manifest(repo: Path, name: str, base: str, companion: str) -> Path:
+    manifest = {
+        "schema": "nexus.core.deletion-manifest.v1",
+        "id": name,
+        "reason": "workflow pin",
+        "archive": {"ref": "refs/heads/archive/2026-10-13-test", "commit": base},
+        "deletions": [],
+        "companion_changes": [
+            {
+                "path": companion,
+                "change_type": "MODIFY",
+                "after_oid": _git(repo, "hash-object", companion),
+            }
+        ],
+    }
+    directory = repo / ".nexus-core" / "deletions"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{name}.json"
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def test_advisory_rejects_a_malformed_unsigned_manifest(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    directory = repo / ".nexus-core" / "deletions"
+    directory.mkdir(parents=True)
+    (directory / "pin.json").write_text("{}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "malformed unsigned manifest")
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(repo, require_trusted_config=True)
+    assert raised.value.reason_code == "DELETION_MANIFEST_MALFORMED"
+
+
+def test_advisory_reason_must_match_the_manifest_shape(
+    advisory_world: dict[str, object],
+) -> None:
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    _edit_protected_workflow(repo)
+    result = check_repository(repo, require_trusted_config=True)
+
+    def swap(receipt: dict[str, object]) -> None:
+        receipt["owner_signature_advisory"]["reason_code"] = (  # type: ignore[index]
+            "DELETION_MANIFEST_SIGNATURE_MISSING"
+        )
+
+    validation = validate_verification_receipt(_rewrite(result, "s.json", swap), repo=repo)
+    assert validation["valid"] is False
+    assert "OWNER_SIGNATURE_ADVISORY_MALFORMED" in validation["reason_codes"]
+
+
+def test_advisory_trust_root_recheck_against_the_repo(
+    advisory_world: dict[str, object],
+) -> None:
+    """With the repository at hand, the validator re-runs the trust-root refusal."""
+
+    from product.clients.local_golden_path import _advisory_trust_root_reasons
+
+    repo = advisory_world["repo"]
+    assert isinstance(repo, Path)
+    config = repo / ".nexus-core" / "config.toml"
+    config.write_text(config.read_text(encoding="utf-8") + "# note\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "harmless config edit")
+    result = check_repository(repo, require_trusted_config=True)
+    receipt = _receipt(result)
+    trusted = receipt["inputs"]["config"]  # type: ignore[index]
+    manifest = receipt["inputs"]["request"]["change_manifest"]  # type: ignore[index]
+    assert _advisory_trust_root_reasons(repo, trusted, receipt, manifest) == []
+    flipped = config.read_text(encoding="utf-8").replace(
+        'deletion_policy = "FORBID"', 'deletion_policy = "ALLOW"'
+    )
+    flipped_oid = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        input=flipped,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    for entry in manifest["entries"]:
+        if entry["path"] == ".nexus-core/config.toml":
+            entry["after_oid"] = flipped_oid
+    assert _advisory_trust_root_reasons(repo, trusted, receipt, manifest) == [
+        "OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"
+    ]
 
 
 def test_advisory_never_admits_an_unsigned_deletion(advisory_world: dict[str, object]) -> None:
@@ -634,3 +723,58 @@ def test_cli_failure_detail_cannot_inject_workflow_commands(
     err = capsys.readouterr().err
     assert all(not line.lstrip().startswith("::") for line in err.splitlines())
     assert "FORBIDDEN_DELETION" in err
+
+
+def test_signed_record_replaces_advisory_only_for_its_own_manifest() -> None:
+    from product.clients import owner_deletion_exception as ode
+
+    section = ode.validate_section(
+        {
+            "mode": "OWNER_SIGNED_ARCHIVE",
+            "manifest_dir": ".nexus-core/deletions",
+            "signature_namespace": NAMESPACE,
+            "allowed_signers": ["owner ssh-ed25519 AAAA"],
+            "protected_paths": [".github/workflows/core.yml"],
+            "enforcement": "ADVISORY",
+        }
+    )
+    entries = [
+        {"path": ".github/workflows/core.yml", "change_type": "MODIFY"},
+        {"path": ".nexus-core/deletions/a.json", "change_type": "ADD"},
+        {"path": ".nexus-core/deletions/a.json.sig", "change_type": "ADD"},
+    ]
+    own = {"manifest_path": ".nexus-core/deletions/a.json", "companion_paths": [entries[0]["path"]]}
+    unrelated = {"manifest_path": ".nexus-core/deletions/old.json", "companion_paths": []}
+    uncovered = {"manifest_path": ".nexus-core/deletions/a.json", "companion_paths": []}
+    kwargs = {"exempt_paths": frozenset()}
+    assert ode.advisory_binding_reasons(section, None, entries, deletion_record=own, **kwargs) == []
+    for record in (unrelated, uncovered):
+        assert ode.advisory_binding_reasons(
+            section, None, entries, deletion_record=record, **kwargs
+        ) == ["OWNER_SIGNATURE_ADVISORY_MISSING"]
+
+
+def test_failed_run_still_prints_its_advisory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from product.clients.cli import _print_failed_run_advisory
+
+    receipt = tmp_path / "r.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "owner_signature_advisory": {
+                    "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+                    "detail": ".github/workflows/core.yml",
+                    "protected_paths_touched": [".github/workflows/core.yml"],
+                    "manifest_paths_touched": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _print_failed_run_advisory(receipt)
+    _print_failed_run_advisory(tmp_path / "missing.json")
+    out = capsys.readouterr().out
+    assert "::warning title=Nexus Core owner signature (advisory)::" in out
+    assert ".github/workflows/core.yml" in out

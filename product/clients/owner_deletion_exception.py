@@ -53,7 +53,7 @@ import tempfile
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 SECTION = "deletion_exception"
 MODE = "OWNER_SIGNED_ARCHIVE"
@@ -396,13 +396,37 @@ def advisory_finding(
     }
 
 
+def _expected_advisory_reason(
+    manifest_adds: Sequence[str], entries: Sequence[Mapping[str, Any]]
+) -> str | None:
+    """The one advisory reason ``evaluate`` can raise for this manifest shape."""
+
+    if not manifest_adds:
+        return "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE"
+    if len(manifest_adds) != 1:
+        return None
+    signature = manifest_adds[0] + ".sig"
+    signed = any(
+        entry.get("path") == signature and entry.get("change_type") == "ADD" for entry in entries
+    )
+    return (
+        "DELETION_MANIFEST_SIGNATURE_INVALID" if signed else "DELETION_MANIFEST_SIGNATURE_MISSING"
+    )
+
+
+def parse_manifest(raw: bytes) -> dict[str, Any]:
+    """Public strict manifest parser (raises DELETION_MANIFEST_MALFORMED)."""
+
+    return _parse_manifest(raw)
+
+
 def advisory_binding_reasons(
     section: Mapping[str, Any],
     record: Any,
     entries: Sequence[Mapping[str, Any]],
     *,
     exempt_paths: frozenset[str],
-    has_deletion_record: bool,
+    deletion_record: Any = None,
 ) -> list[str]:
     """Receipt-side check that an advisory record is present exactly when due.
 
@@ -415,11 +439,22 @@ def advisory_binding_reasons(
     advisory = section.get("enforcement", ENFORCED) == ADVISORY
     deletes = any(entry.get("change_type") == "DELETE" for entry in entries)
     touched_protected = _touched_protected(section, entries, exempt_paths)
+    manifest_adds = [entry["path"] for entry in _manifest_adds(section, entries)]
+    if advisory and not deletes and deletion_record is not None:
+        # An owner-signed record replaces the advisory only when it is this
+        # change's own manifest and covers every touched protected path.
+        if (
+            not isinstance(deletion_record, dict)
+            or cast(dict[str, Any], deletion_record).get("manifest_path") not in manifest_adds
+            or not set(touched_protected)
+            <= set(cast(dict[str, Any], deletion_record).get("companion_paths") or [])
+        ):
+            return ["OWNER_SIGNATURE_ADVISORY_MISSING"]
     due = (
         advisory
         and not deletes
-        and not has_deletion_record
-        and bool(touched_protected or _manifest_adds(section, entries))
+        and deletion_record is None
+        and bool(touched_protected or manifest_adds)
     )
     if record is None:
         return ["OWNER_SIGNATURE_ADVISORY_MISSING"] if due else []
@@ -438,7 +473,7 @@ def advisory_binding_reasons(
         }
         or record["schema"] != ADVISORY_SCHEMA
         or record["enforcement"] != ADVISORY
-        or record["reason_code"] not in ADVISORY_REASON_CODES
+        or record["reason_code"] != _expected_advisory_reason(manifest_adds, entries)
         or not isinstance(record["detail"], str)
         or not record["detail"]
         or record["protected_paths_touched"] != touched_protected
