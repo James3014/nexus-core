@@ -1658,6 +1658,7 @@ def _base_receipt(
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
     deletion_exception: Mapping[str, Any] | None = None,
+    owner_signature_advisory: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_version = config.get("version") if isinstance(config, Mapping) else None
     receipt: dict[str, Any] = {
@@ -1698,6 +1699,8 @@ def _base_receipt(
         receipt["residue_policy"] = RESIDUE_POLICY
     if deletion_exception is not None:
         receipt["deletion_exception"] = dict(deletion_exception)
+    if owner_signature_advisory is not None:
+        receipt["owner_signature_advisory"] = dict(owner_signature_advisory)
     if config_version in {None, CONFIG_VERSION}:
         receipt["verifier"] = dict(artifacts[0]) if artifacts else None
     else:
@@ -1753,6 +1756,7 @@ def _raise_with_receipt(
     issue_verification: Mapping[str, Any] | None = None,
     material_transitions: Sequence[Mapping[str, Any]] = (),
     remediation: str | None = None,
+    owner_signature_advisory: Mapping[str, Any] | None = None,
 ) -> NoReturn:
     receipt = _base_receipt(
         repo=repo,
@@ -1768,9 +1772,47 @@ def _raise_with_receipt(
         config_source=config_source,
         issue_verification=issue_verification,
         material_transitions=material_transitions,
+        owner_signature_advisory=owner_signature_advisory,
     )
     path = _write_receipt(repo, receipt)
     raise LocalCheckError(reason, detail, receipt_path=path, remediation=remediation)
+
+
+def _read_deletion_blob(repo: Path, oid: str) -> bytes:
+    shown = _run_git(repo, "cat-file", "blob", oid, text=False)
+    if shown.returncode != 0:
+        raise owner_deletion_exception.DeletionExceptionError(
+            "DELETION_MANIFEST_MALFORMED", f"blob {oid} unreadable"
+        )
+    return shown.stdout
+
+
+def _advisory_manifest_check(
+    repo: Path,
+    section: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    exc: owner_deletion_exception.DeletionExceptionError,
+) -> tuple[str, str]:
+    """A manifest added without a valid owner signature must still be well formed."""
+
+    if exc.reason_code not in {
+        "DELETION_MANIFEST_SIGNATURE_MISSING",
+        "DELETION_MANIFEST_SIGNATURE_INVALID",
+    }:
+        return exc.reason_code, exc.detail
+    for entry in entries:
+        if entry["change_type"] != "ADD" or not entry["path"].endswith(".json"):
+            continue
+        prefix = section["manifest_dir"].rstrip("/") + "/"
+        if not entry["path"].startswith(prefix) or "/" in entry["path"][len(prefix) :]:
+            continue
+        try:
+            owner_deletion_exception.check_unsigned_manifest(
+                entry["path"], _read_deletion_blob(repo, entry["after_oid"]), section
+            )
+        except owner_deletion_exception.DeletionExceptionError as malformed:
+            return malformed.reason_code, f"{entry['path']}: {malformed.detail}"
+    return exc.reason_code, exc.detail
 
 
 def _evaluate_deletion_exception(
@@ -1785,12 +1827,7 @@ def _evaluate_deletion_exception(
     section = owner_deletion_exception.validate_section(config["deletion_exception"])
 
     def read_blob(oid: str) -> bytes:
-        shown = _run_git(repo, "cat-file", "blob", oid, text=False)
-        if shown.returncode != 0:
-            raise owner_deletion_exception.DeletionExceptionError(
-                "DELETION_MANIFEST_MALFORMED", f"blob {oid} unreadable"
-            )
-        return shown.stdout
+        return _read_deletion_blob(repo, oid)
 
     def tree_entry(commit: str, path: str) -> tuple[str, str] | None:
         listed = _run_git(repo, "ls-tree", "-z", commit, "--", path, text=False)
@@ -1991,24 +2028,54 @@ def check_repository(
         entry["path"] for entry in snapshot.manifest["entries"] if entry["change_type"] == "DELETE"
     ]
     deletion_exception: dict[str, Any] | None = None
+    owner_signature_advisory: dict[str, Any] | None = None
     if config["deletion_policy"] == "FORBID" and "deletion_exception" in config:
         try:
             deletion_exception = _evaluate_deletion_exception(
                 repo, config, snapshot, exempt_config=bool(transitions)
             )
         except owner_deletion_exception.DeletionExceptionError as exc:
-            _raise_with_receipt(
-                repo,
-                exc.reason_code,
-                exc.detail,
-                config=config,
-                config_hash=config_hash,
-                config_source=config_source,
-                snapshot=snapshot,
-                requirements_context=requirements_context,
-                issue_verification=issue_verification,
-                material_transitions=transitions,
+            # ADVISORY (trusted base config only): a change that deletes nothing
+            # records the failed owner-signature check and continues. Deletions
+            # and trust-root edits are never advisory, so FORBID still fails them.
+            section = owner_deletion_exception.validate_section(config["deletion_exception"])
+            exempt: frozenset[str] = (
+                frozenset({owner_deletion_exception.CONFIG_PATH}) if transitions else frozenset()
             )
+            entries = snapshot.manifest["entries"]
+            reason_code, detail = exc.reason_code, exc.detail
+            if section["enforcement"] == owner_deletion_exception.ADVISORY:
+                try:
+                    trust_root = owner_deletion_exception.trust_root_change(
+                        config, entries, lambda oid: _read_deletion_blob(repo, oid), exempt
+                    )
+                except owner_deletion_exception.DeletionExceptionError as root_exc:
+                    trust_root = root_exc.detail
+                if trust_root is not None:
+                    reason_code = owner_deletion_exception.TRUST_ROOT_REASON
+                    detail = (
+                        f"{owner_deletion_exception.CONFIG_PATH} changes {trust_root} "
+                        f"({exc.reason_code}: {exc.detail})"
+                    )
+                else:
+                    reason_code, detail = _advisory_manifest_check(repo, section, entries, exc)
+                    if reason_code == exc.reason_code:
+                        owner_signature_advisory = owner_deletion_exception.advisory_finding(
+                            section, entries, exc, exempt_paths=exempt
+                        )
+            if owner_signature_advisory is None:
+                _raise_with_receipt(
+                    repo,
+                    reason_code,
+                    detail,
+                    config=config,
+                    config_hash=config_hash,
+                    config_source=config_source,
+                    snapshot=snapshot,
+                    requirements_context=requirements_context,
+                    issue_verification=issue_verification,
+                    material_transitions=transitions,
+                )
     if deleted and config["deletion_policy"] == "FORBID" and deletion_exception is None:
         _raise_with_receipt(
             repo,
@@ -2063,6 +2130,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
         except subprocess.TimeoutExpired as exc:
             _raise_with_receipt(
@@ -2077,6 +2145,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
         except OSError as exc:
             _raise_with_receipt(
@@ -2091,6 +2160,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
 
         if config["version"] == CONFIG_VERSION:
@@ -2126,6 +2196,7 @@ def check_repository(
                 requirements_context=requirements_context,
                 issue_verification=issue_verification,
                 material_transitions=transitions,
+                owner_signature_advisory=owner_signature_advisory,
             )
 
     post_tree = _materialize_target_tree(repo, _git_stdout(repo, "rev-parse", "HEAD^{commit}"))
@@ -2142,6 +2213,7 @@ def check_repository(
             requirements_context=requirements_context,
             issue_verification=issue_verification,
             material_transitions=transitions,
+            owner_signature_advisory=owner_signature_advisory,
         )
 
     request = _build_request(
@@ -2169,6 +2241,7 @@ def check_repository(
             requirements_context=requirements_context,
             issue_verification=issue_verification,
             material_transitions=transitions,
+            owner_signature_advisory=owner_signature_advisory,
             deletion_exception=deletion_exception,
         )
         path_out = _write_receipt(repo, receipt)
@@ -2186,6 +2259,7 @@ def check_repository(
         requirements_context=requirements_context,
         issue_verification=issue_verification,
         material_transitions=transitions,
+        owner_signature_advisory=owner_signature_advisory,
         request=request,
         response=response,
         status=status,
@@ -2206,6 +2280,11 @@ def check_repository(
         "subject_head": receipt.get("subject_head"),
         "subject_head_tree": receipt.get("subject_head_tree"),
         "subject_clean": receipt.get("subject_clean"),
+        **(
+            {"owner_signature_advisory": receipt["owner_signature_advisory"]}
+            if "owner_signature_advisory" in receipt
+            else {}
+        ),
         **(
             {"issue_verification": receipt["issue_verification"]}
             if "issue_verification" in receipt
@@ -2431,6 +2510,104 @@ def _deletion_policy_binding_reasons(
     return owner_deletion_exception.revalidate_record(section, record, entries)
 
 
+def _advisory_trust_root_reasons(
+    repo_root: Path, config: Any, payload: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> list[str]:
+    """With the repository at hand, re-run the runner's trust-root and manifest checks.
+
+    Without a repository the candidate config and manifest blobs are not in the
+    receipt, so these two refusals are not repeated. A receipt that claims
+    material transitions also skips the config.toml re-check (those claims are
+    receipt-asserted). In both cases receipt authenticity rests on the Sigstore
+    signature of the gate workflow, not on this re-check.
+    """
+
+    if payload.get("owner_signature_advisory") is None or not isinstance(config, dict):
+        return []
+    inputs: Any = payload.get("inputs")
+    transitions: Any = (
+        cast(dict[str, Any], inputs).get("material_transitions")
+        if isinstance(inputs, dict)
+        else None
+    )
+    exempt: frozenset[str] = (
+        frozenset({owner_deletion_exception.CONFIG_PATH}) if transitions else frozenset()
+    )
+    try:
+        changed = owner_deletion_exception.trust_root_change(
+            cast(dict[str, Any], config),
+            manifest["entries"],
+            lambda oid: _read_deletion_blob(repo_root, oid),
+            exempt,
+        )
+        if changed is None and "deletion_exception" in config:
+            section = owner_deletion_exception.validate_section(config["deletion_exception"])
+            prefix = section["manifest_dir"].rstrip("/") + "/"
+            for entry in manifest["entries"]:
+                path = entry["path"]
+                if (
+                    entry["change_type"] == "ADD"
+                    and path.startswith(prefix)
+                    and path.endswith(".json")
+                    and "/" not in path[len(prefix) :]
+                ):
+                    owner_deletion_exception.check_unsigned_manifest(
+                        path, _read_deletion_blob(repo_root, entry["after_oid"]), section
+                    )
+    except owner_deletion_exception.DeletionExceptionError:
+        changed = "unreadable or malformed"
+    return [] if changed is None else ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+
+
+def _owner_signature_advisory_binding_reasons(
+    config: Any, request: Mapping[str, Any], payload: Mapping[str, Any]
+) -> list[str]:
+    """The advisory record must be present exactly when an ADVISORY config made one due."""
+
+    record: Any = payload.get("owner_signature_advisory")
+    trusted: dict[str, Any] = cast(dict[str, Any], config) if isinstance(config, dict) else {}
+    if trusted.get("deletion_policy") != "FORBID" or "deletion_exception" not in trusted:
+        return [] if record is None else ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+    config = trusted
+    try:
+        contract_policy = request["acceptance_contract"]["deletion_policy"]
+        entries = request["change_manifest"]["entries"]
+    except (KeyError, TypeError):
+        return ["CONFIG_BINDING_MISMATCH"]
+    if not isinstance(entries, list):
+        return ["CONFIG_BINDING_MISMATCH"]
+    entry_list = cast(list[Any], entries)
+    if any(
+        not isinstance(entry, dict)
+        or not isinstance(cast(dict[str, Any], entry).get("path"), str)
+        or not isinstance(cast(dict[str, Any], entry).get("change_type"), str)
+        for entry in entry_list
+    ):
+        return ["CONFIG_BINDING_MISMATCH"]
+    if record is not None and contract_policy != "FORBID":
+        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+    try:
+        section = owner_deletion_exception.validate_section(config["deletion_exception"])
+    except owner_deletion_exception.DeletionExceptionError:
+        return ["CONFIG_BINDING_MISMATCH"]
+    inputs: Any = payload.get("inputs")
+    transitions: Any = (
+        cast(dict[str, Any], inputs).get("material_transitions")
+        if isinstance(inputs, dict)
+        else None
+    )
+    exempt: frozenset[str] = (
+        frozenset({owner_deletion_exception.CONFIG_PATH}) if transitions else frozenset()
+    )
+    return owner_deletion_exception.advisory_binding_reasons(
+        section,
+        record,
+        cast(list[dict[str, Any]], entry_list),
+        exempt_paths=exempt,
+        deletion_record=payload.get("deletion_exception"),
+    )
+
+
 def validate_verification_receipt_payload(
     payload: Mapping[str, Any], *, repo: str | Path | None = None
 ) -> dict[str, Any]:
@@ -2603,6 +2780,7 @@ def _validate_verification_receipt_payload(
         if status != 200 or recomputed != payload.get("core_response"):
             reasons.append("CORE_RESPONSE_MISMATCH")
         reasons.extend(_deletion_policy_binding_reasons(config, request, payload))
+        reasons.extend(_owner_signature_advisory_binding_reasons(config, request, payload))
 
         try:
             observations = request["evidence_bundle"]["observations"]
@@ -2704,6 +2882,7 @@ def _validate_verification_receipt_payload(
                 physical = _manifest_from_trees(repo_root, source_tree, target_tree)
                 if physical != manifest:
                     reasons.append("GIT_MANIFEST_MISMATCH")
+                reasons.extend(_advisory_trust_root_reasons(repo_root, config, payload, manifest))
             except (LocalCheckError, KeyError, TypeError):
                 reasons.append("GIT_MANIFEST_MISMATCH")
     elif request is None and _is_pre_request_failed_closed(payload):

@@ -26,6 +26,20 @@ transitions, which the caller has already validated.
 Nothing here trusts the candidate: the policy, signer list and namespace come
 from the base-ref config, and the manifest bytes are read from the exact
 target tree.
+
+Optional ``enforcement`` (default ``"ENFORCED"``). ``"ADVISORY"`` keeps every
+check above but, for a change that deletes nothing, reports a failed
+owner-signature check (for example ``PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE``
+or a missing manifest signature) as an advisory finding instead of failing the
+change: :func:`advisory_finding` names the reason code and every protected
+path and manifest the change touched. A change that deletes files is never
+advisory: ``deletion_policy = "FORBID"`` still fails it unless a valid
+owner-signed manifest admits the deletions. A config.toml edit of
+``deletion_policy`` or ``[deletion_exception]`` (the trust root) is never
+advisory either. Only the owner-signature reason codes in
+``ADVISORY_REASON_CODES`` are. The mode is read from the effective config,
+which under ``--require-trusted-config`` is the base-ref config, so a
+candidate cannot select it for itself there.
 """
 
 from __future__ import annotations
@@ -36,9 +50,10 @@ import json
 import re
 import subprocess
 import tempfile
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 SECTION = "deletion_exception"
 MODE = "OWNER_SIGNED_ARCHIVE"
@@ -52,6 +67,11 @@ _SECTION_KEYS = {
     "allowed_signers",
     "protected_paths",
 }
+_OPTIONAL_SECTION_KEYS = {"enforcement"}
+ENFORCED = "ENFORCED"
+ADVISORY = "ADVISORY"
+_ENFORCEMENT_MODES = {ENFORCED, ADVISORY}
+ADVISORY_SCHEMA = "nexus.core.owner-signature-advisory.v1"
 _MANIFEST_KEYS = {
     "schema",
     "id",
@@ -99,8 +119,21 @@ def _relative_path(value: Any, label: str) -> str:
 def validate_section(value: Any) -> dict[str, Any]:
     """Validate the optional ``[deletion_exception]`` config table."""
 
-    if not isinstance(value, dict) or set(value) != _SECTION_KEYS:
-        raise _fail("INVALID_CONFIG", f"{SECTION} must have exactly {sorted(_SECTION_KEYS)}")
+    if (
+        not isinstance(value, dict)
+        or not _SECTION_KEYS <= set(value)
+        or not set(value) <= _SECTION_KEYS | _OPTIONAL_SECTION_KEYS
+    ):
+        raise _fail(
+            "INVALID_CONFIG",
+            f"{SECTION} must have exactly {sorted(_SECTION_KEYS)} "
+            f"plus optional {sorted(_OPTIONAL_SECTION_KEYS)}",
+        )
+    enforcement = value.get("enforcement", ENFORCED)
+    if not isinstance(enforcement, str) or enforcement not in _ENFORCEMENT_MODES:
+        raise _fail(
+            "INVALID_CONFIG", f"{SECTION}.enforcement must be one of {sorted(_ENFORCEMENT_MODES)}"
+        )
     if value["mode"] != MODE:
         raise _fail("INVALID_CONFIG", f"{SECTION}.mode must be {MODE}")
     manifest_dir = _relative_path(value["manifest_dir"], f"{SECTION}.manifest_dir")
@@ -128,6 +161,7 @@ def validate_section(value: Any) -> dict[str, Any]:
         "signature_namespace": namespace,
         "allowed_signers": list(signers),
         "protected_paths": sorted({CONFIG_PATH, *protected}),
+        "enforcement": enforcement,
     }
 
 
@@ -248,6 +282,226 @@ def verify_signature(
     )
 
 
+def _manifest_prefix(section: Mapping[str, Any]) -> str:
+    return section["manifest_dir"].rstrip("/") + "/"
+
+
+def _touched_protected(
+    section: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    exempt_paths: frozenset[str],
+) -> list[str]:
+    protected = set(section["protected_paths"])
+    return sorted(
+        entry["path"]
+        for entry in entries
+        if entry["path"] in protected and entry["path"] not in exempt_paths
+    )
+
+
+def _touched_manifest_dir(
+    section: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    prefix = _manifest_prefix(section)
+    return sorted(entry["path"] for entry in entries if entry["path"].startswith(prefix))
+
+
+def _manifest_adds(
+    section: Mapping[str, Any], entries: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    prefix = _manifest_prefix(section)
+    return [
+        entry
+        for entry in entries
+        if entry["change_type"] == "ADD"
+        and entry["path"].startswith(prefix)
+        and entry["path"].endswith(".json")
+        and "/" not in entry["path"][len(prefix) :]
+    ]
+
+
+# Only a missing, unverifiable-by-the-owner or absent owner signature is advisory.
+# Every other failure (malformed or duplicate manifests, archive, dedication, oid
+# mismatches, an unavailable signature verifier) still fails the change.
+ADVISORY_REASON_CODES = frozenset(
+    {
+        "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+        "DELETION_MANIFEST_SIGNATURE_MISSING",
+        "DELETION_MANIFEST_SIGNATURE_INVALID",
+    }
+)
+TRUST_ROOT_REASON = "TRUST_ROOT_CHANGE_REQUIRES_OWNER_SIGNATURE"
+_TRUST_ROOT_KEYS = ("deletion_policy", SECTION)
+
+
+def trust_root_change(
+    trusted_config: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    read_blob: Callable[[str], bytes],
+    exempt_paths: frozenset[str],
+) -> str | None:
+    """Name the trust-root key a change edits in config.toml, else None.
+
+    ``deletion_policy`` and ``[deletion_exception]`` (signers, protected paths,
+    enforcement) are never advisory: otherwise an unsigned change could relax
+    FORBID or the signer list for every later change. An unreadable or
+    unparseable candidate config counts as a trust-root change (fail closed).
+    """
+
+    if CONFIG_PATH in exempt_paths:
+        return None
+    for entry in entries:
+        if entry["path"] != CONFIG_PATH:
+            continue
+        if entry["change_type"] == "DELETE" or not entry.get("after_oid"):
+            return "config.toml removed"
+        try:
+            candidate = tomllib.loads(read_blob(entry["after_oid"]).decode("utf-8"))
+        except (DeletionExceptionError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            return f"candidate config.toml unreadable ({type(exc).__name__})"
+        for key in _TRUST_ROOT_KEYS:
+            if candidate.get(key) != trusted_config.get(key):
+                return key
+    return None
+
+
+def advisory_finding(
+    section: Mapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+    error: DeletionExceptionError,
+    *,
+    exempt_paths: frozenset[str] = frozenset(),
+) -> dict[str, Any] | None:
+    """Return the advisory record for ``error`` in ADVISORY mode, else None.
+
+    None means the error must still fail the change: the trusted config is
+    ENFORCED, the change deletes a file (``FORBID`` is never advisory), or the
+    error is not an owner-signature failure. The caller checks trust-root edits
+    (:func:`trust_root_change`) first.
+    """
+
+    if section.get("enforcement", ENFORCED) != ADVISORY:
+        return None
+    if any(entry["change_type"] == "DELETE" for entry in entries):
+        return None
+    if error.reason_code not in ADVISORY_REASON_CODES:
+        return None
+    return {
+        "schema": ADVISORY_SCHEMA,
+        "enforcement": ADVISORY,
+        "reason_code": error.reason_code,
+        "detail": error.detail,
+        "protected_paths_touched": _touched_protected(section, entries, exempt_paths),
+        "manifest_paths_touched": _touched_manifest_dir(section, entries),
+    }
+
+
+def _signed_record_manifest(record: Any) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    try:
+        raw = base64.b64decode(cast(dict[str, Any], record)["manifest_base64"], validate=True)
+        return _parse_manifest(raw)
+    except (KeyError, TypeError, ValueError, DeletionExceptionError):
+        return None
+
+
+def check_unsigned_manifest(path: str, raw: bytes, section: Mapping[str, Any]) -> None:
+    """An added manifest without a valid signature must still be well formed and named."""
+
+    manifest = _parse_manifest(raw)
+    if path != f"{_manifest_prefix(section)}{manifest['id']}.json":
+        raise _fail("DELETION_MANIFEST_MALFORMED", "manifest file name must be <id>.json")
+
+
+def _expected_advisory_reason(
+    manifest_adds: Sequence[str], entries: Sequence[Mapping[str, Any]]
+) -> str | None:
+    """The one advisory reason ``evaluate`` can raise for this manifest shape."""
+
+    if not manifest_adds:
+        return "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE"
+    if len(manifest_adds) != 1:
+        return None
+    # Same condition as ``evaluate``: both files added with mode 100644.
+    by_path = {entry.get("path"): entry for entry in entries}
+    manifest_entry = by_path.get(manifest_adds[0]) or {}
+    signature_entry = by_path.get(manifest_adds[0] + ".sig") or {}
+    signed = (
+        signature_entry.get("change_type") == "ADD"
+        and signature_entry.get("after_mode") == "100644"
+        and manifest_entry.get("after_mode") == "100644"
+    )
+    return (
+        "DELETION_MANIFEST_SIGNATURE_INVALID" if signed else "DELETION_MANIFEST_SIGNATURE_MISSING"
+    )
+
+
+def advisory_binding_reasons(
+    section: Mapping[str, Any],
+    record: Any,
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    exempt_paths: frozenset[str],
+    deletion_record: Any = None,
+) -> list[str]:
+    """Receipt-side check that an advisory record is present exactly when due.
+
+    The record is required when the trusted config is ADVISORY, the change
+    deletes nothing, carries no owner-signed record, and would have been
+    evaluated (it touches a non-exempt protected path or adds a manifest). Its
+    touched-path lists must equal the ones recomputed from the change manifest.
+    """
+
+    advisory = section.get("enforcement", ENFORCED) == ADVISORY
+    deletes = any(entry.get("change_type") == "DELETE" for entry in entries)
+    touched_protected = _touched_protected(section, entries, exempt_paths)
+    manifest_adds = [entry["path"] for entry in _manifest_adds(section, entries)]
+    if advisory and not deletes and deletion_record is not None:
+        # An owner-signed record replaces the advisory only when it is this
+        # change's own manifest and covers every touched protected path.
+        # Paths come from the signed manifest bytes, not from receipt fields.
+        signed_manifest = _signed_record_manifest(deletion_record)
+        if (
+            signed_manifest is None
+            or f"{_manifest_prefix(section)}{signed_manifest['id']}.json" not in manifest_adds
+            or not set(touched_protected)
+            <= {item["path"] for item in signed_manifest["companion_changes"]}
+        ):
+            return ["OWNER_SIGNATURE_ADVISORY_MISSING"]
+    due = (
+        advisory
+        and not deletes
+        and deletion_record is None
+        and bool(touched_protected or manifest_adds)
+    )
+    if record is None:
+        return ["OWNER_SIGNATURE_ADVISORY_MISSING"] if due else []
+    if not due:
+        return ["OWNER_SIGNATURE_ADVISORY_UNAUTHORIZED"]
+    if (
+        not isinstance(record, dict)
+        or set(record)
+        != {
+            "schema",
+            "enforcement",
+            "reason_code",
+            "detail",
+            "protected_paths_touched",
+            "manifest_paths_touched",
+        }
+        or record["schema"] != ADVISORY_SCHEMA
+        or record["enforcement"] != ADVISORY
+        or record["reason_code"] != _expected_advisory_reason(manifest_adds, entries)
+        or not isinstance(record["detail"], str)
+        or not record["detail"]
+        or record["protected_paths_touched"] != touched_protected
+        or record["manifest_paths_touched"] != _touched_manifest_dir(section, entries)
+    ):
+        return ["OWNER_SIGNATURE_ADVISORY_MALFORMED"]
+    return []
+
+
 def evaluate(
     *,
     section: Mapping[str, Any],
@@ -267,21 +521,9 @@ def evaluate(
     """
 
     deletes = [entry for entry in entries if entry["change_type"] == "DELETE"]
-    protected = set(section["protected_paths"])
-    touched_protected = sorted(
-        entry["path"]
-        for entry in entries
-        if entry["path"] in protected and entry["path"] not in exempt_paths
-    )
-    prefix = section["manifest_dir"].rstrip("/") + "/"
-    manifest_adds = [
-        entry
-        for entry in entries
-        if entry["change_type"] == "ADD"
-        and entry["path"].startswith(prefix)
-        and entry["path"].endswith(".json")
-        and "/" not in entry["path"][len(prefix) :]
-    ]
+    touched_protected = _touched_protected(section, entries, exempt_paths)
+    prefix = _manifest_prefix(section)
+    manifest_adds = _manifest_adds(section, entries)
     if not deletes and not touched_protected and not manifest_adds:
         return None
     if len(manifest_adds) != 1:
