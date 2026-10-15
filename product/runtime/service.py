@@ -384,6 +384,7 @@ class RuntimeCertificationService:
                 required_verifier_ids=tuple(raw_contract.get("required_verifier_ids", ("pytest",))),
                 allowed_paths=tuple(raw_contract.get("allowed_paths", snapshot.changed_paths)),
                 deletion_policy=raw_contract.get("deletion_policy", "FORBID"),
+                allowed_path_prefixes=tuple(raw_contract.get("allowed_path_prefixes", ())),
             )
 
             change_set = ChangeSet(
@@ -693,6 +694,7 @@ class RuntimeCertificationService:
                     required_verifier_ids=tuple(raw_c["required_verifier_ids"]),
                     allowed_paths=tuple(raw_c["allowed_paths"]),
                     deletion_policy=raw_c["deletion_policy"],
+                    allowed_path_prefixes=tuple(raw_c.get("allowed_path_prefixes", ())),
                 )
                 change_set = ChangeSet(
                     change_set_id=raw_cs["change_set_id"],
