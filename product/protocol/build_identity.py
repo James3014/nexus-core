@@ -56,7 +56,7 @@ _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _GIT_OBJECT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _PACKAGE_DATA_DIR = ("execution", "profiles")
 _PACKAGE_DATA_SUFFIXES = (".json", ".lock")
-_EXCLUDED_TOP_LEVEL_DIRS = frozenset({"benchmark"})
+_EXCLUDED_TOP_LEVEL_PREFIX = "benchmark"
 _STAMP_KEYS = frozenset(
     {
         "schema",
@@ -74,7 +74,8 @@ def _is_shipped(parts: tuple[str, ...]) -> bool:
     """``parts`` is the path relative to the package root, split on "/"."""
     if len(parts) == 0 or "__pycache__" in parts:
         return False
-    if len(parts) > 1 and parts[0] in _EXCLUDED_TOP_LEVEL_DIRS:
+    # pyproject excludes "product.benchmark*" from packages.find.
+    if len(parts) > 1 and parts[0].startswith(_EXCLUDED_TOP_LEVEL_PREFIX):
         return False
     name = parts[-1]
     if name == BUILD_IDENTITY_FILENAME and len(parts) == 1:
@@ -116,7 +117,20 @@ def source_digest_of_files(files: Mapping[str, bytes] | Iterable[tuple[str, byte
 def _iter_shipped_files(package_root: Path) -> list[tuple[str, Path]]:
     found: list[tuple[str, Path]] = []
     for dirpath, dirnames, filenames in os.walk(package_root, followlinks=False):
-        dirnames[:] = [name for name in dirnames if name != "__pycache__"]
+        kept: list[str] = []
+        for name in dirnames:
+            if name == "__pycache__":
+                continue
+            child = Path(dirpath, name)
+            # Python imports through a symlinked directory but the walk would
+            # not see it; fail closed instead of digesting a partial tree.
+            if child.is_symlink():
+                raise ValueError(f"symlinked directory in Core package: {child}")
+            # Mirror setuptools packages.find: only regular packages (with an
+            # __init__.py) ship; other directories are not part of the build.
+            if (child / "__init__.py").is_file():
+                kept.append(name)
+        dirnames[:] = kept
         rel_dir = Path(dirpath).relative_to(package_root).parts
         for filename in filenames:
             parts = (*rel_dir, filename)
@@ -124,6 +138,25 @@ def _iter_shipped_files(package_root: Path) -> list[tuple[str, Path]]:
             if _is_shipped(parts) and path.is_file():
                 found.append(("/".join((PACKAGE_NAME, *parts)), path))
     return found
+
+
+def select_shipped_paths(paths: Iterable[str]) -> list[str]:
+    """Filter ``product/...`` paths (e.g. a git tree listing) to the shipped set.
+
+    Same rule as the on-disk walk: a file ships when :func:`_is_shipped`
+    accepts it and every directory between ``product/`` and the file is a
+    regular package (has an ``__init__.py`` in ``paths``).
+    """
+    prefix = PACKAGE_NAME + "/"
+    rels = [p[len(prefix):] for p in paths if p.startswith(prefix)]
+    init_dirs = {tuple(r.split("/")[:-1]) for r in rels if r.split("/")[-1] == "__init__.py"}
+    selected: list[str] = []
+    for rel in rels:
+        parts = tuple(rel.split("/"))
+        dirs = parts[:-1]
+        if all(dirs[:i] in init_dirs for i in range(1, len(dirs) + 1)) and _is_shipped(parts):
+            selected.append(prefix + rel)
+    return sorted(selected, key=lambda p: p.encode("utf-8"))
 
 
 def shipped_source_paths(package_root: str | os.PathLike[str] | None = None) -> list[str]:
@@ -207,6 +240,17 @@ def core_identity(package_root: str | os.PathLike[str] | None = None) -> dict[st
     - ``source_digest``: always present; digest of the shipped sources on disk
       now. This is the identity to pin for a source checkout or editable
       install.
+    How hosts should consume it:
+    - Installed wheel: pinning ``git_commit == pin`` alone is not enough.
+      Also require ``build_identity == "EMBEDDED"``,
+      ``source_matches_build is True`` and ``git_dirty is False``.
+    - Source checkout / editable install (``UNSTAMPED``): pin
+      ``source_digest``.
+    - ``INVALID_STAMP``: treat as failure.
+    - ``source_digest`` reads the files on disk at call time, not the modules
+      already loaded into this process; files edited after import are
+      reflected even though the old code is still running.
+    - Raises ``ValueError`` when the package contains a symlinked directory.
     - Trust: this is self-reported provenance, not authentication. Whoever can
       write the installed package can rewrite the stamp (or this function).
       Bind to a signed artifact digest when authenticity is required.
@@ -302,9 +346,10 @@ CORE_IDENTITY_SCHEMA: dict[str, Any] = {
 
 SOURCE_DIGEST_RULE = (
     "sha256 over the concatenation, sorted by UTF-8 relative path, of "
-    "'<sha256-hex(file bytes)>  <path>\\n' for every shipped file: product/**/*.py "
-    "and product/execution/profiles/*.json|*.lock, excluding __pycache__, bytecode, "
-    "product/benchmark/** and product/_build_identity.json; result prefixed 'sha256:'"
+    "'<sha256-hex(file bytes)>  <path>\\n' for every shipped file: *.py in product and "
+    "its regular subpackages (directories with __init__.py) plus "
+    "product/execution/profiles/*.json|*.lock, excluding __pycache__, bytecode, "
+    "product/benchmark*/** and product/_build_identity.json; result prefixed 'sha256:'"
 )
 
 SOURCE_DIGEST_CONFORMANCE_VECTOR: dict[str, Any] = {
@@ -333,6 +378,7 @@ __all__ = [
     "read_build_identity",
     "shipped_source_paths",
     "source_digest",
+    "select_shipped_paths",
     "source_digest_of_files",
     "validate_build_identity",
 ]

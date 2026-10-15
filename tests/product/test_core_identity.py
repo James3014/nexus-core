@@ -29,6 +29,7 @@ from product.protocol.build_identity import (
     CORE_IDENTITY_SCHEMA,
     SOURCE_DIGEST_CONFORMANCE_VECTOR,
     make_build_identity,
+    select_shipped_paths,
     shipped_source_paths,
     source_digest,
     source_digest_of_files,
@@ -62,8 +63,8 @@ LEGACY_EXPECTED_HASHES = {
     "evidence_bundle_universe": "sha256:acea73418cb51bc8993a2754d62dd07a62e3344267ed262e2efd16092f483698",
 }
 UNIVERSE_VECTOR_IDENTITY = "sha256:86a8e20e6a99a9c49cffe0110999d51affb3a9082f65f89c067b152f5462ae29"
-# Recorded schema bundle change: 369d8d7d... (main f05cbc5) -> this value.
-SCHEMA_BUNDLE_HASH = "sha256:5974c43217f526d2fd6891640e2c80e9f290898d1516718f24e9b3cabc65f4b2"
+# Recorded schema bundle change: main (after #269) -> this value; see PR #270 body.
+SCHEMA_BUNDLE_HASH = "sha256:7f57b29707ce9cb59a87f422fb746110c1ad63a520bfb464d3143a152e9da769"
 
 _HASH_FNS = {
     "acceptance_contract": acceptance_contract_hash,
@@ -533,3 +534,39 @@ def test_sha256_object_format_git_ids_are_accepted(tmp_path):
             version="0.3.0", git_commit="c" * 50, git_tree="d" * 64, git_dirty=False,
             source_digest_value=source_digest(root),
         )
+
+
+def test_symlinked_package_directory_fails_closed(tmp_path):
+    root = _copy_product(tmp_path)
+    outside = tmp_path / "outside_pkg"
+    outside.mkdir()
+    (outside / "__init__.py").write_text("x = 1\n")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlinked directory"):
+        source_digest(root)
+    with pytest.raises(ValueError, match="symlinked directory"):
+        core_identity(root)
+
+
+def test_digest_mirrors_packages_find(tmp_path):
+    root = _copy_product(tmp_path)
+    before = source_digest(root)
+    # Not a regular package (no __init__.py): setuptools packages.find skips it.
+    (root / "loose").mkdir()
+    (root / "loose" / "mod.py").write_text("x = 1\n")
+    # Excluded by "product.benchmark*".
+    (root / "benchmark_extra").mkdir()
+    (root / "benchmark_extra" / "__init__.py").write_text("")
+    assert source_digest(root) == before
+    (root / "loose" / "__init__.py").write_text("")
+    assert source_digest(root) != before
+
+
+def test_select_shipped_paths_matches_the_walk():
+    every = [
+        "product/" + str(path.relative_to(PRODUCT_DIR)).replace(os.sep, "/")
+        for path in PRODUCT_DIR.rglob("*")
+        if path.is_file()
+    ]
+    every += ["product/loose/mod.py", "product/benchmark/x.py", "README.md"]
+    assert select_shipped_paths(every) == shipped_source_paths(PRODUCT_DIR)

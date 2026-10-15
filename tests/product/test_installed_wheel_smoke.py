@@ -275,3 +275,40 @@ def test_release_build_embeds_commit_and_core_identity_runs_without_git(tmp_path
     assert (identity["git_commit"], identity["git_tree"]) == (commit, tree)
     assert identity["source_digest"] == checkout_digest
     assert identity["source_matches_build"] is True
+
+
+def test_git_dirty_counts_ignored_packaged_files_but_not_bytecode(tmp_path: Path):
+    """#270 review: an ignored .py inside a package ships, so it is dirty."""
+    import json
+
+    repo_root = Path(__file__).parents[2].resolve()
+    if _git_head(repo_root) is None:
+        pytest.skip("not a git checkout")
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(repo_root), str(clone)],
+        check=True, capture_output=True,
+    )
+    # Bytecode only: still clean.
+    subprocess.run([sys.executable, "-m", "compileall", "-q", str(clone / "product")], check=True)
+
+    def build_stamp(name: str) -> dict:
+        out = tmp_path / name
+        res = subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(out)],
+            cwd=str(clone), capture_output=True, text=True,
+        )
+        assert res.returncode == 0, res.stderr
+        with zipfile.ZipFile(next(out.glob("*.whl"))) as zf:
+            return json.loads(zf.read("product/_build_identity.json"))
+
+    clean = build_stamp("clean")
+    assert clean["git_dirty"] is False
+    # ".gitignore" ignores "build/": product/build/ is still a shipped package.
+    (clone / "product" / "build").mkdir()
+    (clone / "product" / "build" / "__init__.py").write_text("x = 1\n")
+    subprocess.run(["rm", "-rf", str(clone / "build")], check=True)
+    dirty = build_stamp("dirty")
+    assert dirty["git_dirty"] is True
+    assert dirty["git_commit"] == clean["git_commit"]
+    assert dirty["source_digest"] != clean["source_digest"]

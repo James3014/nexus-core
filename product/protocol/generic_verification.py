@@ -38,6 +38,10 @@ _GIT_REVISION_PATTERN = r"^git-(?:commit|tree):[0-9a-f]{40}$"
 _GIT_TREE_PATTERN = r"^git-tree:[0-9a-f]{40}$"
 _GIT_OBJECT_PATTERN = r"^[0-9a-f]{40}$"
 _PATH_PATTERN = r"^(?!/)(?!.*\\)(?!.*//)(?!.*(?:^|/)\.\.?/)(?!.*(?:^|/)\.\.?$).+$"
+# Directory scope: one or more non-'.'/'..' segments, each followed by '/', with
+# no backslash or glob metacharacters. Root ('/') and empty prefixes cannot match.
+_PATH_PREFIX_PATTERN = r"^(?!(?:[^/]*/)*\.\.?/)(?:[^/\\*?\[\]]+/)+$"
+_PATH_PREFIX_RE = re.compile(_PATH_PREFIX_PATTERN)
 _REVISION_RE = re.compile(_GIT_REVISION_PATTERN)
 _GIT_TREE_RE = re.compile(_GIT_TREE_PATTERN)
 _HASH_RE = re.compile(_HASH_PATTERN)
@@ -92,6 +96,11 @@ def acceptance_contract_canonical_value(value: Mapping[str, Any]) -> list[Any]:
     universe = expected_universe_canonical_value(value)
     if universe is not None:
         result.extend(universe)
+    # Compatibility rule: contracts without directory scopes retain their prior
+    # hash. Declared prefixes bind as one trailing tagged item, matching the
+    # domain AcceptanceContract.hash value shape exactly.
+    if value.get("allowed_path_prefixes"):
+        result.append(["allowed_path_prefixes", sorted(value["allowed_path_prefixes"])])
     return result
 
 
@@ -103,8 +112,10 @@ def expected_universe_canonical_value(value: Mapping[str, Any]) -> list[Any] | N
     """Canonical ``[universe_generation, sorted subject rows]`` of a wire contract.
 
     Returns ``None`` when the contract declares no expected-subjects universe.
-    The same two items are the tail of :func:`acceptance_contract_canonical_value`
-    and the value of the domain ``AcceptanceContract.universe_identity``.
+    The same two items follow ``deletion_policy`` in
+    :func:`acceptance_contract_canonical_value` (before any
+    ``allowed_path_prefixes`` item) and are the value of the domain
+    ``AcceptanceContract.universe_identity``.
     """
     if not value.get("expected_subjects"):
         return None
@@ -232,6 +243,17 @@ def is_git_tree_ref(value: Any) -> bool:
 
 def is_hash(value: Any) -> bool:
     return type(value) is str and _HASH_RE.fullmatch(value) is not None
+
+
+def is_allowed_path_prefix(value: Any) -> bool:
+    """True for a normalized relative directory scope such as ``src/pkg/``."""
+    return (
+        type(value) is str
+        and value == value.strip()
+        and "\x00" not in value
+        and len(value.encode("utf-8")) <= 512
+        and _PATH_PREFIX_RE.fullmatch(value) is not None
+    )
 
 
 _NORMALIZED_TEXT_SCHEMA: dict[str, Any] = {
@@ -365,6 +387,16 @@ ACCEPTANCE_CONTRACT_SCHEMA: dict[str, Any] = {
             "items": _PATH_SCHEMA,
         },
         "deletion_policy": {"type": "string", "enum": ["FORBID", "ALLOW"]},
+        "allowed_path_prefixes": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": True,
+            "items": {
+                **_NORMALIZED_TEXT_SCHEMA,
+                "pattern": _PATH_PREFIX_PATTERN,
+                "x-nexus-repository-relative-directory-prefix": True,
+            },
+        },
         "expected_subjects": {
             "type": "array",
             "minItems": 1,
@@ -771,6 +803,17 @@ GENERIC_PROTOCOL_CONFORMANCE_VECTORS: dict[str, Any] = {
         "expected_hash": "sha256:6bf2f53e4147ea5d1f9e02089c7237ab6b1cfbb94204d16a6f351e4c0f4f061b",
         "expected_universe_identity": "sha256:86a8e20e6a99a9c49cffe0110999d51affb3a9082f65f89c067b152f5462ae29",
     },
+    "acceptance_contract_path_prefixes": {
+        "value": {
+            "contract_id": "ac-prefix-1",
+            "requirements_hash": "sha256:" + "1" * 64,
+            "required_verifier_ids": ["unit"],
+            "allowed_paths": ["README.md"],
+            "allowed_path_prefixes": ["src/pkg/", "tests/"],
+            "deletion_policy": "FORBID",
+        },
+        "expected_hash": "sha256:e502c53911c3948e397c75c2b2c745a31ec35c9b44c9a594c375002cb60cbf32",
+    },
     "evidence_bundle_universe": {
         "value": {
             "bundle_id": "eb-coverage-1",
@@ -967,6 +1010,34 @@ GENERIC_PROTOCOL_NEGATIVE_CONFORMANCE_VECTORS: dict[str, Any] = {
         "expected_http_status": 422,
         "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.allowed_paths"},
     },
+    "invalid_path_prefix_traversal": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/allowed_path_prefixes",
+        "value": ["src/../"],
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.allowed_path_prefixes"},
+    },
+    "invalid_path_prefix_missing_trailing_slash": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/allowed_path_prefixes",
+        "value": ["src/pkg"],
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.allowed_path_prefixes"},
+    },
+    "invalid_path_prefix_glob": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/allowed_path_prefixes",
+        "value": ["src/*/"],
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.allowed_path_prefixes"},
+    },
+    "invalid_path_prefix_root": {
+        "base": "generic_request",
+        "replace_pointer": "/acceptance_contract/allowed_path_prefixes",
+        "value": ["/"],
+        "expected_http_status": 422,
+        "expected_error": {"code": "MALFORMED_REQUEST", "field": "acceptance_contract.allowed_path_prefixes"},
+    },
     "invalid_deletion_policy": {
         "base": "generic_request",
         "replace_pointer": "/acceptance_contract/deletion_policy",
@@ -1020,6 +1091,14 @@ GENERIC_PROTOCOL_VALIDATION_CONSTRAINTS: dict[str, Any] = {
         "dot_segment_forbidden": True,
         "dotdot_segment_forbidden": True,
     },
+    "repository_relative_directory_prefix": {
+        "inherits": "repository_relative_path",
+        "trailing_slash_required": True,
+        "root_or_empty_forbidden": True,
+        "glob_metacharacters_forbidden": True,
+        "match_rule": "change path starts with the prefix (whole-segment boundary because the prefix ends in '/')",
+        "deletion_policy": "applies unchanged to paths matched by a prefix",
+    },
 }
 
 
@@ -1041,12 +1120,18 @@ def protocol_descriptor() -> dict[str, Any]:
                 "deleted_paths omitted from the canonical hash only when the deletion set is empty; "
                 "non-empty deleted_paths is the sixth canonical tuple/list item"
             ),
+            "acceptance_contract_hash_compatibility": (
+                "allowed_path_prefixes omitted from the canonical hash when absent; when present it "
+                "is one trailing item [\"allowed_path_prefixes\", <sorted prefixes>] after any "
+                "universe items"
+            ),
             "diff_hash": "sha256 of canonical nexus.core.git-change-manifest.v1-experimental value",
             "universe_identity": (
                 "sha256 of canonical [universe_generation (default 0), expected_subjects rows "
                 "[logical_subject_id, evidence_kind, requirement_mode, applicability] sorted by "
                 "logical_subject_id]; absent (null) when expected_subjects is absent or empty; "
-                "these two items are also the tail of the acceptance contract canonical value"
+                "when present, these two items follow deletion_policy in the acceptance contract "
+                "canonical value (before any allowed_path_prefixes item)"
             ),
             "core_source_digest": SOURCE_DIGEST_RULE,
         },
@@ -1094,6 +1179,7 @@ __all__ = [
     "expected_universe_canonical_value",
     "expected_universe_identity",
     "is_git_tree_ref",
+    "is_allowed_path_prefix",
     "is_hash",
     "is_revision_ref",
     "protocol_descriptor",

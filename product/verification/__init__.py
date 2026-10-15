@@ -407,7 +407,15 @@ def _make_verify(
         change_data: dict[str, Any] = vars(change_set)
         plan_data: dict[str, Any] = vars(plan)
         evidence_data: dict[str, Any] = vars(evidence)
-        if set(change_data["paths"]) - set(contract_data["allowed_paths"]):
+        # Scope: exact allowed_paths, or a declared directory prefix. Prefixes are
+        # validated to end in '/' and paths are normalized, so startswith matches
+        # only on a whole-segment boundary (src/pkg/ never covers src/pkgx/a.py).
+        allowed_exact = set(contract_data["allowed_paths"])
+        prefixes = tuple(contract_data["allowed_path_prefixes"])
+        if any(
+            path not in allowed_exact and not any(path.startswith(prefix) for prefix in prefixes)
+            for path in change_data["paths"]
+        ):
             return reducer(integrity_status.SCOPE_ESCAPE)
         if contract_data["deletion_policy"] == "FORBID" and change_data["deleted_paths"]:
             return reducer(integrity_status.SCOPE_ESCAPE, reasons=("DELETION_FORBIDDEN",))

@@ -71,17 +71,43 @@ def _git_metadata() -> tuple[str | None, str | None, bool | None]:
         return (None, None, None)
     commit = _git("rev-parse", "--verify", "HEAD^{commit}")
     tree = _git("rev-parse", "--verify", "HEAD^{tree}")
-    status = _git(
-        "status",
-        "--porcelain",
-        "--untracked-files=all",
-        "--",
-        "product",
-        ":(exclude)product/benchmark",
-    )
-    if commit is None or tree is None or status is None:
+    if commit is None or tree is None:
         return (None, None, None)
-    return (commit.strip(), tree.strip(), bool(status.strip()))
+    return (commit.strip(), tree.strip(), None)
+
+
+def _head_source_digest(identity) -> str | None:
+    """Source digest of the shipped files as committed in HEAD.
+
+    Comparing it with the digest of what is packaged gives an exact dirty flag:
+    modified, untracked and ignored-but-packaged files all count, while
+    bytecode and other unshipped files do not.
+    """
+    listing = _git("ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", "product")
+    if listing is None:
+        return None
+    entries: dict[str, str] = {}
+    for record in listing.split("\0"):
+        if not record:
+            continue
+        meta, path = record.split("\t", 1)
+        _mode, kind, oid = meta.split(" ")
+        if kind == "blob":
+            entries[path] = oid
+    files: list[tuple[str, bytes]] = []
+    for path in identity.select_shipped_paths(entries):
+        try:
+            blob = subprocess.run(
+                ["git", "-C", str(ROOT), "cat-file", "blob", entries[path]],
+                capture_output=True,
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        files.append((path, blob))
+    return identity.source_digest_of_files(files)
+
 
 
 def _write_stamp(package_dir: Path, version: str) -> None:
@@ -99,12 +125,19 @@ def _write_stamp(package_dir: Path, version: str) -> None:
         if not identity.validate_build_identity(existing) or existing["version"] != version:
             raise RuntimeError(f"refusing to package an invalid build stamp: {stamp_path}")
         return
+    packaged_digest = identity.source_digest(package_dir)
+    if commit is not None:
+        head_digest = _head_source_digest(identity)
+        if head_digest is None:
+            commit = tree = dirty = None
+        else:
+            dirty = head_digest != packaged_digest
     stamp = identity.make_build_identity(
         version=version,
         git_commit=commit,
         git_tree=tree,
         git_dirty=dirty,
-        source_digest_value=identity.source_digest(package_dir),
+        source_digest_value=packaged_digest,
     )
     stamp_path.write_text(json.dumps(stamp, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 

@@ -33,6 +33,7 @@ from product.protocol.generic_verification import (
     change_set_hash,
     evidence_bundle_hash,
     expected_universe_identity,
+    is_allowed_path_prefix,
     is_git_tree_ref,
     is_hash,
     is_revision_ref,
@@ -74,6 +75,15 @@ def _paths(value: Any, *, allow_empty: bool = False) -> bool:
     ):
         return False
     return len(paths) == len(set(paths))
+
+
+def _path_prefixes(value: Any) -> bool:
+    if type(value) is not list or not value:
+        return False
+    prefixes = cast("list[Any]", value)
+    if not all(_text(prefix) and is_allowed_path_prefix(prefix) for prefix in prefixes):
+        return False
+    return len(prefixes) == len(set(prefixes))
 
 
 def _ids(value: Any) -> bool:
@@ -133,7 +143,9 @@ def _validate_contract(value: Any) -> str | None:
         "allowed_paths",
         "deletion_policy",
     }
-    if not _subset_exact(value, required, {"expected_subjects", "universe_generation"}):
+    if not _subset_exact(
+        value, required, {"expected_subjects", "universe_generation", "allowed_path_prefixes"}
+    ):
         return "acceptance_contract"
     if not _text(value["contract_id"]):
         return "acceptance_contract.contract_id"
@@ -143,6 +155,8 @@ def _validate_contract(value: Any) -> str | None:
         return "acceptance_contract.required_verifier_ids"
     if not _paths(value["allowed_paths"]):
         return "acceptance_contract.allowed_paths"
+    if "allowed_path_prefixes" in value and not _path_prefixes(value["allowed_path_prefixes"]):
+        return "acceptance_contract.allowed_path_prefixes"
     if value["deletion_policy"] not in {"FORBID", "ALLOW"}:
         return "acceptance_contract.deletion_policy"
     expected = value.get("expected_subjects")
@@ -430,6 +444,7 @@ def _domain_objects(payload: Mapping[str, Any]) -> tuple[AcceptanceContract, Cha
         if expected
         else (),
         contract_value.get("universe_generation", 0),
+        tuple(contract_value.get("allowed_path_prefixes", ())),
     )
     change_set = ChangeSet(
         change_value["change_set_id"],
