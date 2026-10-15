@@ -2480,6 +2480,39 @@ def evaluate_receipt_expectations(
     }
 
 
+def _core_responses_equivalent(recomputed: Mapping[str, Any], stored: Any) -> bool:
+    """Compare a recomputed Core response with the one stored in a receipt.
+
+    Two additive response fields are excluded from the byte comparison:
+    - ``core_identity`` (#267) describes the Core build that produced the
+      receipt, not the verdict. The verdict is recomputed here by this Core, so
+      a receipt made by a different (or older, pre-#267) Core build still
+      matches. The stored value stays in the signed receipt as provenance.
+    - ``hashes.universe_identity`` (#266) is a pure function of the request's
+      acceptance contract, so its absence in a pre-#266 receipt carries no
+      information. When the stored receipt does carry it, it must match.
+    Every other field, including all legacy hashes, must be identical.
+    """
+    if not isinstance(stored, Mapping):
+        return False
+    stored_map = cast("Mapping[str, Any]", stored)
+    left: dict[str, Any] = {k: v for k, v in recomputed.items() if k != "core_identity"}
+    right: dict[str, Any] = {k: v for k, v in stored_map.items() if k != "core_identity"}
+    left_hashes = left.get("hashes")
+    right_hashes = right.get("hashes")
+    if (
+        isinstance(left_hashes, Mapping)
+        and isinstance(right_hashes, Mapping)
+        and "universe_identity" not in right_hashes
+    ):
+        left["hashes"] = {
+            k: v
+            for k, v in cast("Mapping[str, Any]", left_hashes).items()
+            if k != "universe_identity"
+        }
+    return left == right
+
+
 def _deletion_policy_binding_reasons(
     config: Any, request: Mapping[str, Any], payload: Mapping[str, Any]
 ) -> list[str]:
@@ -2777,7 +2810,7 @@ def _validate_verification_receipt_payload(
         if manifest_hash is None or payload.get("manifest_hash") != manifest_hash:
             reasons.append("MANIFEST_HASH_MISMATCH")
         status, recomputed = verify_generic_changeset(request)
-        if status != 200 or recomputed != payload.get("core_response"):
+        if status != 200 or not _core_responses_equivalent(recomputed, payload.get("core_response")):
             reasons.append("CORE_RESPONSE_MISMATCH")
         reasons.extend(_deletion_policy_binding_reasons(config, request, payload))
         reasons.extend(_owner_signature_advisory_binding_reasons(config, request, payload))

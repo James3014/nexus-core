@@ -8,6 +8,13 @@ INGESTION_RECEIPT_SCHEMA = "nexus.ingestion_receipt.v1-experimental"
 EVIDENCE_REQUIREMENT_SCHEMA = "nexus.evidence_requirement.v2-experimental"
 RUNTIME_HANDOFF_SCHEMA = "nexus.core.runtime-handoff.v1"
 
+# Git-free Core build identity (#267). build_identity is a leaf module.
+from product.protocol.build_identity import (  # noqa: E402
+    CORE_IDENTITY_SCHEMA_ID,
+    core_identity,
+    source_digest,
+)
+
 __all__ = [
     "PUBLIC_PROTOCOL_VERSION",
     "IMPLEMENTATION_SCHEMA",
@@ -17,4 +24,7 @@ __all__ = [
     "INGESTION_RECEIPT_SCHEMA",
     "EVIDENCE_REQUIREMENT_SCHEMA",
     "RUNTIME_HANDOFF_SCHEMA",
+    "CORE_IDENTITY_SCHEMA_ID",
+    "core_identity",
+    "source_digest",
 ]

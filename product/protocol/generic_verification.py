@@ -14,6 +14,11 @@ import re
 from typing import Any, Mapping, cast
 
 from product.protocol import PUBLIC_PROTOCOL_VERSION
+from product.protocol.build_identity import (
+    CORE_IDENTITY_SCHEMA,
+    SOURCE_DIGEST_CONFORMANCE_VECTOR,
+    SOURCE_DIGEST_RULE,
+)
 
 GENERIC_VERIFICATION_REQUEST_SCHEMA_ID = "nexus.core.generic-verification-request.v1-experimental"
 GENERIC_VERIFICATION_RESPONSE_SCHEMA_ID = "nexus.core.generic-verification-response.v1-experimental"
@@ -88,21 +93,9 @@ def acceptance_contract_canonical_value(value: Mapping[str, Any]) -> list[Any]:
     # generation and the canonical subject rows as two additional items, matching
     # the domain AcceptanceContract.hash value shape exactly (flat generation +
     # sorted subject rows); any other nesting would break wire->domain binding.
-    if value.get("expected_subjects"):
-        result.append(value.get("universe_generation", 0))
-        result.append(
-            [
-                [
-                    subject["logical_subject_id"],
-                    subject["evidence_kind"],
-                    subject["requirement_mode"],
-                    subject["applicability"],
-                ]
-                for subject in sorted(
-                    value["expected_subjects"], key=lambda s: s["logical_subject_id"]
-                )
-            ]
-        )
+    universe = expected_universe_canonical_value(value)
+    if universe is not None:
+        result.extend(universe)
     # Compatibility rule: contracts without directory scopes retain their prior
     # hash. Declared prefixes bind as one trailing tagged item, matching the
     # domain AcceptanceContract.hash value shape exactly.
@@ -113,6 +106,43 @@ def acceptance_contract_canonical_value(value: Mapping[str, Any]) -> list[Any]:
 
 def acceptance_contract_hash(value: Mapping[str, Any]) -> str:
     return canonical_hash(acceptance_contract_canonical_value(value))
+
+
+def expected_universe_canonical_value(value: Mapping[str, Any]) -> list[Any] | None:
+    """Canonical ``[universe_generation, sorted subject rows]`` of a wire contract.
+
+    Returns ``None`` when the contract declares no expected-subjects universe.
+    The same two items follow ``deletion_policy`` in
+    :func:`acceptance_contract_canonical_value` (before any
+    ``allowed_path_prefixes`` item) and are the value of the domain
+    ``AcceptanceContract.universe_identity``.
+    """
+    if not value.get("expected_subjects"):
+        return None
+    return [
+        value.get("universe_generation", 0),
+        [
+            [
+                subject["logical_subject_id"],
+                subject["evidence_kind"],
+                subject["requirement_mode"],
+                subject["applicability"],
+            ]
+            for subject in sorted(value["expected_subjects"], key=lambda s: s["logical_subject_id"])
+        ],
+    ]
+
+
+def expected_universe_identity(value: Mapping[str, Any]) -> str | None:
+    """Evidence-coverage universe identity of a wire acceptance contract (#266).
+
+    Equals ``AcceptanceContract.universe_identity`` and the
+    ``verification.coverage.universe_identity`` Core reports for the contract;
+    ``None`` when no universe is declared. Hosts call this instead of copying
+    the formula.
+    """
+    universe = expected_universe_canonical_value(value)
+    return None if universe is None else canonical_hash(universe)
 
 
 def change_set_canonical_value(value: Mapping[str, Any]) -> list[Any]:
@@ -623,9 +653,13 @@ GENERIC_VERIFICATION_RESPONSE_SCHEMA: dict[str, Any] = {
                 "verification_plan_hash": _HASH_SCHEMA,
                 "evidence_bundle_hash": _HASH_SCHEMA,
                 "change_manifest_hash": _HASH_SCHEMA,
+                # Present only when the contract declares a universe (#266).
+                "universe_identity": _HASH_SCHEMA,
             },
             "additionalProperties": False,
         },
+        # Additive (#267): the Core build that produced this response.
+        "core_identity": CORE_IDENTITY_SCHEMA,
         "certification": {
             "anyOf": [
                 {"type": "null"},
@@ -656,6 +690,7 @@ GENERIC_PROTOCOL_SCHEMA_BUNDLE: dict[str, dict[str, Any]] = {
     "evidence_bundle_input": EVIDENCE_BUNDLE_INPUT_SCHEMA,
     "expected_evidence_subject": EXPECTED_EVIDENCE_SUBJECT_SCHEMA,
     "coverage_projection": COVERAGE_PROJECTION_SCHEMA,
+    "core_identity": CORE_IDENTITY_SCHEMA,
     "request": GENERIC_VERIFICATION_REQUEST_SCHEMA,
     "response": GENERIC_VERIFICATION_RESPONSE_SCHEMA,
     "error": GENERIC_VERIFICATION_ERROR_SCHEMA,
@@ -766,6 +801,7 @@ GENERIC_PROTOCOL_CONFORMANCE_VECTORS: dict[str, Any] = {
             ],
         },
         "expected_hash": "sha256:6bf2f53e4147ea5d1f9e02089c7237ab6b1cfbb94204d16a6f351e4c0f4f061b",
+        "expected_universe_identity": "sha256:86a8e20e6a99a9c49cffe0110999d51affb3a9082f65f89c067b152f5462ae29",
     },
     "acceptance_contract_path_prefixes": {
         "value": {
@@ -1090,7 +1126,16 @@ def protocol_descriptor() -> dict[str, Any]:
                 "universe items"
             ),
             "diff_hash": "sha256 of canonical nexus.core.git-change-manifest.v1-experimental value",
+            "universe_identity": (
+                "sha256 of canonical [universe_generation (default 0), expected_subjects rows "
+                "[logical_subject_id, evidence_kind, requirement_mode, applicability] sorted by "
+                "logical_subject_id]; absent (null) when expected_subjects is absent or empty; "
+                "when present, these two items follow deletion_policy in the acceptance contract "
+                "canonical value (before any allowed_path_prefixes item)"
+            ),
+            "core_source_digest": SOURCE_DIGEST_RULE,
         },
+        "source_digest_conformance_vector": SOURCE_DIGEST_CONFORMANCE_VECTOR,
         "conformance_vectors": GENERIC_PROTOCOL_CONFORMANCE_VECTORS,
         "request_conformance_vector": GENERIC_PROTOCOL_REQUEST_CONFORMANCE_VECTOR,
         "ordering_conformance_vectors": GENERIC_PROTOCOL_ORDERING_CONFORMANCE_VECTORS,
@@ -1131,6 +1176,8 @@ __all__ = [
     "change_manifest_hash",
     "change_set_hash",
     "evidence_bundle_hash",
+    "expected_universe_canonical_value",
+    "expected_universe_identity",
     "is_git_tree_ref",
     "is_allowed_path_prefix",
     "is_hash",

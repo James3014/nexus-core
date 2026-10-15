@@ -180,3 +180,151 @@ print("PROBE_OK")
     if res_extra.returncode != 0:
         pytest.skip(f"offline: cannot install [runtime] extra: {res_extra.stderr[-200:]}")
     subprocess.run([str(venv_python), "-c", "import aiohttp"], check=True)
+
+
+def _git_head(repo_root: Path) -> tuple[str, str] | None:
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if Path(top).resolve() != repo_root:
+            return None
+        commit = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD^{tree}"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return (commit, tree)
+
+
+def test_release_build_embeds_commit_and_core_identity_runs_without_git(tmp_path: Path):
+    """#267: `uv build` (sdist, then wheel from the sdist) embeds the commit."""
+    import json
+    import tarfile
+
+    from product.protocol.build_identity import shipped_source_paths, source_digest
+
+    repo_root = Path(__file__).parents[2].resolve()
+    head = _git_head(repo_root)
+    if head is None:
+        pytest.skip("not a git checkout: nothing to embed")
+    dist_dir = tmp_path / "dist"
+    res_build = subprocess.run(
+        ["uv", "build", "--out-dir", str(dist_dir)],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    assert res_build.returncode == 0, res_build.stderr
+    wheel = next(dist_dir.glob("nexus_certify-*.whl"))
+    sdist = next(dist_dir.glob("nexus_certify-*.tar.gz"))
+
+    with zipfile.ZipFile(wheel) as zf:
+        wheel_stamp = json.loads(zf.read("product/_build_identity.json"))
+        wheel_files = {
+            name for name in zf.namelist()
+            if name.startswith("product/") and not name.endswith("/")
+        }
+    with tarfile.open(sdist, "r:gz") as tf:
+        member = next(m for m in tf.getmembers() if m.name.endswith("/product/_build_identity.json"))
+        extracted = tf.extractfile(member)
+        assert extracted is not None
+        sdist_stamp = json.loads(extracted.read())
+
+    commit, tree = head
+    assert wheel_stamp == sdist_stamp
+    assert (wheel_stamp["git_commit"], wheel_stamp["git_tree"]) == (commit, tree)
+    assert wheel_stamp["version"] == "0.3.0"
+    checkout_digest = source_digest(repo_root / "product")
+    assert wheel_stamp["source_digest"] == checkout_digest
+    # The digest covers exactly what the wheel ships, minus the stamp.
+    assert wheel_files - {"product/_build_identity.json"} == set(shipped_source_paths(repo_root / "product"))
+
+    venv_dir = tmp_path / "venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+    subprocess.run(
+        [str(venv_dir / "bin" / "pip"), "install", "-q", "--no-deps", str(wheel)], check=True
+    )
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env["PATH"] = str(tmp_path / "no-git-bin")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    probe = (
+        "import json, shutil, product.protocol as p; "
+        "assert shutil.which('git') is None; "
+        "assert 'site-packages' in p.__file__, p.__file__; "
+        "print(json.dumps(p.core_identity()))"
+    )
+    runs = []
+    for _ in range(2):  # the first import writes __pycache__ into site-packages
+        res = subprocess.run(
+            [str(venv_dir / "bin" / "python"), "-c", probe],
+            cwd=str(outside), env=env, capture_output=True, text=True,
+        )
+        assert res.returncode == 0, res.stderr
+        runs.append(json.loads(res.stdout))
+    assert runs[0] == runs[1]
+    identity = runs[0]
+    assert identity["build_identity"] == "EMBEDDED"
+    assert (identity["git_commit"], identity["git_tree"]) == (commit, tree)
+    assert identity["source_digest"] == checkout_digest
+    assert identity["source_matches_build"] is True
+
+
+def test_git_dirty_counts_ignored_packaged_files_but_not_bytecode(tmp_path: Path):
+    """#270 review: an ignored .py inside a package ships, so it is dirty."""
+    import json
+
+    repo_root = Path(__file__).parents[2].resolve()
+    if _git_head(repo_root) is None:
+        pytest.skip("not a git checkout")
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(repo_root), str(clone)],
+        check=True, capture_output=True,
+    )
+    # Bytecode only: still clean.
+    subprocess.run([sys.executable, "-m", "compileall", "-q", str(clone / "product")], check=True)
+
+    from product.protocol.build_identity import shipped_source_paths, source_digest
+
+    def build_stamp(name: str) -> dict:
+        out = tmp_path / name
+        res = subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(out)],
+            cwd=str(clone), capture_output=True, text=True,
+        )
+        assert res.returncode == 0, res.stderr
+        with zipfile.ZipFile(next(out.glob("*.whl"))) as zf:
+            stamp = json.loads(zf.read("product/_build_identity.json"))
+            shipped = {
+                n for n in zf.namelist()
+                if n.startswith("product/") and not n.endswith("/")
+            } - {"product/_build_identity.json"}
+        # The digest covers exactly what the wheel ships.
+        assert shipped == set(shipped_source_paths(clone / "product"))
+        assert stamp["source_digest"] == source_digest(clone / "product")
+        return stamp
+
+    clean = build_stamp("clean")
+    assert clean["git_dirty"] is False
+    # ".gitignore" ignores "build/": product/build/ is still a shipped package.
+    (clone / "product" / "build").mkdir()
+    (clone / "product" / "build" / "__init__.py").write_text("x = 1\n")
+    # Namespace directory (no __init__.py) ships too; dotted names do not.
+    (clone / "product" / "nsdir").mkdir()
+    (clone / "product" / "nsdir" / "mod.py").write_text("x = 1\n")
+    (clone / "product" / "x.y").mkdir()
+    (clone / "product" / "x.y" / "m.py").write_text("x = 1\n")
+    subprocess.run(["rm", "-rf", str(clone / "build")], check=True)
+    dirty = build_stamp("dirty")
+    assert dirty["git_dirty"] is True
+    assert dirty["git_commit"] == clean["git_commit"]
+    assert dirty["source_digest"] != clean["source_digest"]
+    assert "product/nsdir/mod.py" in shipped_source_paths(clone / "product")
