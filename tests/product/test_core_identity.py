@@ -63,7 +63,7 @@ LEGACY_EXPECTED_HASHES = {
 }
 UNIVERSE_VECTOR_IDENTITY = "sha256:86a8e20e6a99a9c49cffe0110999d51affb3a9082f65f89c067b152f5462ae29"
 # Recorded schema bundle change: 369d8d7d... (main f05cbc5) -> this value.
-SCHEMA_BUNDLE_HASH = "sha256:4537c7fe0ab156f50cabd87e3c7e1e16aff300bab80f5060b7173ed4b8e424d5"
+SCHEMA_BUNDLE_HASH = "sha256:5974c43217f526d2fd6891640e2c80e9f290898d1516718f24e9b3cabc65f4b2"
 
 _HASH_FNS = {
     "acceptance_contract": acceptance_contract_hash,
@@ -512,4 +512,24 @@ def test_make_build_identity_rejects_bad_values():
         make_build_identity(
             version="0.3.0", git_commit=None, git_tree=None, git_dirty=None,
             source_digest_value="sha1:abc",
+        )
+
+
+def test_sha256_object_format_git_ids_are_accepted(tmp_path):
+    root = _copy_product(tmp_path)
+    stamp = make_build_identity(
+        version="0.3.0",
+        git_commit="c" * 64,
+        git_tree="d" * 64,
+        git_dirty=True,
+        source_digest_value=source_digest(root),
+    )
+    (root / BUILD_IDENTITY_FILENAME).write_text(json.dumps(stamp))
+    identity = core_identity(root)
+    assert identity["build_identity"] == "EMBEDDED"
+    assert identity["git_commit"] == "c" * 64
+    with pytest.raises(ValueError):
+        make_build_identity(
+            version="0.3.0", git_commit="c" * 50, git_tree="d" * 64, git_dirty=False,
+            source_digest_value=source_digest(root),
         )

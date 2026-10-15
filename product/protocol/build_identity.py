@@ -52,7 +52,8 @@ BUILD_IDENTITY_UNSTAMPED = "UNSTAMPED"
 BUILD_IDENTITY_INVALID = "INVALID_STAMP"
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
+# SHA-1 (40 hex) or SHA-256 (64 hex) git object names.
+_GIT_OBJECT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _PACKAGE_DATA_DIR = ("execution", "profiles")
 _PACKAGE_DATA_SUFFIXES = (".json", ".lock")
 _EXCLUDED_TOP_LEVEL_DIRS = frozenset({"benchmark"})
@@ -199,13 +200,16 @@ def core_identity(package_root: str | os.PathLike[str] | None = None) -> dict[st
     - ``schema``: ``nexus.core.core-identity.v1-experimental``.
     - ``distribution``: ``"nexus-certify"``.
     - ``build_identity``: ``EMBEDDED`` / ``UNSTAMPED`` / ``INVALID_STAMP``.
-    - ``version``, ``git_commit``, ``git_tree`` (40-hex, no prefix),
+    - ``version``, ``git_commit``, ``git_tree`` (40 or 64 hex, no prefix),
       ``git_dirty``, ``build_source_digest``: from the embedded stamp; all
       null unless ``build_identity == "EMBEDDED"``. ``git_*`` are also null
       for a stamped build made without git metadata.
     - ``source_digest``: always present; digest of the shipped sources on disk
       now. This is the identity to pin for a source checkout or editable
       install.
+    - Trust: this is self-reported provenance, not authentication. Whoever can
+      write the installed package can rewrite the stamp (or this function).
+      Bind to a signed artifact digest when authenticity is required.
     - ``source_matches_build``: ``source_digest == build_source_digest`` when
       stamped, else null. ``False`` means the installed files differ from what
       was built (or the build was made from a dirty tree that changed later).
@@ -286,8 +290,8 @@ CORE_IDENTITY_SCHEMA: dict[str, Any] = {
             "enum": [BUILD_IDENTITY_EMBEDDED, BUILD_IDENTITY_UNSTAMPED, BUILD_IDENTITY_INVALID],
         },
         "version": {"type": ["string", "null"], "minLength": 1},
-        "git_commit": {"type": ["string", "null"], "pattern": r"^[0-9a-f]{40}$"},
-        "git_tree": {"type": ["string", "null"], "pattern": r"^[0-9a-f]{40}$"},
+        "git_commit": {"type": ["string", "null"], "pattern": _GIT_OBJECT_RE.pattern},
+        "git_tree": {"type": ["string", "null"], "pattern": _GIT_OBJECT_RE.pattern},
         "git_dirty": {"type": ["boolean", "null"]},
         "build_source_digest": {"type": ["string", "null"], "pattern": _DIGEST_RE.pattern},
         "source_digest": {"type": "string", "pattern": _DIGEST_RE.pattern},

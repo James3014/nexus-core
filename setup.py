@@ -88,7 +88,10 @@ def _write_stamp(package_dir: Path, version: str) -> None:
     identity = _identity_module()
     commit, tree, dirty = _git_metadata()
     stamp_path = package_dir / STAMP_NAME
-    if commit is None and stamp_path.is_file():
+    # Reuse an existing stamp only for a real sdist build (no git metadata at
+    # the project root). In a checkout whose git probe failed, a stray old
+    # stamp must not be carried into the new build: write null git fields.
+    if commit is None and stamp_path.is_file() and not (ROOT / ".git").exists():
         # Wheel built from an sdist (no .git): keep the stamp the sdist was cut
         # with, unchanged. If the sources were edited since, the runtime
         # core_identity() reports source_matches_build == False.
