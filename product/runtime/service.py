@@ -23,10 +23,13 @@ from product.certification.receipt import (
 )
 from product.evidence import (
     AcceptanceContract,
+    Applicability,
     ChangeSet,
     EvidenceBundle,
+    ExpectedEvidenceSubject,
     Observation,
     ObservationStatus,
+    RequirementMode,
     VerificationPlan,
     _hash,  # pyright: ignore[reportPrivateUsage]
 )
@@ -100,6 +103,28 @@ def _decode_durable_payloads(
     if embedded_receipt_hash != receipt_hash or _hash(receipt_body) != receipt_hash:
         raise _DurableLedgerReadError("durable ledger receipt integrity failed")
     return receipt, envelope
+
+
+def _declares_universe(raw_contract: Any) -> bool:
+    if not isinstance(raw_contract, dict):
+        return False
+    contract = cast("dict[str, Any]", raw_contract)
+    return bool(contract.get("expected_subjects"))
+
+
+def _expected_subjects(raw: Any) -> tuple[ExpectedEvidenceSubject, ...]:
+    """Mirror generic_verification._domain_objects; absent/empty gives ()."""
+    if not raw:
+        return ()
+    return tuple(
+        ExpectedEvidenceSubject(
+            subject["logical_subject_id"],
+            subject["evidence_kind"],
+            RequirementMode(subject["requirement_mode"]),
+            Applicability(subject["applicability"]),
+        )
+        for subject in raw
+    )
 
 
 class RuntimeCertificationService:
@@ -324,6 +349,24 @@ class RuntimeCertificationService:
         )
 
         try:
+            # Fail closed (#271): this path emits a single unmapped pytest observation,
+            # so it cannot honestly cover a declared Evidence Coverage universe.
+            if _declares_universe(job.payload["acceptance_contract"]):
+                job.state = "UNVERIFIABLE"
+                job.error_code = "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
+                job.error_message = (
+                    "acceptance_contract declares expected_subjects/universe_generation; "
+                    "the runtime certification path emits no per-subject evidence and "
+                    "cannot certify a declared evidence universe"
+                )
+                job.response = make_http_response(
+                    request_id=job.request_id,
+                    state="UNVERIFIABLE",
+                    generation=job.generation,
+                    claim_ceiling=CLAIM_CEILING,
+                )
+                return
+
             repo_info = job.payload["repository"]
             owner = repo_info["owner"]
             name = repo_info["name"]
@@ -695,6 +738,8 @@ class RuntimeCertificationService:
                     allowed_paths=tuple(raw_c["allowed_paths"]),
                     deletion_policy=raw_c["deletion_policy"],
                     allowed_path_prefixes=tuple(raw_c.get("allowed_path_prefixes", ())),
+                    expected_subjects=_expected_subjects(raw_c.get("expected_subjects")),
+                    universe_generation=raw_c.get("universe_generation", 0),
                 )
                 change_set = ChangeSet(
                     change_set_id=raw_cs["change_set_id"],
@@ -716,6 +761,8 @@ class RuntimeCertificationService:
                         artifact_id=item["artifact_id"],
                         artifact_hash=item["artifact_hash"],
                         status=ObservationStatus(item["status"]),
+                        logical_subject_id=item.get("logical_subject_id"),
+                        evidence_kind=item.get("evidence_kind"),
                     )
                     for item in raw_e["observations"]
                 )
