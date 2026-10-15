@@ -15,8 +15,13 @@ negative controls feed mutated copies of the real text to the same checkers.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "nexus-core-issue-completion.yml"
@@ -28,7 +33,7 @@ CONSUMER_EXAMPLE = REPO_ROOT / "docs" / "examples" / "nexus-core-issue-completio
 
 SAME_REPO_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
 GATED_JOBS = ("run", "verify")
-CONSUMER_GATED_JOBS = ("run", "verify")
+CONSUMER_GATED_JOBS = ("run",)
 CONSUMER_PIN = "0" * 40
 CONSUMER_IDENTITY = (
     "https://github.com/OWNER/REPO/.github/workflows/"
@@ -51,8 +56,11 @@ DISPATCH_GUARD = (
 # Exact job conditions: any widening (an extra '||' arm, a dropped guard) is drift.
 EXPECTED_JOB_IFS = {
     "run": f"({PR_EVENT} && {SAME_REPO_GUARD}) || ({DISPATCH_GUARD})",
-    "verify": f"always() && (({PR_EVENT} && {SAME_REPO_GUARD}) || ({DISPATCH_GUARD}))",
 }
+# #265: a skipped required check counts as success, so the consumer verify job is never
+# skipped: its if: is exactly always() and the first step fails closed.
+CONSUMER_VERIFY_IF = "always()"
+GUARD_STEP_NAME = "Fail closed on untrusted source or unsuccessful issuer"
 EXPECTED_IDENTITY = (
     "https://github.com/James3014/nexus-core/.github/workflows/"
     "nexus-core-issue-completion.yml@refs/heads/main"
@@ -218,6 +226,45 @@ def workflow_violations(text: str) -> list[str]:
     return violations
 
 
+def _first_workflow_step(job_text: str) -> str | None:
+    chunks = re.split(r"(?m)^      - ", job_text)
+    return chunks[1] if len(chunks) > 1 else None
+
+
+def _consumer_verify_guard_violations(verify: str) -> list[str]:
+    """#265: verify is never skipped (if: always()) and its first step fails closed."""
+    violations: list[str] = []
+    condition = _job_if(verify)
+    if condition != CONSUMER_VERIFY_IF:
+        violations.append(
+            f"job condition: job 'verify' if: must be exactly {CONSUMER_VERIFY_IF!r} (a skipped "
+            f"required check counts as passed), found {condition!r}"
+        )
+    first = _first_workflow_step(verify)
+    if first is None or not first.startswith(f"name: {GUARD_STEP_NAME}\n"):
+        violations.append(f"fork guard: the first step of job 'verify' must be {GUARD_STEP_NAME!r}")
+        return violations
+    body = _uncommented(first)
+    for code in ("NEXUS_CORE_UNTRUSTED_PR_SOURCE", "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL"):
+        if code not in body:
+            violations.append(f"fork guard: the guard step must reference {code}")
+    if "head.repo.fork" in body:
+        violations.append("fork guard: the guard step must not rely on head.repo.fork")
+    env_match = re.search(r"(?ms)^        env:\n(.*?)^        run:", first)
+    env_text = env_match.group(1) if env_match else ""
+    for needle in (
+        "github.event.pull_request.head.repo.full_name",
+        "github.repository",
+        "needs.run.result",
+    ):
+        if needle not in env_text:
+            violations.append(f"fork guard: the guard step must read {needle} through env:")
+    run_match = re.search(r"(?ms)^        run: \|\n(.*)", first)
+    if run_match and "${{" in run_match.group(1):
+        violations.append("fork guard: the guard script must not inline ${{ }} expressions")
+    return violations
+
+
 def consumer_workflow_violations(text: str) -> list[str]:
     """Invariants of the dispatch-enabled consumer example (Issue #255)."""
     violations: list[str] = []
@@ -258,6 +305,8 @@ def consumer_workflow_violations(text: str) -> list[str]:
                 f"job condition: job {job_id!r} if: must be exactly "
                 f"{EXPECTED_JOB_IFS[job_id]!r}, found {condition!r}"
             )
+    verify = jobs.get("verify", "")
+    violations.extend(_consumer_verify_guard_violations(verify))
     verify = jobs.get("verify", "")
     identities = re.findall(r"^\s+expected-identity:\s*(\S+)\s*$", verify, flags=re.MULTILINE)
     if identities != [CONSUMER_IDENTITY]:
@@ -445,13 +494,21 @@ def test_negative_control_trigger_and_identity_mutations_are_detected() -> None:
     assert any(v.startswith("sigstore identity:") for v in workflow_violations(mutated))
 
 
+def _guard_step_text(text: str) -> str:
+    verify = _jobs(text)["verify"]
+    first = _first_workflow_step(verify)
+    assert first is not None
+    return "      - " + first.split("\n      - ", 1)[0].rstrip("\n") + "\n"
+
+
 def test_negative_control_consumer_removed_fork_guard_is_detected() -> None:
     text = _read(CONSUMER_EXAMPLE)
-    verify_if = f"    if: {EXPECTED_JOB_IFS['verify']}\n"
-    mutated = text.replace(verify_if, verify_if.replace(f" && {SAME_REPO_GUARD}", ""), 1)
+    guard = _guard_step_text(text)
+    assert guard in text
+    mutated = text.replace(guard + "\n", "", 1)
     assert mutated != text
     violations = consumer_workflow_violations(mutated)
-    assert any("fork guard" in v and "'verify'" in v for v in violations), violations
+    assert any("fork guard" in v and "first step" in v for v in violations), violations
 
     run_if = f"    if: {EXPECTED_JOB_IFS['run']}\n"
     mutated = text.replace(
@@ -465,18 +522,218 @@ def test_negative_control_consumer_removed_fork_guard_is_detected() -> None:
     assert any("'run'" in v and "head.repo.fork" in v for v in violations), violations
 
 
+def test_negative_control_consumer_guard_step_mutations_are_detected() -> None:
+    text = _read(CONSUMER_EXAMPLE)
+    guard = _guard_step_text(text)
+    # head.repo.fork used instead of the full_name comparison
+    mutated = text.replace(
+        guard,
+        guard.replace('"$HEAD_REPO" != "$REPOSITORY"', "github.event.pull_request.head.repo.fork"),
+        1,
+    )
+    assert mutated != text
+    assert any("head.repo.fork" in v for v in consumer_workflow_violations(mutated))
+    # issuer check missing
+    mutated = text.replace(guard, guard.replace("NEXUS_CORE_ISSUER_NOT_SUCCESSFUL", "X"), 1)
+    assert mutated != text
+    assert any(
+        "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL" in v for v in consumer_workflow_violations(mutated)
+    )
+    # source code missing
+    mutated = text.replace(guard, guard.replace("NEXUS_CORE_UNTRUSTED_PR_SOURCE", "X"), 1)
+    assert any("NEXUS_CORE_UNTRUSTED_PR_SOURCE" in v for v in consumer_workflow_violations(mutated))
+    # head repo not passed through env
+    mutated = text.replace(
+        guard,
+        guard.replace(
+            "          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}\n", ""
+        ),
+        1,
+    )
+    assert mutated != text
+    assert any("through env" in v for v in consumer_workflow_violations(mutated))
+    # skippable verify job (job-level same-repo condition)
+    mutated = text.replace(
+        "    if: always()\n    runs-on: ubuntu-latest\n    timeout-minutes: 15",
+        f"    if: always() && {SAME_REPO_GUARD}\n    runs-on: ubuntu-latest\n    timeout-minutes: 15",
+        1,
+    )
+    assert mutated != text
+    violations = consumer_workflow_violations(mutated)
+    assert any(v.startswith("job condition:") and "'verify'" in v for v in violations), violations
+
+
+def _guard_script(text: str) -> str:
+    guard = _guard_step_text(text)
+    match = re.search(r"(?ms)^        run: \|\n(.*)", guard)
+    assert match
+    return (
+        "\n".join(
+            line[10:] if line.startswith(" " * 10) else line for line in match.group(1).splitlines()
+        )
+        + "\n"
+    )
+
+
+GUARD_CASES = (
+    (
+        "pr_same_repo_ok",
+        "pull_request_target",
+        "o/r",
+        "o/r",
+        "refs/pull/1/merge",
+        "main",
+        "success",
+        0,
+        "",
+    ),
+    (
+        "pr_fork",
+        "pull_request_target",
+        "evil/r",
+        "o/r",
+        "refs/pull/1/merge",
+        "main",
+        "skipped",
+        1,
+        "NEXUS_CORE_UNTRUSTED_PR_SOURCE",
+    ),
+    (
+        "pr_no_head_repo",
+        "pull_request_target",
+        "",
+        "o/r",
+        "refs/pull/1/merge",
+        "main",
+        "success",
+        1,
+        "NEXUS_CORE_UNTRUSTED_PR_SOURCE",
+    ),
+    (
+        "pr_run_failed",
+        "pull_request_target",
+        "o/r",
+        "o/r",
+        "refs/pull/1/merge",
+        "main",
+        "failure",
+        1,
+        "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL",
+    ),
+    (
+        "pr_run_skipped",
+        "pull_request_target",
+        "o/r",
+        "o/r",
+        "refs/pull/1/merge",
+        "main",
+        "skipped",
+        1,
+        "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL",
+    ),
+    (
+        "dispatch_main_ok",
+        "repository_dispatch",
+        "",
+        "o/r",
+        "refs/heads/main",
+        "main",
+        "success",
+        0,
+        "",
+    ),
+    (
+        "dispatch_other_ref",
+        "repository_dispatch",
+        "",
+        "o/r",
+        "refs/heads/feature",
+        "main",
+        "success",
+        1,
+        "NEXUS_CORE_UNTRUSTED_DISPATCH_REF",
+    ),
+    (
+        "dispatch_run_failed",
+        "repository_dispatch",
+        "",
+        "o/r",
+        "refs/heads/main",
+        "main",
+        "failure",
+        1,
+        "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL",
+    ),
+    (
+        "other_event",
+        "workflow_dispatch",
+        "",
+        "o/r",
+        "refs/heads/main",
+        "main",
+        "success",
+        1,
+        "NEXUS_CORE_UNTRUSTED_EVENT: workflow_dispatch",
+    ),
+)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.parametrize(
+    ("case", "event", "head", "repo", "ref", "default", "result", "code", "reason"),
+    GUARD_CASES,
+    ids=[c[0] for c in GUARD_CASES],
+)
+def test_consumer_guard_script_fails_closed(
+    case: str,
+    event: str,
+    head: str,
+    repo: str,
+    ref: str,
+    default: str,
+    result: str,
+    code: int,
+    reason: str,
+) -> None:
+    script = _guard_script(_read(CONSUMER_EXAMPLE))
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "EVENT_NAME": event,
+        "HEAD_REPO": head,
+        "REPOSITORY": repo,
+        "REF": ref,
+        "DEFAULT_BRANCH": default,
+        "RUN_RESULT": result,
+    }
+    proc = subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True, check=False
+    )
+    assert proc.returncode == code, (case, proc.stderr)
+    if reason:
+        assert reason in proc.stderr, (case, proc.stderr)
+
+
 def test_negative_control_consumer_widened_conditions_are_detected() -> None:
     text = _read(CONSUMER_EXAMPLE)
-    verify_if = f"    if: {EXPECTED_JOB_IFS['verify']}\n"
-    mutated = text.replace(verify_if, verify_if.rstrip("\n") + " || true\n", 1)
-    assert any(v.startswith("job condition:") and "'verify'" in v for v in consumer_workflow_violations(mutated))
+    verify_if = "    if: always()\n    runs-on: ubuntu-latest\n    timeout-minutes: 15"
+    mutated = text.replace(verify_if, verify_if.replace("always()", "always() && true", 1), 1)
+    assert mutated != text
+    assert any(
+        v.startswith("job condition:") and "'verify'" in v
+        for v in consumer_workflow_violations(mutated)
+    )
     run_if = f"    if: {EXPECTED_JOB_IFS['run']}\n"
     mutated = text.replace(run_if, run_if.rstrip("\n") + " || true\n", 1)
     assert mutated != text
-    assert any(v.startswith("job condition:") and "'run'" in v for v in consumer_workflow_violations(mutated))
+    assert any(
+        v.startswith("job condition:") and "'run'" in v
+        for v in consumer_workflow_violations(mutated)
+    )
     mutated = text.replace("    needs: run\n", "", 1)
     assert mutated != text
-    assert any("verify job must need exactly run" in v for v in consumer_workflow_violations(mutated))
+    assert any(
+        "verify job must need exactly run" in v for v in consumer_workflow_violations(mutated)
+    )
 
 
 def test_negative_control_consumer_trigger_and_identity_mutations_are_detected() -> None:
@@ -505,9 +762,7 @@ def test_negative_control_missing_expectations_are_detected() -> None:
             line = f"          {flag}"
             mutated = re.sub(rf"\n{re.escape(line)}( \S+)? \\\n", "\n", original, count=1)
             if mutated == original:  # the last flag has no trailing backslash
-                mutated = re.sub(
-                    rf" \\\n{re.escape(line)}(;[^\n]*)?\n", r"\1\n", original, count=1
-                )
+                mutated = re.sub(rf" \\\n{re.escape(line)}(;[^\n]*)?\n", r"\1\n", original, count=1)
             assert mutated != original, (action.name, flag)
             assert receipt_verify_violations(mutated) == [
                 f"receipt expectations: receipt-check must pass {flag}"
