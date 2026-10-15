@@ -295,3 +295,95 @@ def test_descriptor_negative_vectors_cover_prefix_cases():
         "invalid_path_prefix_glob",
         "invalid_path_prefix_root",
     } <= names
+
+
+# --- runtime receipt recomputation binds prefixes (Codex review finding) ---
+
+
+def _runtime_case(prefixes):
+    from product.evidence import (
+        ChangeSet,
+        EvidenceBundle,
+        Observation,
+        ObservationStatus,
+        VerificationPlan,
+        _hash,
+    )
+    from product.kernel import CertificationInput
+
+    contract = AcceptanceContract(
+        "ac", _hash("requirements"), ("unit",), ("README.md",), "FORBID",
+        allowed_path_prefixes=prefixes,
+    )
+    change = ChangeSet("cs", "base", "head", _hash("diff"), ("src/pkg/a.py",))
+    plan = VerificationPlan("plan", contract.hash, change.hash, ("unit",))
+    evidence = EvidenceBundle(
+        "bundle", contract.hash, change.hash, plan.hash,
+        (Observation("unit", "artifact", _hash("artifact"), ObservationStatus.PASS),),
+    )
+    return CertificationInput(contract, change, plan, evidence, True, True, True, True)
+
+
+def _original_inputs(cert_in, prefixes):
+    contract = {
+        "contract_id": cert_in.contract.contract_id,
+        "requirements_hash": cert_in.contract.requirements_hash,
+        "required_verifier_ids": list(cert_in.contract.required_verifier_ids),
+        "allowed_paths": list(cert_in.contract.allowed_paths),
+        "deletion_policy": cert_in.contract.deletion_policy,
+    }
+    if prefixes is not None:
+        contract["allowed_path_prefixes"] = list(prefixes)
+    return {
+        "acceptance_contract": contract,
+        "change_set": {
+            "change_set_id": cert_in.change_set.change_set_id,
+            "source_revision": cert_in.change_set.source_revision,
+            "target_revision": cert_in.change_set.target_revision,
+            "diff_hash": cert_in.change_set.diff_hash,
+            "paths": list(cert_in.change_set.paths),
+        },
+        "verification_plan": {
+            "plan_id": cert_in.plan.plan_id,
+            "required_verifier_ids": list(cert_in.plan.required_verifier_ids),
+        },
+        "evidence": {
+            "bundle_id": cert_in.evidence.bundle_id,
+            "observations": [
+                {
+                    "verifier_id": o.verifier_id,
+                    "artifact_id": o.artifact_id,
+                    "artifact_hash": o.artifact_hash,
+                    "status": o.status.value,
+                }
+                for o in cert_in.evidence.observations
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_full_receipt_recomputation_binds_prefixes(tmp_path):
+    from product.kernel import certify
+    from product.runtime.service import RuntimeCertificationService
+
+    cert_in = _runtime_case(("src/pkg/",))
+    result = certify(cert_in)
+    assert result.disposition.value == "CERTIFIED"
+    receipt = result.receipt.to_dict()
+    service = RuntimeCertificationService(db_path=str(tmp_path / "ledger.db"))
+
+    async def full(prefixes):
+        code, body = await service.verify_receipt(
+            {
+                "receipt": receipt,
+                "requested_scope": "FULL",
+                "original_inputs": _original_inputs(cert_in, prefixes),
+            }
+        )
+        assert code == 200, body
+        return body["status"]
+
+    assert await full(["src/pkg/"]) == "VALID"
+    assert await full(None) == "INVALID"
+    assert await full(["src/"]) == "INVALID"
