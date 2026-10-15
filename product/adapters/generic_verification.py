@@ -23,7 +23,7 @@ from product.evidence import (
     VerificationPlan,
 )
 from product.kernel import CertificationInput, certify
-from product.protocol import PUBLIC_PROTOCOL_VERSION
+from product.protocol import PUBLIC_PROTOCOL_VERSION, core_identity
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_ERROR_SCHEMA_ID,
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -32,6 +32,7 @@ from product.protocol.generic_verification import (
     change_manifest_hash,
     change_set_hash,
     evidence_bundle_hash,
+    expected_universe_identity,
     is_git_tree_ref,
     is_hash,
     is_revision_ref,
@@ -491,8 +492,18 @@ def verify_generic_changeset(payload: Any) -> tuple[int, dict[str, Any]]:
             "evidence_bundle_hash": evidence.hash,
             "change_manifest_hash": change_manifest_hash(payload["change_manifest"]),
         },
+        "core_identity": core_identity(),
         "certification": None,
     }
+    # Additive (#266): only for contracts that declare a universe, so legacy
+    # (no-universe) hashes blocks stay byte-identical.
+    universe_identity = contract.universe_identity
+    # Defensive equality: the public wire formula hosts call must be the one
+    # Core's domain object uses; never report a value that diverges from it.
+    if expected_universe_identity(payload["acceptance_contract"]) != universe_identity:
+        return (500, _error("CORE_UNIVERSE_IDENTITY_DIVERGENCE", "acceptance_contract"))
+    if universe_identity is not None:
+        response["hashes"]["universe_identity"] = universe_identity
 
     policy = payload["certification_policy"]
     if policy is not None:

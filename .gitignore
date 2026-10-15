@@ -11,3 +11,6 @@ build/
 # Nexus Core local evidence/bindings
 .nexus-core/receipts/
 .nexus-core/issues/
+
+# Build identity stamp is generated at build time (#267)
+product/_build_identity.json

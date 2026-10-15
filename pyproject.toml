@@ -41,6 +41,8 @@ include = ["product*"]
 exclude = ["product.benchmark*"]
 
 [tool.setuptools.package-data]
+# Build identity stamp written by setup.py at build time (#267); never committed.
+"product" = ["_build_identity.json"]
 "product.execution.profiles" = [
     "*.json",
     "*.lock",
