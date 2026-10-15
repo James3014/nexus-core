@@ -218,8 +218,42 @@ def _make_sealed_require_paths(
     return require_paths
 
 
+def _make_sealed_require_path_prefixes(
+    require_text: Callable[[object, str], None],
+) -> Callable[[Any, str], None]:
+    """Directory scopes: normalized relative POSIX paths ending in exactly one '/'.
+
+    An empty tuple means "no prefixes declared". Every entry must name at least
+    one real segment (no root/empty prefix), contain no '.', '..' or empty
+    segments, no backslash, and no glob metacharacters. Because each prefix ends
+    in '/', a plain ``startswith`` against a normalized change path matches only
+    on a whole-segment boundary (``src/pkg/`` never matches ``src/pkgx/a.py``).
+    """
+
+    def require_path_prefixes(values: Any, field: str) -> None:
+        if type(values) is not tuple:
+            raise TypeError(f"{field} must be a tuple")
+        values = cast("tuple[Any, ...]", values)
+        for value in values:
+            require_text(value, field)
+            body = value[:-1]
+            if (
+                not value.endswith("/")
+                or not body
+                or "\\" in value
+                or any(char in value for char in "*?[]")
+                or any(part in {"", ".", ".."} for part in body.split("/"))
+            ):
+                raise ValueError(f"{field} must contain normalized relative directory prefixes")
+        if len(values) != len(set(values)):
+            raise ValueError(f"{field} must not contain duplicates")
+
+    return require_path_prefixes
+
+
 _VALIDATOR_REQUIRE_IDS = _make_sealed_require_ids(_require_text)
 _VALIDATOR_REQUIRE_PATHS = _make_sealed_require_paths(_VALIDATOR_REQUIRE_IDS)
+_VALIDATOR_REQUIRE_PATH_PREFIXES = _make_sealed_require_path_prefixes(_require_text)
 
 
 def _require_ids(values: Any, field: str) -> None:
@@ -260,12 +294,14 @@ class AcceptanceContract:
     deletion_policy: str
     expected_subjects: tuple[ExpectedEvidenceSubject, ...] = ()
     universe_generation: int = 0
+    allowed_path_prefixes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.contract_id, "contract_id")
         _require_hash(self.requirements_hash, "requirements_hash")
         _require_ids(self.required_verifier_ids, "required_verifier_ids")
         _require_paths(self.allowed_paths, "allowed_paths")
+        _VALIDATOR_REQUIRE_PATH_PREFIXES(self.allowed_path_prefixes, "allowed_path_prefixes")
         if type(self.deletion_policy) is not str or self.deletion_policy not in {"FORBID", "ALLOW"}:
             raise ValueError("deletion_policy must be FORBID or ALLOW")
         if type(self.expected_subjects) is not tuple:
@@ -310,6 +346,8 @@ class AcceptanceContract:
                 self.universe_generation,
                 tuple(sorted(subject.canonical_value for subject in self.expected_subjects)),
             )
+        if self.allowed_path_prefixes:
+            value += (("allowed_path_prefixes", tuple(sorted(self.allowed_path_prefixes))),)
         return _AC_HASH(value)
 
 
@@ -646,6 +684,11 @@ AcceptanceContract.hash = _make_identity_property(  # pyright: ignore[reportAttr
         )
         if value.expected_subjects
         else ()
+    )
+    + (
+        (("allowed_path_prefixes", tuple(sorted(value.allowed_path_prefixes))),)
+        if value.allowed_path_prefixes
+        else ()
     ),
 )
 ChangeSet.hash = _make_identity_property(  # pyright: ignore[reportAttributeAccessIssue]
@@ -686,6 +729,7 @@ def _make_subject_validator(
     require_hash: Callable[[Any, str], None],
     require_ids: Callable[[Any, str], None],
     require_paths: Callable[[Any, str], None],
+    require_path_prefixes: Callable[[Any, str], None],
 ) -> Callable[[object, object, object, object], tuple[str, ...]]:
     """Build an input validator whose dependencies cannot be rebound later."""
 
@@ -739,6 +783,10 @@ def _make_subject_validator(
                 require_paths(c["allowed_paths"], "allowed_paths")
             except (TypeError, ValueError, KeyError):
                 errors.append("MALFORMED:contract.allowed_paths")
+            try:
+                require_path_prefixes(c["allowed_path_prefixes"], "allowed_path_prefixes")
+            except (TypeError, ValueError, KeyError):
+                errors.append("MALFORMED:contract.allowed_path_prefixes")
             if type(c.get("deletion_policy")) is not str or c["deletion_policy"] not in {
                 "FORBID",
                 "ALLOW",
@@ -821,6 +869,7 @@ validate_evidence_subjects = _make_subject_validator(
     _VALIDATOR_REQUIRE_HASH,
     _VALIDATOR_REQUIRE_IDS,
     _VALIDATOR_REQUIRE_PATHS,
+    _VALIDATOR_REQUIRE_PATH_PREFIXES,
 )
 
 
@@ -864,6 +913,10 @@ def _make_integrity_deriver(
                         for subject in c["expected_subjects"]
                     )
                 ),
+            )
+        if c["allowed_path_prefixes"]:
+            contract_value += (
+                ("allowed_path_prefixes", tuple(sorted(c["allowed_path_prefixes"]))),
             )
         contract_hash = hash_contract(contract_value)
         change_canonical = (
