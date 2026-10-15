@@ -370,6 +370,19 @@ nexus-certify receipt-check --receipt <receipt>.json \
   --require-trusted-config
 ```
 
+### Receipt summary (display only)
+
+`nexus-certify receipt-summary --receipt <receipt>.json [--format markdown|notice]
+[--receipt-sha256 <hex>]` prints a one-screen coverage summary: status, reason
+codes, claim ceiling, Issue, evidence universe, one row per coverage entry,
+changed/deleted/protected paths and any owner-signature advisory. `notice` emits a
+single `::notice title=Nexus Core receipt::...` workflow command (escaped so a
+receipt value cannot start another command). Both the issue-gate and
+receipt-verify actions run it in a `continue-on-error` step (markdown to the job
+summary, notice as a check-run annotation), including when the run is red. It
+exits 0 for any readable JSON and 2 otherwise, never reads or changes
+enforcement, and is not evidence: Core remains an evidence notary.
+
 Flipping one byte of the receipt makes `sigstore verify` fail. A mismatch in
 `receipt-check` exits 2 with `STATUS_MISMATCH`, `SUBJECT_HEAD_MISMATCH`,
 `TARGET_TREE_MISMATCH`, `CONFIG_SOURCE_MISMATCH`, `ISSUE_BINDING_MISMATCH`,

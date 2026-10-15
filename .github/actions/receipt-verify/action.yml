@@ -376,3 +376,18 @@ runs:
         echo "receipt-sha256=$(sha256sum "$RECEIPT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
         echo "verified=true" >> "$GITHUB_OUTPUT"
         echo "outcome=VERIFIED" >> "$GITHUB_OUTPUT"
+
+    - name: Publish Core receipt summary
+      if: always() && steps.locate.outputs.receipt != '' && inputs.gate-outcome != 'PR_ALREADY_CLOSED_SKIPPED'
+      continue-on-error: true
+      shell: bash
+      env:
+        RECEIPT: ${{ steps.locate.outputs.receipt }}
+        RECEIPT_SHA256: ${{ steps.verify.outputs.receipt-sha256 }}
+      run: |
+        # Display only (#273): never changes the verdict or any output.
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          nexus-certify receipt-summary --receipt "$RECEIPT" --receipt-sha256 "$RECEIPT_SHA256" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        nexus-certify receipt-summary --receipt "$RECEIPT" --format notice
+
