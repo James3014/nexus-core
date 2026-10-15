@@ -213,6 +213,23 @@ runs:
                 "<!-- NEXUS_CORE_ISSUE: N --> (N = the Issue number) to the PR body, "
                 f"then re-run the gate (found {len(matches)})"
             )
+            if not matches:
+                # Diagnostic only (#272): never infers the binding; digits only.
+                stripped = re.sub(r"<!--\s*NEXUS_CORE_ISSUE:[^>]*-->", "", body)
+                cands = {
+                    int(n)
+                    for n in re.findall(
+                        r"(?<![\w/])(?:refs?|closes?|closed|fix(?:es|ed)?|resolves?|resolved)"
+                        r"[ \t]*:?[ \t]*#([1-9][0-9]*)(?!\w)",
+                        stripped,
+                        flags=re.IGNORECASE,
+                    )
+                }
+                if len(cands) == 1:
+                    remedy = (
+                        "PR_MISSING_CORE_ISSUE_BINDING: add this line to the PR body: "
+                        f"<!-- NEXUS_CORE_ISSUE: {next(iter(cands))} --> then re-run the gate"
+                    )
             sys.stderr.write(remedy + "\n")
             summary = os.environ.get("GITHUB_STEP_SUMMARY")
             if summary:

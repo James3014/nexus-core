@@ -9,6 +9,7 @@ Nothing in this module decides a verdict: the remediation codes are labels for
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any, TextIO
@@ -20,6 +21,26 @@ ISSUE_MISSING_EVIDENCE_UNIVERSE = "ISSUE_MISSING_EVIDENCE_UNIVERSE"
 ISSUE_EVIDENCE_UNIVERSE_STALE = "ISSUE_EVIDENCE_UNIVERSE_STALE"
 ISSUE_EVIDENCE_UNIVERSE_MALFORMED = "ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED"
 BASE_REF_NOT_ANCESTOR = "BASE_REF_NOT_ANCESTOR"
+
+# Diagnostic only (#272). Keep in sync with the inline copy in
+# .github/actions/issue-gate/action.yml (a test asserts they agree).
+_CORE_ISSUE_MARKER_RE = r"<!--\s*NEXUS_CORE_ISSUE:[^>]*-->"
+_CORE_ISSUE_KEYWORD_REF_RE = (
+    r"(?<![\w/])(?:refs?|closes?|closed|fix(?:es|ed)?|resolves?|resolved)"
+    r"[ \t]*:?[ \t]*#([1-9][0-9]*)(?!\w)"
+)
+
+
+def suggest_core_issue_marker(body: str) -> int | None:
+    """Return N when the body names exactly one same-repo Issue by keyword.
+
+    Diagnostic only: the caller may print the marker with N filled in, but the
+    binding itself is never inferred. Only digits are ever returned.
+    """
+
+    text = re.sub(_CORE_ISSUE_MARKER_RE, "", body)
+    found = {int(n) for n in re.findall(_CORE_ISSUE_KEYWORD_REF_RE, text, flags=re.IGNORECASE)}
+    return next(iter(found)) if len(found) == 1 else None
 PR_MISSING_CORE_ISSUE_BINDING = "PR_MISSING_CORE_ISSUE_BINDING"
 RECEIPT_ISSUE_BINDING_MISMATCH = "RECEIPT_ISSUE_BINDING_MISMATCH"
 REPOSITORY_VERIFICATION_NOT_VERIFIED = "REPOSITORY_VERIFICATION_NOT_VERIFIED"
