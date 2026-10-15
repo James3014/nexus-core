@@ -551,14 +551,18 @@ def test_symlinked_package_directory_fails_closed(tmp_path):
 def test_digest_mirrors_packages_find(tmp_path):
     root = _copy_product(tmp_path)
     before = source_digest(root)
-    # Not a regular package (no __init__.py): setuptools packages.find skips it.
-    (root / "loose").mkdir()
-    (root / "loose" / "mod.py").write_text("x = 1\n")
+    # Not packages for setuptools packages.find: "." in the directory name.
+    for name in ("x.y", ".hidden"):
+        (root / name).mkdir()
+        (root / name / "m.py").write_text("x = 1\n")
     # Excluded by "product.benchmark*".
     (root / "benchmark_extra").mkdir()
     (root / "benchmark_extra" / "__init__.py").write_text("")
     assert source_digest(root) == before
-    (root / "loose" / "__init__.py").write_text("")
+    # Namespace directory (no __init__.py): packages.find ships it by default.
+    (root / "nsdir").mkdir()
+    (root / "nsdir" / "mod.py").write_text("x = 1\n")
+    assert "product/nsdir/mod.py" in shipped_source_paths(root)
     assert source_digest(root) != before
 
 
@@ -568,5 +572,6 @@ def test_select_shipped_paths_matches_the_walk():
         for path in PRODUCT_DIR.rglob("*")
         if path.is_file()
     ]
-    every += ["product/loose/mod.py", "product/benchmark/x.py", "README.md"]
+    every += ["product/benchmark/x.py", "product/x.y/m.py", "product/.h/m.py", "README.md"]
     assert select_shipped_paths(every) == shipped_source_paths(PRODUCT_DIR)
+    assert select_shipped_paths(["product/nsdir/sub/m.py"]) == ["product/nsdir/sub/m.py"]

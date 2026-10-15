@@ -42,19 +42,23 @@ def _identity_module():
     return module
 
 
-def _git(*args: str) -> str | None:
-    env = {
+def _git_env() -> dict[str, str]:
+    """Environment for git without inherited GIT_* overrides (GIT_DIR etc.)."""
+    return {
         key: value
         for key, value in os.environ.items()
         if not key.startswith("GIT_") or key in {"GIT_CONFIG_NOSYSTEM"}
     }
+
+
+def _git(*args: str) -> str | None:
     try:
         completed = subprocess.run(
             ["git", "-C", str(ROOT), *args],
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,
-            env=env,
+            env=_git_env(),
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -101,6 +105,7 @@ def _head_source_digest(identity) -> str | None:
                 ["git", "-C", str(ROOT), "cat-file", "blob", entries[path]],
                 capture_output=True,
                 timeout=GIT_TIMEOUT_SECONDS,
+                env=_git_env(),
                 check=True,
             ).stdout
         except (OSError, subprocess.SubprocessError):

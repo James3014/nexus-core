@@ -292,6 +292,8 @@ def test_git_dirty_counts_ignored_packaged_files_but_not_bytecode(tmp_path: Path
     # Bytecode only: still clean.
     subprocess.run([sys.executable, "-m", "compileall", "-q", str(clone / "product")], check=True)
 
+    from product.protocol.build_identity import shipped_source_paths, source_digest
+
     def build_stamp(name: str) -> dict:
         out = tmp_path / name
         res = subprocess.run(
@@ -300,15 +302,29 @@ def test_git_dirty_counts_ignored_packaged_files_but_not_bytecode(tmp_path: Path
         )
         assert res.returncode == 0, res.stderr
         with zipfile.ZipFile(next(out.glob("*.whl"))) as zf:
-            return json.loads(zf.read("product/_build_identity.json"))
+            stamp = json.loads(zf.read("product/_build_identity.json"))
+            shipped = {
+                n for n in zf.namelist()
+                if n.startswith("product/") and not n.endswith("/")
+            } - {"product/_build_identity.json"}
+        # The digest covers exactly what the wheel ships.
+        assert shipped == set(shipped_source_paths(clone / "product"))
+        assert stamp["source_digest"] == source_digest(clone / "product")
+        return stamp
 
     clean = build_stamp("clean")
     assert clean["git_dirty"] is False
     # ".gitignore" ignores "build/": product/build/ is still a shipped package.
     (clone / "product" / "build").mkdir()
     (clone / "product" / "build" / "__init__.py").write_text("x = 1\n")
+    # Namespace directory (no __init__.py) ships too; dotted names do not.
+    (clone / "product" / "nsdir").mkdir()
+    (clone / "product" / "nsdir" / "mod.py").write_text("x = 1\n")
+    (clone / "product" / "x.y").mkdir()
+    (clone / "product" / "x.y" / "m.py").write_text("x = 1\n")
     subprocess.run(["rm", "-rf", str(clone / "build")], check=True)
     dirty = build_stamp("dirty")
     assert dirty["git_dirty"] is True
     assert dirty["git_commit"] == clean["git_commit"]
     assert dirty["source_digest"] != clean["source_digest"]
+    assert "product/nsdir/mod.py" in shipped_source_paths(clone / "product")

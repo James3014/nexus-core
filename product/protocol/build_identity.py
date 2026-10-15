@@ -70,6 +70,11 @@ _STAMP_KEYS = frozenset(
 )
 
 
+def _is_package_dir_name(name: str) -> bool:
+    """setuptools packages.find (namespaces = true) skips names with "."."""
+    return bool(name) and name != "__pycache__" and "." not in name
+
+
 def _is_shipped(parts: tuple[str, ...]) -> bool:
     """``parts`` is the path relative to the package root, split on "/"."""
     if len(parts) == 0 or "__pycache__" in parts:
@@ -126,9 +131,10 @@ def _iter_shipped_files(package_root: Path) -> list[tuple[str, Path]]:
             # not see it; fail closed instead of digesting a partial tree.
             if child.is_symlink():
                 raise ValueError(f"symlinked directory in Core package: {child}")
-            # Mirror setuptools packages.find: only regular packages (with an
-            # __init__.py) ship; other directories are not part of the build.
-            if (child / "__init__.py").is_file():
+            # Mirror setuptools packages.find (namespaces = true by default):
+            # every directory ships as a (namespace) package, except names
+            # containing "." (which also covers hidden directories).
+            if _is_package_dir_name(name):
                 kept.append(name)
         dirnames[:] = kept
         rel_dir = Path(dirpath).relative_to(package_root).parts
@@ -145,16 +151,15 @@ def select_shipped_paths(paths: Iterable[str]) -> list[str]:
 
     Same rule as the on-disk walk: a file ships when :func:`_is_shipped`
     accepts it and every directory between ``product/`` and the file is a
-    regular package (has an ``__init__.py`` in ``paths``).
+    package name setuptools ``packages.find`` accepts (namespace packages
+    included; no "." in the name).
     """
     prefix = PACKAGE_NAME + "/"
     rels = [p[len(prefix):] for p in paths if p.startswith(prefix)]
-    init_dirs = {tuple(r.split("/")[:-1]) for r in rels if r.split("/")[-1] == "__init__.py"}
     selected: list[str] = []
     for rel in rels:
         parts = tuple(rel.split("/"))
-        dirs = parts[:-1]
-        if all(dirs[:i] in init_dirs for i in range(1, len(dirs) + 1)) and _is_shipped(parts):
+        if all(_is_package_dir_name(d) for d in parts[:-1]) and _is_shipped(parts):
             selected.append(prefix + rel)
     return sorted(selected, key=lambda p: p.encode("utf-8"))
 
@@ -347,7 +352,7 @@ CORE_IDENTITY_SCHEMA: dict[str, Any] = {
 SOURCE_DIGEST_RULE = (
     "sha256 over the concatenation, sorted by UTF-8 relative path, of "
     "'<sha256-hex(file bytes)>  <path>\\n' for every shipped file: *.py in product and "
-    "its regular subpackages (directories with __init__.py) plus "
+    "every subdirectory whose name has no '.' (setuptools namespace packages included) plus "
     "product/execution/profiles/*.json|*.lock, excluding __pycache__, bytecode, "
     "product/benchmark*/** and product/_build_identity.json; result prefixed 'sha256:'"
 )
