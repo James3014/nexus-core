@@ -8,6 +8,9 @@ on:
     branches: [main]
   issue_comment:
     types: [created, edited, deleted]
+  # #288: the merge queue needs the two required statuses on its merge group commit.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: sibling-merge-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
@@ -17,7 +20,7 @@ permissions: {}
 
 jobs:
   checks:
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    if: github.event_name == 'pull_request_target' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     uses: James3014/Nexus-new/.github/workflows/sibling-merge-checks.yml@47d6c05edcc9a425bd340400f9458d7aca316cea # Nexus-new main after #2408; nexus-core requires SHA pins
     permissions:
       contents: read
@@ -28,3 +31,50 @@ jobs:
       pr: ${{ github.event.pull_request.number || github.event.issue.number }}
       head_sha: ${{ github.event.pull_request.head.sha || '' }}
       run_bindings: ${{ github.event_name == 'pull_request_target' }}
+
+  # #288 (nexus-core only, not part of the Nexus-new caller template): the merge queue
+  # builds a new commit per queued PR, and both required statuses are published on the
+  # PR head only. GitHub admits a PR to the queue only after its head already passed
+  # them; this job re-reads the latest status of each context on the queued PR's
+  # current head and copies it to the merge group commit. A missing, non-success or
+  # foreign-authored status is copied as failure, so the queue drops the PR instead
+  # of merging it. A push to the PR removes it from the queue.
+  merge-group:
+    name: Merge group statuses (from PR head)
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      GROUP_REF: ${{ github.event.merge_group.head_ref }}
+      GROUP_SHA: ${{ github.event.merge_group.head_sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Copy the PR-head statuses to the merge group commit
+        run: |
+          set -euo pipefail
+          [[ "$GROUP_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "merge group sha missing or invalid" >&2; exit 1; }
+          if [[ ! "$GROUP_REF" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)-[0-9a-f]{40}$ ]]; then
+            echo "unexpected merge group ref" >&2
+            exit 1
+          fi
+          pr="${BASH_REMATCH[1]}"
+          gh api "repos/${REPO}/pulls/${pr}" > "$RUNNER_TEMP/pr.json"
+          head="$(python3 -I -c 'import json,re,sys; p=json.load(open(sys.argv[1])); ok=p["state"]=="open" and p["base"]["ref"]=="main" and p["head"]["repo"]["full_name"]==sys.argv[2] and re.fullmatch("[0-9a-f]{40}", p["head"]["sha"]); print(p["head"]["sha"] if ok else "")' "$RUNNER_TEMP/pr.json" "$REPO")"
+          [ -n "$head" ] || { echo "PR #${pr} is not an open same-repository PR into main" >&2; exit 1; }
+          gh api "repos/${REPO}/commits/${head}/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"
+          rc=0
+          for context in "Review record present (advisory)" "Bindings preflight (default branch)"; do
+            # The list is newest first: take the latest status of this context.
+            state="$(python3 -I -c 'import json,sys; s=[x for x in json.load(open(sys.argv[1])) if x.get("context")==sys.argv[2]]; ok=bool(s) and s[0].get("state")=="success" and (s[0].get("creator") or {}).get("login")=="github-actions[bot]"; print("success" if ok else "failure")' "$RUNNER_TEMP/statuses.json" "$context")"
+            echo "${context}: ${state} (PR #${pr} head ${head})"
+            gh api -X POST "repos/${REPO}/statuses/${GROUP_SHA}" \
+              -f state="$state" -f context="$context" -f target_url="$RUN_URL" \
+              -f description="${state} on PR #${pr} head ${head:0:12} (merge queue copy)" > /dev/null
+            [ "$state" = success ] || rc=1
+          done
+          exit "$rc"
