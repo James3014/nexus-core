@@ -36,15 +36,33 @@ _CORE_ISSUE_KEYWORD_REF_RE = (
     r"(?<![\w/])(?:refs?|closes?|closed|fix(?:es|ed)?|resolves?|resolved)"
     r"[ \t]*(?::[ \t]*)?#([1-9][0-9]{0,9})(?!\w)"
 )
-# Text GitHub does not render as a reference: fenced code, inline code, HTML comments
-# (an unterminated comment or fence runs to the end of the body).
-_HIDDEN_TEXT_RES = (
-    r"^[ \t]*(\x60{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1\x60*[ \t]*$|\Z)",
-    r"^[ \t]*(~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1~*[ \t]*$|\Z)",
-    r"(\x60{1,16})(?!\x60)[\s\S]*?(?<!\x60)\1(?!\x60)",
-    r"<!--[\s\S]*?(?:-->|\Z)",
-)
+# Text GitHub does not render as a reference: fenced code blocks (line scanner below)
+# and HTML comments (an unterminated comment or fence runs to the end of the body).
+# Inline code spans are deliberately not stripped: a hint from one is acceptable.
+_HIDDEN_TEXT_RES = (r"<!--[\s\S]*?(?:-->|\Z)",)
 _SUGGEST_MAX_BODY_CHARS = 65536
+
+
+def _strip_fenced_code(text: str) -> str:
+    """Drop fenced code blocks with a linear line scan (no backtracking regex)."""
+
+    out: list[str] = []
+    fence: tuple[str, int] | None = None
+    for line in text.split("\n"):
+        stripped = line.lstrip(" \t")
+        char = stripped[:1]
+        if char in ("\x60", "~"):
+            run = len(stripped) - len(stripped.lstrip(char))
+            if fence is None:
+                if run >= 3:
+                    fence = (char, run)
+                    continue
+            elif char == fence[0] and run >= fence[1] and not stripped[run:].strip(" \t"):
+                fence = None
+                continue
+        if fence is None:
+            out.append(line)
+    return "\n".join(out)
 
 
 def suggest_core_issue_marker(body: str) -> int | None:
@@ -54,7 +72,7 @@ def suggest_core_issue_marker(body: str) -> int | None:
     binding itself is never inferred. Only digits are ever returned.
     """
 
-    text = body[:_SUGGEST_MAX_BODY_CHARS]
+    text = _strip_fenced_code(body[:_SUGGEST_MAX_BODY_CHARS])
     for pattern in _HIDDEN_TEXT_RES:
         text = re.sub(pattern, "", text, flags=re.MULTILINE)
     found = {int(n) for n in re.findall(_CORE_ISSUE_KEYWORD_REF_RE, text, flags=re.IGNORECASE)}

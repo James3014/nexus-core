@@ -684,8 +684,8 @@ SUGGEST_CASES: list[tuple[str, int | None]] = [
     ("```\nCloses #7\n```", None),
     ("~~~text\nFixes #7\n~~~\nRefs #8", 8),
     ("```\nCloses #7 never closed", None),
-    ("see `Closes #7` here", None),
-    ("``Closes #7`` then Refs #8", 8),
+    ("see `Closes #7` here", 7),
+    ("``Closes #7`` then Refs #8", None),
     ("Closes #" + "1" * 5000, None),
     ("Closes #12345678901", None),
     ("````\nCloses #7\n```\nRefs #8", None),
@@ -768,6 +768,8 @@ TIMING_BODIES = [
     "`" * 65536,
     "".join("`" * k + "a" for k in range(1, 360)),
     "`" * 30000 + "a" + "`" * 30001,
+    ("`" * 17 + "a") * 3640,
+    ("`" * 40 + "a") * 1598,
 ]
 
 
@@ -775,7 +777,7 @@ TIMING_BODIES = [
 def test_suggest_core_issue_marker_is_fast_on_backtick_floods(body: str) -> None:
     started = time.monotonic()
     assert gate_diagnostics.suggest_core_issue_marker(body) is None
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < 1.0
 
 
 @pytest.mark.parametrize("body", TIMING_BODIES)
@@ -795,6 +797,6 @@ def test_issue_gate_inline_is_fast_on_backtick_floods(tmp_path: Path, body: str)
         },
         tmp_path,
     )
-    assert time.monotonic() - started < 2
+    assert time.monotonic() - started < 1.0
     assert result.returncode == 1
     assert ACTION_REMEDY_ISSUE_GATE + "\n" in result.stderr
