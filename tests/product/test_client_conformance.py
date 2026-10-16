@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 import zipfile
-from importlib.metadata import version as distribution_version
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
@@ -383,8 +383,20 @@ CONTROLLER_TG5_RECEIPT = Path(
         "NEXUS_CORE_TG5_RECEIPT", "/private/tmp/nexus-core-v1-evidence/tg7/tg5-receipt.json"
     )
 )
-SUCCESSOR_DISTRIBUTION_VERSION = distribution_version("nexus-certify")
-SUCCESSOR_WHEEL_NAME = f"nexus_certify-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
+
+
+def _successor_distribution_version() -> str:
+    """Resolve the nexus-certify version lazily; skip when it is not installed."""
+    try:
+        return importlib_metadata.version("nexus-certify")
+    except importlib_metadata.PackageNotFoundError:
+        pytest.skip("nexus-certify distribution not installed")
+
+
+def _successor_wheel_name() -> str:
+    return f"nexus_certify-{_successor_distribution_version()}-py3-none-any.whl"
+
+
 _PHYSICAL_ACCEPTANCE_SELECTORS = frozenset(
     {"predecessor_artifact", "wheelhouse_manifest", "install_upgrade_rollback"}
 )
@@ -394,8 +406,18 @@ _NON_ACCEPTANCE_REASON = "NON_ACCEPTANCE_PHYSICAL_DEPENDENCY_REQUIRED"
 def test_standalone_physical_canary_identity():
     assert CANONICAL_REQUEST["repository"]["name"] == "nexus-core"
     assert CANONICAL_RESPONSE["acquisition"]["name"] == "nexus-core"
-    assert SUCCESSOR_DISTRIBUTION_VERSION == distribution_version("nexus-certify")
-    assert SUCCESSOR_WHEEL_NAME == f"nexus_certify-{SUCCESSOR_DISTRIBUTION_VERSION}-py3-none-any.whl"
+    version = _successor_distribution_version()
+    assert version == importlib_metadata.version("nexus-certify")
+    assert _successor_wheel_name() == f"nexus_certify-{version}-py3-none-any.whl"
+
+
+def test_successor_version_lookup_skips_when_distribution_missing(monkeypatch):
+    def _missing(name: str) -> str:
+        raise importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib_metadata, "version", _missing)
+    with pytest.raises(pytest.skip.Exception, match="nexus-certify distribution not installed"):
+        _successor_distribution_version()
 
 
 def _require_physical_acceptance(
@@ -475,7 +497,8 @@ def test_wheelhouse_manifest(request: pytest.FixtureRequest):
 def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest):
     pred_path = CONTROLLER_PREDECESSOR
     wh_dir = CONTROLLER_WHEELHOUSE
-    succ_whl = wh_dir / SUCCESSOR_WHEEL_NAME
+    successor_version = _successor_distribution_version()
+    succ_whl = wh_dir / _successor_wheel_name()
     receipt_source = CONTROLLER_TG5_RECEIPT
     if not _require_physical_acceptance(
         request, "install_upgrade_rollback", (pred_path, succ_whl, receipt_source)
@@ -511,7 +534,7 @@ def test_install_upgrade_rollback(tmp_path: Path, request: pytest.FixtureRequest
             "install",
             "--no-index",
             f"--find-links={wh_dir}",
-            f"nexus-certify=={SUCCESSOR_DISTRIBUTION_VERSION}",
+            f"nexus-certify=={successor_version}",
         ],
         check=True,
     )
