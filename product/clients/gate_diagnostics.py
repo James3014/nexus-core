@@ -22,12 +22,26 @@ ISSUE_EVIDENCE_UNIVERSE_STALE = "ISSUE_EVIDENCE_UNIVERSE_STALE"
 ISSUE_EVIDENCE_UNIVERSE_MALFORMED = "ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED"
 BASE_REF_NOT_ANCESTOR = "BASE_REF_NOT_ANCESTOR"
 
+PR_MISSING_CORE_ISSUE_BINDING = "PR_MISSING_CORE_ISSUE_BINDING"
+RECEIPT_ISSUE_BINDING_MISMATCH = "RECEIPT_ISSUE_BINDING_MISMATCH"
+REPOSITORY_VERIFICATION_NOT_VERIFIED = "REPOSITORY_VERIFICATION_NOT_VERIFIED"
+RECEIPT_STATUS = "RECEIPT_STATUS"
+
+SUMMARY_HEADING = "### Nexus Core gate: how to fix"
+
+
 # Diagnostic only (#272). Keep in sync with the inline copy in
 # .github/actions/issue-gate/action.yml (a test asserts they agree).
-_CORE_ISSUE_MARKER_RE = r"<!--\s*NEXUS_CORE_ISSUE:[^>]*-->"
 _CORE_ISSUE_KEYWORD_REF_RE = (
     r"(?<![\w/])(?:refs?|closes?|closed|fix(?:es|ed)?|resolves?|resolved)"
-    r"[ \t]*:?[ \t]*#([1-9][0-9]*)(?!\w)"
+    r"[ \t]*(?::[ \t]*)?#([1-9][0-9]{0,9})(?!\w)"
+)
+# Text GitHub does not render as a reference: fenced code, inline code, HTML comments
+# (an unterminated comment or fence runs to the end of the body).
+_HIDDEN_TEXT_RES = (
+    r"^[ \t]*(\x60{3}|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[^\n]*$|\Z)",
+    r"(\x60+)(?!\x60)[\s\S]*?(?<!\x60)\1(?!\x60)",
+    r"<!--[\s\S]*?(?:-->|\Z)",
 )
 
 
@@ -38,15 +52,11 @@ def suggest_core_issue_marker(body: str) -> int | None:
     binding itself is never inferred. Only digits are ever returned.
     """
 
-    text = re.sub(_CORE_ISSUE_MARKER_RE, "", body)
+    text = re.sub(_HIDDEN_TEXT_RES[0], "", body, flags=re.MULTILINE)
+    text = re.sub(_HIDDEN_TEXT_RES[1], "", text)
+    text = re.sub(_HIDDEN_TEXT_RES[2], "", text)
     found = {int(n) for n in re.findall(_CORE_ISSUE_KEYWORD_REF_RE, text, flags=re.IGNORECASE)}
     return next(iter(found)) if len(found) == 1 else None
-PR_MISSING_CORE_ISSUE_BINDING = "PR_MISSING_CORE_ISSUE_BINDING"
-RECEIPT_ISSUE_BINDING_MISMATCH = "RECEIPT_ISSUE_BINDING_MISMATCH"
-REPOSITORY_VERIFICATION_NOT_VERIFIED = "REPOSITORY_VERIFICATION_NOT_VERIFIED"
-RECEIPT_STATUS = "RECEIPT_STATUS"
-
-SUMMARY_HEADING = "### Nexus Core gate: how to fix"
 
 
 def evidence_marker_line(config_hash: str) -> str:

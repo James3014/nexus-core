@@ -677,6 +677,16 @@ SUGGEST_CASES: list[tuple[str, int | None]] = [
     ("closes: #7", 7),
     ("<!-- NEXUS_CORE_ISSUE: 0 --> Prefix #3", None),
     ("Resolved #4 <!-- NEXUS_CORE_ISSUE: 0 -->", 4),
+    ("<!-- Closes #7 -->", None),
+    ("<!-- Closes #7 -->\nRefs #8", 8),
+    ("Refs #8 <!-- unterminated Closes #9", 8),
+    ("```\nCloses #7\n```", None),
+    ("~~~text\nFixes #7\n~~~\nRefs #8", 8),
+    ("```\nCloses #7 never closed", None),
+    ("see `Closes #7` here", None),
+    ("``Closes #7`` then Refs #8", 8),
+    ("Closes #" + "1" * 5000, None),
+    ("Closes #12345678901", None),
 ]
 
 
@@ -706,6 +716,7 @@ def test_issue_gate_inline_prefill_agrees_with_function(
         tmp_path,
     )
     assert result.returncode == 1
+    assert "Traceback" not in result.stderr
     if expected is None:
         assert ACTION_REMEDY_ISSUE_GATE + "\n" in result.stderr
     else:
@@ -735,3 +746,15 @@ def test_issue_gate_multiple_markers_not_prefilled(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "add exactly one line" in result.stderr
     assert "add this line" not in result.stderr
+
+
+def test_issue_gate_inline_regexes_match_function_literals() -> None:
+    action = (ROOT / ".github" / "actions" / "issue-gate" / "action.yml").read_text(
+        encoding="utf-8"
+    )
+    keyword = gate_diagnostics._CORE_ISSUE_KEYWORD_REF_RE  # pyright: ignore[reportPrivateUsage]
+    hidden = gate_diagnostics._HIDDEN_TEXT_RES  # pyright: ignore[reportPrivateUsage]
+    head, tail = keyword.split("[ \\t]*", 1)
+    pieces = [*hidden, head, "[ \\t]*" + tail]
+    for piece in pieces:
+        assert f'r"{piece}"' in action, piece
