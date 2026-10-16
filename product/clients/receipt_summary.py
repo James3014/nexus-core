@@ -38,11 +38,15 @@ def _clean(value: Any, limit: int = MAX_VALUE) -> str:
     return text
 
 
+_MD_SPECIAL = "\\`*_{}[]()#+!|<>~&"
+
+
 def _md(value: Any, limit: int = MAX_VALUE) -> str:
     text = _clean(value, limit)
-    for ch, rep in (("\\", "\\\\"), ("|", "\\|"), ("`", "\\`"), ("<", "&lt;"), (">", "&gt;")):
-        text = text.replace(ch, rep)
-    return text
+    text = text.replace("&", "&#38;")
+    text = "".join("\\" + ch if ch in _MD_SPECIAL and ch != "&" else ch for ch in text)
+    # Neutralise autolinks and bare www. links without changing visible text.
+    return text.replace(":", "&#58;").replace("www.", "www&#46;")
 
 
 def _short(value: Any, n: int = 12) -> str:
@@ -59,7 +63,11 @@ def _seq(value: Any) -> list[Any]:
 
 
 def _entries(receipt: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    return [e for e in _seq(_get(receipt, "core_response", "verification", "coverage", "entries")) if isinstance(e, Mapping)]  # pyright: ignore[reportUnknownVariableType]
+    return [
+        e
+        for e in _seq(_get(receipt, "core_response", "verification", "coverage", "entries"))
+        if isinstance(e, Mapping)
+    ]  # pyright: ignore[reportUnknownVariableType]
 
 
 def _is_covered(entry: Mapping[str, Any]) -> bool:
@@ -70,7 +78,9 @@ def _is_covered(entry: Mapping[str, Any]) -> bool:
 
 
 def _status(receipt: Mapping[str, Any]) -> str:
-    return _get(receipt, "outcome", "status") or _get(receipt, "issue_verification", "status") or DASH
+    return (
+        _get(receipt, "outcome", "status") or _get(receipt, "issue_verification", "status") or DASH
+    )
 
 
 def _generation(receipt: Mapping[str, Any]) -> Any:
@@ -89,7 +99,22 @@ def _joined(value: Any) -> str:
     return ", ".join(items)
 
 
-def render_markdown(receipt: Mapping[str, Any], receipt_sha256: str | None = None) -> str:
+GATE_VERDICTS = ("verified", "rejected", "unverified")
+
+
+def _verdict_label(verdict: str) -> str:
+    if verdict == "verified":
+        return "GATE VERIFIED"
+    if verdict == "rejected":
+        return "GATE REJECTED"
+    return "UNVERIFIED (producer side; receipt-verify decides)"
+
+
+def render_markdown(
+    receipt: Mapping[str, Any],
+    receipt_sha256: str | None = None,
+    gate_verdict: str = "unverified",
+) -> str:
     gen = _generation(receipt)
     repo = _get(receipt, "issue_verification", "github_repository")
     number = _get(receipt, "issue_verification", "issue_number")
@@ -103,7 +128,8 @@ def render_markdown(receipt: Mapping[str, Any], receipt_sha256: str | None = Non
         ]
     )
     rows: list[tuple[str, str]] = [
-        ("status", _md(_status(receipt))),
+        ("gate verdict", _verdict_label(gate_verdict)),
+        ("receipt claims", _md(_status(receipt))),
         ("reason codes", _md(reasons) if reasons else "none"),
         ("claim ceiling", _md(_get(receipt, "issue_verification", "claim_ceiling"))),
         ("issue", issue),
@@ -115,9 +141,18 @@ def render_markdown(receipt: Mapping[str, Any], receipt_sha256: str | None = Non
     ]
     if receipt_sha256:
         rows.append(("receipt file sha256", _short(receipt_sha256)))
-    out = [f"### Nexus Core receipt: {_md(_status(receipt))}", "", "| field | value |", "| --- | --- |"]
+    out = [
+        f"### Nexus Core receipt: {_verdict_label(gate_verdict)} (receipt claims {_md(_status(receipt))})",
+        "",
+        "| field | value |",
+        "| --- | --- |",
+    ]
     out += [f"| {k} | {v} |" for k, v in rows]
-    out += ["", "| subject | kind | observed | requirement | applicability |", "| --- | --- | --- | --- | --- |"]
+    out += [
+        "",
+        "| subject | kind | observed | requirement | applicability |",
+        "| --- | --- | --- | --- | --- |",
+    ]
     entries = _entries(receipt)
     if not entries:
         out.append(f"| {DASH} | {DASH} | {DASH} | {DASH} | {DASH} |")
@@ -131,19 +166,27 @@ def render_markdown(receipt: Mapping[str, Any], receipt_sha256: str | None = Non
                 _md(e.get("applicability")),
             )
         )
-    unexpected = _joined(_get(receipt, "core_response", "verification", "coverage", "unexpected_subjects"))
+    unexpected = _joined(
+        _get(receipt, "core_response", "verification", "coverage", "unexpected_subjects")
+    )
     out += ["", f"Unexpected subjects: {_md(unexpected) if unexpected else 'none'}"]
     paths = [p for p in _seq(_get(receipt, "inputs", "request", "change_set", "paths"))]
     deleted = _seq(_get(receipt, "inputs", "request", "change_set", "deleted_paths"))
-    protected = {str(p) for p in _seq(_get(receipt, "inputs", "config", "deletion_exception", "protected_paths"))}
+    protected = {
+        str(p)
+        for p in _seq(_get(receipt, "inputs", "config", "deletion_exception", "protected_paths"))
+    }
     touched = [p for p in paths if str(p) in protected]
-    listed = ", ".join(f"`{_md(p, 120)}`" for p in paths[:MAX_PATHS])
+    listed = ", ".join(_md(p, 120) for p in paths[:MAX_PATHS])
     more = f" (+{len(paths) - MAX_PATHS} more)" if len(paths) > MAX_PATHS else ""
     out.append(f"Changed paths: {len(paths)}" + (f": {listed}{more}" if paths else ""))
-    out.append(f"Deleted paths: {len(deleted)}" + (": " + ", ".join(f"`{_md(p, 120)}`" for p in deleted[:MAX_PATHS]) if deleted else ""))
+    out.append(
+        f"Deleted paths: {len(deleted)}"
+        + (": " + ", ".join(_md(p, 120) for p in deleted[:MAX_PATHS]) if deleted else "")
+    )
     out.append(
         "Protected paths touched: "
-        + (", ".join(f"`{_md(p, 120)}`" for p in touched[:MAX_PATHS]) if touched else "none")
+        + (", ".join(_md(p, 120) for p in touched[:MAX_PATHS]) if touched else "none")
     )
     adv = _get(receipt, "owner_signature_advisory")
     if isinstance(adv, Mapping):
@@ -152,7 +195,7 @@ def render_markdown(receipt: Mapping[str, Any], receipt_sha256: str | None = Non
     return "\n".join(out)
 
 
-def render_notice(receipt: Mapping[str, Any]) -> str:
+def render_notice(receipt: Mapping[str, Any], gate_verdict: str = "unverified") -> str:
     entries = _entries(receipt)
     if entries:
         covered = sum(1 for e in entries if _is_covered(e))
@@ -167,7 +210,8 @@ def render_notice(receipt: Mapping[str, Any]) -> str:
         ]
     )
     parts = [
-        _clean(_status(receipt)),
+        _verdict_label(gate_verdict),
+        f"receipt claims {_clean(_status(receipt))}",
         cover,
         f"universe {universe}",
         _clean(_get(receipt, "issue_verification", "claim_ceiling")),
@@ -181,5 +225,7 @@ def escape_workflow_message(message: str) -> str:
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def render_notice_command(receipt: Mapping[str, Any]) -> str:
-    return f"::notice title=Nexus Core receipt::{escape_workflow_message(render_notice(receipt))}"
+def render_notice_command(receipt: Mapping[str, Any], gate_verdict: str = "unverified") -> str:
+    level = "warning" if gate_verdict == "rejected" else "notice"
+    message = escape_workflow_message(render_notice(receipt, gate_verdict))
+    return f"::{level} title=Nexus Core receipt::{message}"

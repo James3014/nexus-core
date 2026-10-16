@@ -412,9 +412,9 @@ runs:
       run: |
         # Display only (#273): never changes the verdict or any output.
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-          nexus-certify receipt-summary --receipt "$RECEIPT" --receipt-sha256 "$RECEIPT_SHA256" >> "$GITHUB_STEP_SUMMARY"
+          nexus-certify receipt-summary --receipt "$RECEIPT" --receipt-sha256 "$RECEIPT_SHA256" --gate-verdict unverified >> "$GITHUB_STEP_SUMMARY"
         fi
-        nexus-certify receipt-summary --receipt "$RECEIPT" --format notice
+        nexus-certify receipt-summary --receipt "$RECEIPT" --gate-verdict unverified --format notice
 
     - name: Name receipt artifact
       id: names

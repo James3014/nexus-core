@@ -481,14 +481,14 @@ def cmd_receipt_summary(args: argparse.Namespace) -> int:
 
     try:
         payload: Any = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         print("receipt-summary: receipt is not readable JSON", file=sys.stderr)
         return 2
     receipt: dict[str, Any] = cast("dict[str, Any]", payload) if isinstance(payload, dict) else {}
     if args.format == "notice":
-        print(receipt_summary.render_notice_command(receipt))
+        print(receipt_summary.render_notice_command(receipt, args.gate_verdict))
     else:
-        print(receipt_summary.render_markdown(receipt, args.receipt_sha256))
+        print(receipt_summary.render_markdown(receipt, args.receipt_sha256, args.gate_verdict))
     return 0
 
 
@@ -965,6 +965,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_receipt_summary.add_argument("--receipt", required=True, help="Path to local receipt JSON")
     p_receipt_summary.add_argument("--format", choices=["markdown", "notice"], default="markdown")
     p_receipt_summary.add_argument("--receipt-sha256", default=None)
+    p_receipt_summary.add_argument(
+        "--gate-verdict", choices=["verified", "rejected", "unverified"], default="unverified"
+    )
     p_receipt_check = subparsers.add_parser(
         "receipt-check", help="Validate a local verification receipt without rerunning its verifier"
     )

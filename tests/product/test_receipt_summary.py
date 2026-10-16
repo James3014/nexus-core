@@ -30,8 +30,8 @@ def _receipt() -> dict[str, Any]:
 
 
 def test_renders_real_shaped_verified_receipt() -> None:
-    text = render_markdown(_receipt(), "ab" * 32)
-    assert text.startswith("### Nexus Core receipt: VERIFIED")
+    text = render_markdown(_receipt(), "ab" * 32).replace("\\", "")
+    assert text.startswith("### Nexus Core receipt: UNVERIFIED")
     for subject in ("dependency/nexus-learning", "dependency/nexus-runtime", "nexus/fast-l1"):
         assert subject in text
     assert text.count("| PASS |") == 3
@@ -39,8 +39,8 @@ def test_renders_real_shaped_verified_receipt() -> None:
     assert "trusted-base-config" in text
     assert ".github/workflows/trusted-deletion-anchor.yml" in text
     assert "Display only" in text
-    assert render_notice(_receipt()) == (
-        "VERIFIED · 3/3 subjects covered · universe trusted-base-config g2"
+    assert render_notice(_receipt(), "verified") == (
+        "GATE VERIFIED · receipt claims VERIFIED · 3/3 subjects covered · universe trusted-base-config g2"
         " · ISSUE_VERIFIED_NOT_RELEASED"
     )
 
@@ -63,7 +63,7 @@ def test_markdown_injection_is_escaped() -> None:
     receipt["core_response"]["verification"]["coverage"]["entries"][0]["logical_subject_id"] = evil
     text = render_markdown(receipt)
     assert "<script>" not in text
-    assert "a\\|b\\`c d&lt;script&gt;" in text
+    assert "a\\|b\\`c d\\<script\\>" in text
     assert "\nd" not in text
 
 
@@ -80,9 +80,9 @@ def test_notice_cannot_inject_second_command() -> None:
 
 def test_cli_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["receipt-summary", "--receipt", str(FIXTURE)]) == 0
-    assert "### Nexus Core receipt: VERIFIED" in capsys.readouterr().out
+    assert "### Nexus Core receipt: UNVERIFIED" in capsys.readouterr().out
     assert cli.main(["receipt-summary", "--receipt", str(FIXTURE), "--format", "notice"]) == 0
-    assert capsys.readouterr().out.startswith("::notice title=Nexus Core receipt::VERIFIED")
+    assert capsys.readouterr().out.startswith("::notice title=Nexus Core receipt::UNVERIFIED")
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
     assert cli.main(["receipt-summary", "--receipt", str(bad)]) == 2
@@ -99,3 +99,51 @@ def test_action_publishes_summary_via_env(path: Path) -> None:
     assert 'receipt-summary --receipt "$RECEIPT"' in block
     run = block.split("run: |", 1)[1]
     assert "${{" not in run
+
+
+def test_gate_verdict_leads_notice_and_markdown() -> None:
+    receipt = _receipt()
+    verified = render_notice(receipt, "verified")
+    assert verified.startswith("GATE VERIFIED · receipt claims VERIFIED · 3/3")
+    rejected = render_notice(receipt, "rejected")
+    assert rejected.startswith("GATE REJECTED · receipt claims VERIFIED")
+    assert render_notice(receipt).startswith("UNVERIFIED (producer side; receipt-verify decides)")
+    assert render_notice_command(receipt, "rejected").startswith("::warning ")
+    assert render_notice_command(receipt, "verified").startswith("::notice ")
+    assert render_notice_command(receipt).startswith("::notice ")
+    assert render_markdown(receipt, None, "rejected").startswith(
+        "### Nexus Core receipt: GATE REJECTED"
+    )
+
+
+def test_cli_gate_verdict_option(capsys: pytest.CaptureFixture[str]) -> None:
+    args = ["receipt-summary", "--receipt", str(FIXTURE), "--gate-verdict", "rejected"]
+    assert cli.main([*args, "--format", "notice"]) == 0
+    assert capsys.readouterr().out.startswith("::warning title=Nexus Core receipt::GATE REJECTED")
+
+
+def test_markdown_links_images_and_code_breakout_neutralised() -> None:
+    receipt = _receipt()
+    paths = [
+        "foo[approve](https://example.invalid/approve)",
+        "![x](https://e.invalid/x.png)",
+        "a`b` <b>",
+        "see https://evil.invalid and www.evil.invalid",
+    ]
+    receipt["inputs"]["request"]["change_set"]["paths"] = paths
+    receipt["core_response"]["verification"]["coverage"]["entries"][0]["logical_subject_id"] = (
+        paths[0]
+    )
+    text = render_markdown(receipt)
+    assert "[approve](" not in text and "![x](" not in text
+    assert "foo\\[approve\\]\\(https&#58;//example.invalid/approve\\)" in text
+    assert "\\!\\[x\\]" in text
+    assert "https://" not in text and "www." not in text
+    assert "`" not in text.replace("\\`", "")
+    assert "<b>" not in text
+
+
+def test_cli_deeply_nested_json_exits_2(tmp_path: Path) -> None:
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
+    assert cli.main(["receipt-summary", "--receipt", str(deep)]) == 2
