@@ -237,6 +237,38 @@ succeed, completion must occur before the timeout, and exit code zero means `PAS
 Stdout/stderr are evidence bytes, not a second result protocol to parse. Non-zero
 exit is canonical `FAILED_VERIFICATION`, not a transport error.
 
+## Owner-signed deletion exception and protected paths
+
+An optional `[deletion_exception]` table (read from the trusted base-ref config)
+lets a `deletion_policy = "FORBID"` repository admit deletions listed in an
+owner-SSHSIG-signed manifest under `manifest_dir`. The same table's
+`protected_paths` (plus `.nexus-core/config.toml`, which is always protected)
+covers **any change** to those paths, not only deletion: adding, modifying or
+deleting a protected path needs the same owner-signed manifest (listing it as a
+companion change). Despite sitting next to the deletion rules, the table is a
+modification guard too.
+
+What happens without a valid signature depends on `enforcement`:
+
+- `ENFORCED` (default): the run fails with
+  `PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE` (or
+  `DELETION_MANIFEST_SIGNATURE_MISSING` / `_INVALID`).
+- `ADVISORY`: for a change that deletes nothing and does not edit
+  `deletion_policy` or `[deletion_exception]`, the run continues and can still
+  be `VERIFIED`. The owner-signature finding adds nothing to
+  `outcome.reason_codes`. The finding instead goes to
+  a `::warning` annotation in the issue run and to the receipt's
+  `owner_signature_advisory` record, whose `reason_code` and
+  `protected_paths_touched` / `manifest_paths_touched` lists `receipt-check`
+  recomputes from the change manifest (`OWNER_SIGNATURE_ADVISORY_MISSING`,
+  `_MALFORMED`, `_UNAUTHORIZED`). Deletions, trust-root edits and malformed
+  manifests still fail.
+
+`receipt-summary` lists the protected paths a change touched (the receipt's
+changed paths that are protected, plus the advisory record's list) in the job
+summary and in the one-line check-run notice, so a reviewer sees the touch
+without reading the diff. This is display only and does not change any verdict.
+
 ## Durable receipt contract
 
 The repository-local receipt contains the installed product version and receipt

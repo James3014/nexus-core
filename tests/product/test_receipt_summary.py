@@ -12,6 +12,7 @@ import pytest
 from product.clients import cli
 from product.clients.receipt_summary import (
     escape_workflow_message,
+    protected_paths_touched,
     render_markdown,
     render_notice,
     render_notice_command,
@@ -42,6 +43,7 @@ def test_renders_real_shaped_verified_receipt() -> None:
     assert render_notice(_receipt(), "verified") == (
         "GATE VERIFIED · receipt claims VERIFIED · 3/3 subjects covered · universe trusted-base-config g2"
         " · ISSUE_VERIFIED_NOT_RELEASED"
+        " · protected paths touched: .github/workflows/trusted-deletion-anchor.yml"
     )
 
 
@@ -193,3 +195,96 @@ def test_no_active_links_when_rendered() -> None:
         options=0,
     )
     assert "<a " not in html and "<img" not in html
+
+
+ANCHOR = ".github/workflows/trusted-deletion-anchor.yml"
+
+
+def _advisory_receipt() -> dict[str, Any]:
+    """The Nexus-new#2286 shape (#274): ADVISORY config, protected workflow modified."""
+
+    receipt = _receipt()
+    receipt["owner_signature_advisory"] = {
+        "schema": "nexus.core.owner-signature-advisory.v1",
+        "enforcement": "ADVISORY",
+        "reason_code": "PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE",
+        "detail": ANCHOR,
+        "protected_paths_touched": [ANCHOR],
+        "manifest_paths_touched": [],
+    }
+    return receipt
+
+
+def test_advisory_protected_path_is_visible_in_check_run_notice() -> None:
+    notice = render_notice(_advisory_receipt(), "verified")
+    assert notice.startswith("GATE VERIFIED · receipt claims VERIFIED")
+    assert notice.endswith(
+        f"protected paths touched: {ANCHOR}"
+        " (owner signature advisory: PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE)"
+    )
+    command = render_notice_command(_advisory_receipt(), "verified")
+    assert ANCHOR in command and command.count("::") == 2
+
+
+def test_advisory_markdown_names_paths_reason_and_enforcement() -> None:
+    text = render_markdown(_advisory_receipt(), None, "verified").replace("\\", "")
+    assert f"Protected paths touched: {ANCHOR}" in text
+    assert "Owner signature advisory: PROTECTED_PATH_REQUIRES_OWNER_SIGNATURE" in text
+    assert "enforcement ADVISORY" in text
+
+
+def test_config_toml_is_always_protected_when_section_exists() -> None:
+    receipt = _receipt()
+    receipt["inputs"]["request"]["change_set"]["paths"] = [".nexus-core/config.toml", "a.py"]
+    assert protected_paths_touched(receipt) == [".nexus-core/config.toml"]
+    assert "protected paths touched: .nexus-core/config.toml" in render_notice(receipt)
+
+
+def test_advisory_record_paths_are_shown_even_if_change_set_omits_them() -> None:
+    receipt = _advisory_receipt()
+    receipt["inputs"]["request"]["change_set"]["paths"] = []
+    assert protected_paths_touched(receipt) == [ANCHOR]
+
+
+def test_no_deletion_exception_section_and_no_advisory_means_no_segment() -> None:
+    receipt = _receipt()
+    receipt["inputs"]["config"].pop("deletion_exception")
+    assert protected_paths_touched(receipt) == []
+    assert "protected paths" not in render_notice(receipt)
+    assert "Protected paths touched: none" in render_markdown(receipt)
+    receipt["inputs"]["request"]["change_set"]["paths"] = ["a.py"]
+    receipt["inputs"]["config"]["deletion_exception"] = {"protected_paths": ["b.py"]}
+    assert "protected paths" not in render_notice(receipt)
+
+
+def test_signed_manifest_record_is_named_in_markdown() -> None:
+    receipt = _receipt()
+    receipt["deletion_exception"] = {
+        "manifest_path": ".nexus-core/deletions/x.json",
+        "principal": "james-owner",
+    }
+    text = render_markdown(receipt).replace("\\", "")
+    assert "Owner-signed manifest: .nexus-core/deletions/x.json (signer james-owner)" in text
+
+
+def test_protected_path_injection_cannot_start_a_command() -> None:
+    receipt = _advisory_receipt()
+    receipt["owner_signature_advisory"]["protected_paths_touched"] = ["p\n::error::pwn%"]
+    command = render_notice_command(receipt, "verified")
+    assert "\n" not in command and command.count("::") == 2
+
+
+@pytest.mark.parametrize("fmt", ["markdown", "notice"])
+def test_lone_surrogate_in_protected_path_still_prints(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fmt: str
+) -> None:
+    receipt = tmp_path / "r.json"
+    receipt.write_text(
+        '{"owner_signature_advisory": {"reason_code": "\\ud800",'
+        ' "protected_paths_touched": ["a\\ud800b"]}}',
+        encoding="utf-8",
+    )
+    assert cli.main(["receipt-summary", "--receipt", str(receipt), "--format", fmt]) == 0
+    out = capsys.readouterr().out
+    out.encode("utf-8")
+    assert "a?b" in out
