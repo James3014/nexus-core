@@ -12,6 +12,13 @@ name: Nexus Core issue completion
 # - 'verify' is the required check: it passes only on a receipt-verify that
 #   succeeded with verified == 'true', or (pull requests only) on receipt-verify's
 #   confirmed PR_ALREADY_CLOSED_SKIPPED.
+# - 'verify' must never be skipped: GitHub treats a skipped required check as
+#   passed, so a job-level source condition would let fork or cross-repository PRs
+#   merge unchecked (#265). It keeps only `if: always()`; its first step fails
+#   closed with NEXUS_CORE_UNTRUSTED_PR_SOURCE (head repository differs from this
+#   repository; never test head.repo.fork), NEXUS_CORE_UNTRUSTED_EVENT or
+#   NEXUS_CORE_UNTRUSTED_DISPATCH_REF, then NEXUS_CORE_ISSUER_NOT_SUCCESSFUL when
+#   the run job did not succeed (the run job may be skipped for the same sources).
 # Requires container isolation ([isolation] mode = "container") in the
 # repository's committed .nexus-core/config.toml. See
 # docs/GITHUB_REPOSITORY_CHECK.md.
@@ -67,7 +74,9 @@ jobs:
   verify:
     name: Nexus Core issue completion   # the required status check
     needs: run
-    if: always() && ((github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'repository_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
+    # Never put a source condition here: a job skipped by `if:` reports as skipped, and
+    # GitHub treats a skipped required check as passed. The guard step below fails closed.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -75,6 +84,40 @@ jobs:
       actions: read
       pull-requests: read   # receipt-verify re-reads the live PR for PR_ALREADY_CLOSED_SKIPPED
     steps:
+      - name: Fail closed on untrusted source or unsuccessful issuer
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_RESULT: ${{ needs.run.result }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request_target)
+              if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$REPOSITORY" ]; then
+                echo "NEXUS_CORE_UNTRUSTED_PR_SOURCE: head repository '${HEAD_REPO:-}' is not '$REPOSITORY'" >&2
+                exit 1
+              fi
+              ;;
+            repository_dispatch)
+              if [ -z "$DEFAULT_BRANCH" ] || [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+                echo "NEXUS_CORE_UNTRUSTED_DISPATCH_REF: '$REF' is not the default branch" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "NEXUS_CORE_UNTRUSTED_EVENT: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          if [ "$RUN_RESULT" != "success" ]; then
+            echo "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL: run job result is '$RUN_RESULT'" >&2
+            exit 1
+          fi
+
       - name: Verify signed receipt
         id: verify
         uses: James3014/nexus-core/.github/actions/receipt-verify@0000000000000000000000000000000000000000  # pin: same sha

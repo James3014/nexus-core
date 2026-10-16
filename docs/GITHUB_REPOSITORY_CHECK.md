@@ -266,8 +266,8 @@ jobs:
           nexus-certify-ref: "<40-hex-sha>"
 ```
 
-(The example file also carries the `pull_request_target` trigger and the fork
-guard on both jobs; both are required.) The PR body must contain exactly one
+(The example file also carries the `pull_request_target` trigger, the source
+`if:` on `run` and the fail-closed guard step in `verify`; both are required.) The PR body must contain exactly one
 `<!-- NEXUS_CORE_ISSUE: <number> -->` marker, or you pass `issue-number`
 explicitly. Otherwise the gate fails closed. Other inputs: `python-version`
 (default `3.11`), `candidate-path` (default `candidate`), and for
@@ -333,6 +333,16 @@ counts as passing. Also keep the repository's
 fork-PR workflow approval set to require approval for external contributors.
 Same-repository branches, the normal agent path, are covered by the container
 isolation and the trusted config source.
+
+In consumer workflows the required `verify` job must not be skipped either: a
+skipped required check counts as success, so a job-level `if:` on the source
+would let fork or cross-repository PRs through. `verify` therefore keeps only
+`if: always()` and its first step fails closed with
+`NEXUS_CORE_UNTRUSTED_PR_SOURCE` (head repository differs from
+`github.repository`) or `NEXUS_CORE_ISSUER_NOT_SUCCESSFUL` (`needs.run.result`
+is not `success`). Only the `run` job keeps the source `if:` (skipping it is
+safe because `verify` then fails). See
+`docs/examples/nexus-core-issue-completion.consumer.yml`.
 
 ## Trusted-input evolution
 
