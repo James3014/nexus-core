@@ -427,7 +427,9 @@ runs:
 
     - name: Sign the receipt issue-check wrote (Sigstore keyless)
       id: sign
-      if: always() && steps.prstate.outputs.outcome != 'PR_ALREADY_CLOSED_SKIPPED'
+      # Only after issue-check itself ran in this invocation (success or failure):
+      # an earlier failure must never pick up a pointer left by anything else.
+      if: always() && (steps.check.outcome == 'success' || steps.check.outcome == 'failure')
       shell: bash
       env:
         CANDIDATE: ${{ inputs.candidate-path }}

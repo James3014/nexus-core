@@ -304,6 +304,12 @@ trusted base checkout instead of a pinned ref.
    copied to a fresh runner directory, signed (even on failure) and uploaded with the
    bundle, so the artifact holds exactly one receipt and one bundle; a failing run
    prints a diagnostic of that receipt. No receipt written means nothing is signed.
+   Signing happens only when issue-check itself ran in this invocation. This protects
+   against files the candidate commits or that container-isolated verifier code
+   writes. With `isolation.mode = "process"` the verifier runs as the runner user and
+   can reach the runner's files, including Core's own receipt and tools, so no
+   gate-side check can keep a hostile verifier from altering what is signed: use
+   container isolation for candidates you do not trust.
 6. **Verify job.** A separate job with no candidate code checks the signature
    and the receipt expectations (see above).
 

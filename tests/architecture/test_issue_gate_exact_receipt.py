@@ -302,3 +302,14 @@ def test_sign_step_empties_the_upload_dir_when_there_is_no_receipt(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     assert "receipt-file" not in result.outputs
     assert not stale.exists()
+
+
+def test_sign_step_runs_only_after_issue_check_ran() -> None:
+    sign = _step(ISSUE_GATE, "sign")
+    assert sign["if"] == (
+        "always() && (steps.check.outcome == 'success' || steps.check.outcome == 'failure')"
+    )
+    names = _names()
+    assert names.index("Verify exact Issue-bound candidate") < names.index(
+        "Sign the receipt issue-check wrote (Sigstore keyless)"
+    )
