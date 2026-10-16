@@ -229,3 +229,44 @@ async def test_runtime_certification_without_universe_still_proceeds(tmp_path: P
     # Reached acquisition (the counting port raises), i.e. not rejected for a universe.
     assert github_port.calls == 1
     assert job.error_code != "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"expected_subjects": {}},
+        {"expected_subjects": ""},
+        {"expected_subjects": 0},
+        {"expected_subjects": "x"},
+        {"universe_generation": True},
+        {"universe_generation": "0"},
+        {"universe_generation": 0.0},
+        {"universe_generation": -1},
+    ],
+)
+async def test_full_recompute_rejects_malformed_universe_fields(
+    tmp_path: Path, fields: dict[str, Any]
+) -> None:
+    """Codex r2 (#271): a malformed universe field must not recompute a different contract."""
+    receipt, inputs, _ = _scenario(False)
+    inputs = {**inputs, "acceptance_contract": {**inputs["acceptance_contract"], **fields}}
+    status, body = await _verify(_service(tmp_path), receipt, inputs)
+    assert status == 422
+    assert body["code"] == "RECEIPT_INVALID"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"expected_subjects": None}, {"expected_subjects": []}, {"universe_generation": 0}],
+)
+async def test_full_recompute_absent_or_empty_universe_still_valid(
+    tmp_path: Path, fields: dict[str, Any]
+) -> None:
+    receipt, inputs, adapter_hash = _scenario(False)
+    inputs = {**inputs, "acceptance_contract": {**inputs["acceptance_contract"], **fields}}
+    status, body = await _verify(_service(tmp_path), receipt, inputs)
+    assert status == 200
+    assert body["status"] == "VALID"
+    assert body["recomputed_hash"] == adapter_hash

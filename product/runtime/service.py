@@ -131,8 +131,23 @@ _UNIVERSE_MESSAGE = (
 )
 
 
+def _universe_generation(raw: Any) -> int:
+    """A non-negative int (bool rejected), else ValueError -> RECEIPT_INVALID (#271)."""
+    if type(raw) is not int or raw < 0:
+        raise ValueError("universe_generation must be a non-negative integer")
+    return raw
+
+
 def _expected_subjects(raw: Any) -> tuple[ExpectedEvidenceSubject, ...]:
-    """Mirror generic_verification._domain_objects; absent/empty gives ()."""
+    """Mirror generic_verification._domain_objects; absent (None) or [] gives ().
+
+    Any other non-list value raises ValueError, so FULL recomputation reports
+    RECEIPT_INVALID instead of recomputing a different contract (#271).
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("expected_subjects must be a list")
     if not raw:
         return ()
     return tuple(
@@ -764,7 +779,7 @@ class RuntimeCertificationService:
                     deletion_policy=raw_c["deletion_policy"],
                     allowed_path_prefixes=tuple(raw_c.get("allowed_path_prefixes", ())),
                     expected_subjects=_expected_subjects(raw_c.get("expected_subjects")),
-                    universe_generation=raw_c.get("universe_generation", 0),
+                    universe_generation=_universe_generation(raw_c.get("universe_generation", 0)),
                 )
                 change_set = ChangeSet(
                     change_set_id=raw_cs["change_set_id"],
