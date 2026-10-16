@@ -386,7 +386,8 @@ nexus-certify receipt-check --receipt <receipt>.json \
 [--receipt-sha256 <hex>]` prints a one-screen coverage summary: status, reason
 codes, claim ceiling, Issue, evidence universe, one row per coverage entry,
 changed/deleted/protected paths and any owner-signature advisory. `notice` emits a
-single `::notice title=Nexus Core receipt::...` workflow command (escaped so a
+single `::notice title=Nexus Core receipt::...` workflow command (it ends with
+`protected paths touched: ...` when the change touched one) (escaped so a
 receipt value cannot start another command). Both the issue-gate and
 receipt-verify actions run it in a `continue-on-error` step (markdown to the job
 summary, notice as a check-run annotation), including when the run is red. It

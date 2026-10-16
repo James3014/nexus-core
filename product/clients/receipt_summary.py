@@ -30,7 +30,9 @@ def _get(obj: Any, *keys: str) -> Any:
 def _clean(value: Any, limit: int = MAX_VALUE) -> str:
     if value is None or value == "":
         return DASH
-    text = _CONTROL.sub(" ", str(value)).strip()
+    # Lone surrogates parse from JSON but cannot be printed as UTF-8.
+    text = str(value).encode("utf-8", "replace").decode("utf-8")
+    text = _CONTROL.sub(" ", text).strip()
     if not text:
         return DASH
     if len(text) > limit:
@@ -93,6 +95,31 @@ def _generation(receipt: Mapping[str, Any]) -> Any:
         if value is not None:
             return value
     return None
+
+
+CONFIG_PATH = ".nexus-core/config.toml"
+
+
+def protected_paths_touched(receipt: Mapping[str, Any]) -> list[str]:
+    """Protected paths this change touched, from receipt fields only (#274).
+
+    Changed paths intersected with the receipt's config ``protected_paths``
+    (``.nexus-core/config.toml`` is always protected once ``[deletion_exception]``
+    exists), united with the owner-signature advisory record's
+    ``protected_paths_touched`` (which receipt-check binds to the change
+    manifest). Display only.
+    """
+
+    section = _get(receipt, "inputs", "config", "deletion_exception")
+    touched: set[str] = set()
+    if isinstance(section, Mapping):
+        protected = {str(p) for p in _seq(_get(section, "protected_paths"))} | {CONFIG_PATH}
+        paths = _seq(_get(receipt, "inputs", "request", "change_set", "paths"))
+        touched |= {str(p) for p in paths if str(p) in protected}
+    touched |= {
+        str(p) for p in _seq(_get(receipt, "owner_signature_advisory", "protected_paths_touched"))
+    }
+    return sorted(touched)
 
 
 def _joined(value: Any) -> str:
@@ -173,11 +200,7 @@ def render_markdown(
     out += ["", f"Unexpected subjects: {_md(unexpected) if unexpected else 'none'}"]
     paths = [p for p in _seq(_get(receipt, "inputs", "request", "change_set", "paths"))]
     deleted = _seq(_get(receipt, "inputs", "request", "change_set", "deleted_paths"))
-    protected = {
-        str(p)
-        for p in _seq(_get(receipt, "inputs", "config", "deletion_exception", "protected_paths"))
-    }
-    touched = [p for p in paths if str(p) in protected]
+    touched = protected_paths_touched(receipt)
     listed = ", ".join(_md(p, 120) for p in paths[:MAX_PATHS])
     more = f" (+{len(paths) - MAX_PATHS} more)" if len(paths) > MAX_PATHS else ""
     out.append(f"Changed paths: {len(paths)}" + (f": {listed}{more}" if paths else ""))
@@ -191,7 +214,20 @@ def render_markdown(
     )
     adv = _get(receipt, "owner_signature_advisory")
     if isinstance(adv, Mapping):
-        out.append(f"Owner signature advisory: {_md(_get(adv, 'reason_code'))}")
+        manifests = ", ".join(
+            _md(p, 120) for p in _seq(_get(adv, "manifest_paths_touched"))[:MAX_PATHS]
+        )
+        out.append(
+            f"Owner signature advisory: {_md(_get(adv, 'reason_code'))}"
+            f" (enforcement {_md(_get(adv, 'enforcement'))}; the gate warned instead of failing)"
+            + (f"; manifests touched: {manifests}" if manifests else "")
+        )
+    signed = _get(receipt, "deletion_exception")
+    if isinstance(signed, Mapping):
+        out.append(
+            f"Owner-signed manifest: {_md(_get(signed, 'manifest_path'), 120)}"
+            f" (signer {_md(_get(signed, 'principal'))})"
+        )
     out += ["", FOOTER, ""]
     return "\n".join(out)
 
@@ -217,6 +253,15 @@ def render_notice(receipt: Mapping[str, Any], gate_verdict: str = "unverified") 
         f"universe {universe}",
         _clean(_get(receipt, "issue_verification", "claim_ceiling")),
     ]
+    touched = protected_paths_touched(receipt)
+    if touched:
+        shown = ", ".join(_clean(p, 120) for p in touched[:5])
+        more = f" (+{len(touched) - 5} more)" if len(touched) > 5 else ""
+        segment = f"protected paths touched: {shown}{more}"
+        reason = _get(receipt, "owner_signature_advisory", "reason_code")
+        if reason is not None:
+            segment += f" (owner signature advisory: {_clean(reason)})"
+        parts.append(segment)
     return " · ".join(parts)
 
 
