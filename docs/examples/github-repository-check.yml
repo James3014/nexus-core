@@ -4,7 +4,8 @@ name: Nexus Core issue completion
 # - 'run' produces and Sigstore-signs the receipt (needs id-token: write).
 # - 'verify' is the required check: it verifies the signature against THIS
 #   workflow file on the default branch and checks the receipt against the exact
-#   head, base config and Issue.
+#   head, base config and Issue. It is never skipped (a skipped required check
+#   counts as passed): its first step fails closed on fork PRs or a failed 'run'.
 # Requires container isolation ([isolation] mode = "container") in the
 # repository's committed .nexus-core/config.toml. See
 # docs/GITHUB_REPOSITORY_CHECK.md.
@@ -50,13 +51,37 @@ jobs:
   verify:
     name: Nexus Core issue completion   # the required status check
     needs: run
-    if: always() && github.event.pull_request.head.repo.full_name == github.repository
+    # Never put a source condition here: a job skipped by `if:` reports as skipped, and
+    # GitHub treats a skipped required check as passed. The guard step below fails closed.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       actions: read
     steps:
+      - name: Fail closed on untrusted source or unsuccessful issuer
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_RESULT: ${{ needs.run.result }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request_target" ]; then
+            echo "NEXUS_CORE_UNTRUSTED_EVENT: $EVENT_NAME" >&2
+            exit 1
+          fi
+          if [ -z "$HEAD_REPO" ] || [ "$HEAD_REPO" != "$REPOSITORY" ]; then
+            echo "NEXUS_CORE_UNTRUSTED_PR_SOURCE: head repository '${HEAD_REPO:-}' is not '$REPOSITORY'" >&2
+            exit 1
+          fi
+          if [ "$RUN_RESULT" != "success" ]; then
+            echo "NEXUS_CORE_ISSUER_NOT_SUCCESSFUL: run job result is '$RUN_RESULT'" >&2
+            exit 1
+          fi
+
       - uses: James3014/nexus-core/.github/actions/receipt-verify@c293dc944fe99652ae8856d732a35b5191f52a5e  # pin: same sha
         with:
           artifact-name: ${{ needs.run.outputs.artifact-name }}
