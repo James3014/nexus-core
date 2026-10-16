@@ -148,7 +148,8 @@ def _expected_subjects(raw: Any) -> tuple[ExpectedEvidenceSubject, ...]:
         return ()
     if not isinstance(raw, list):
         raise ValueError("expected_subjects must be a list")
-    if not raw:
+    subjects = cast("list[dict[str, Any]]", raw)
+    if not subjects:
         return ()
     return tuple(
         ExpectedEvidenceSubject(
@@ -157,7 +158,7 @@ def _expected_subjects(raw: Any) -> tuple[ExpectedEvidenceSubject, ...]:
             RequirementMode(subject["requirement_mode"]),
             Applicability(subject["applicability"]),
         )
-        for subject in raw
+        for subject in subjects
     )
 
 
