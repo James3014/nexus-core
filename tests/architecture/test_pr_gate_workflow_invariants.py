@@ -34,6 +34,8 @@ CONSUMER_EXAMPLE = REPO_ROOT / "docs" / "examples" / "nexus-core-issue-completio
 REPOSITORY_CHECK_EXAMPLE = REPO_ROOT / "docs" / "examples" / "github-repository-check.yml"
 SAME_REPO_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
 GATED_JOBS = ("run",)
+# #287: the evidence-universe mode nexus-core's own gate must run with.
+EXPECTED_EVIDENCE_UNIVERSE = "trusted-config"
 CONSUMER_GATED_JOBS = ("run",)
 CONSUMER_PIN = "0" * 40
 CONSUMER_IDENTITY = (
@@ -225,6 +227,18 @@ def workflow_violations(text: str) -> list[str]:
         )
     if "./trusted/.github/actions/issue-gate" not in _uncommented(jobs.get("run", "")):
         violations.append("run job must use the trusted issue-gate action")
+    # #287: nexus-core's own gate derives the evidence universe from the trusted base
+    # config, like Nexus-new and the consumers, so Issues need no body marker.
+    modes = re.findall(
+        r"^\s+evidence-universe:\s*(\S+)\s*$",
+        _uncommented(jobs.get("run", "")),
+        flags=re.MULTILINE,
+    )
+    if modes != [EXPECTED_EVIDENCE_UNIVERSE]:
+        violations.append(
+            "evidence universe: run job must pass exactly one "
+            f"'evidence-universe: {EXPECTED_EVIDENCE_UNIVERSE}' to issue-gate, found {modes}"
+        )
     return violations
 
 
@@ -548,6 +562,26 @@ def test_negative_control_trigger_and_identity_mutations_are_detected() -> None:
     assert any(v.startswith("trigger:") for v in workflow_violations(mutated))
     mutated = text.replace("@refs/heads/main", "@refs/heads/feature", 1)
     assert any(v.startswith("sigstore identity:") for v in workflow_violations(mutated))
+
+
+def test_pr_gate_workflow_pins_trusted_config_evidence_universe() -> None:
+    """#287: an Issue without a NEXUS_CORE_EVIDENCE_UNIVERSE marker must still verify."""
+    text = _read(WORKFLOW)
+    assert "evidence-universe: trusted-config" in _uncommented(_jobs(text)["run"])
+    assert not any(v.startswith("evidence universe:") for v in workflow_violations(text))
+
+
+def test_negative_control_evidence_universe_mutations_are_detected() -> None:
+    text = _read(WORKFLOW)
+    line = "          evidence-universe: trusted-config\n"
+    assert text.count(line) == 1
+    for mutated in (
+        text.replace(line, "", 1),
+        text.replace(line, "          # evidence-universe: trusted-config\n", 1),
+        text.replace(line, "          evidence-universe: issue-marker\n", 1),
+        text.replace(line, line + line, 1),
+    ):
+        assert any(v.startswith("evidence universe:") for v in workflow_violations(mutated))
 
 
 def _guard_step_text(text: str) -> str:
