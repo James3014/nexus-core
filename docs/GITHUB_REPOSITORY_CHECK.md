@@ -54,7 +54,7 @@ unchanged fail-closed reason codes:
 | `ISSUE_MISSING_EVIDENCE_UNIVERSE` | The Issue has no marker (`UNVERIFIABLE`); the line contains the exact marker to add. |
 | `ISSUE_EVIDENCE_UNIVERSE_STALE` | The config changed since the marker was written; the line contains the replacement marker. |
 | `ISSUE_EVIDENCE_UNIVERSE_BINDING_MALFORMED` | More than one or a malformed marker; keep exactly the printed line. |
-| `PR_MISSING_CORE_ISSUE_BINDING` | The PR body (or the receipt) names no Issue; add `<!-- NEXUS_CORE_ISSUE: N -->`. |
+| `PR_MISSING_CORE_ISSUE_BINDING` | The PR body (or the receipt) names no Issue; add `<!-- NEXUS_CORE_ISSUE: N -->`. When the body has no marker but names exactly one same-repository Issue through `Refs`/`Closes`/`Fixes`/`Resolves #N`, the line prints that marker with N filled in (a hint only; the binding is never inferred and the gate still fails closed). |
 | `RECEIPT_ISSUE_BINDING_MISMATCH` | The receipt is bound to a different Issue than the PR. |
 | `REPOSITORY_VERIFICATION_NOT_VERIFIED` | The verifier itself did not pass; see the receipt / "Diagnose Core verifier failure" step. |
 

@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -665,3 +666,137 @@ def test_receipt_verify_empty_issue_names_fix_and_still_fails(tmp_path: Path) ->
         ACTION_REMEDY_RECEIPT_VERIFY + "\nNEXUS_CORE_VERIFY_INPUT_INVALID: issue-number is empty\n"
     )
     assert _summary_blocks(summary) == [ACTION_REMEDY_RECEIPT_VERIFY]
+
+
+SUGGEST_CASES: list[tuple[str, int | None]] = [
+    ("Refs #2230", 2230),
+    ("Closes #12\nFixes #12", 12),
+    ("Refs #1 and Closes #2", None),
+    ("see #5", None),
+    ("Closes James3014/other#5", None),
+    ("", None),
+    ("closes: #7", 7),
+    ("<!-- NEXUS_CORE_ISSUE: 0 --> Prefix #3", None),
+    ("Resolved #4 <!-- NEXUS_CORE_ISSUE: 0 -->", 4),
+    ("<!-- Closes #7 -->", None),
+    ("<!-- Closes #7 -->\nRefs #8", 8),
+    ("Refs #8 <!-- unterminated Closes #9", 8),
+    ("```\nCloses #7\n```", None),
+    ("~~~text\nFixes #7\n~~~\nRefs #8", 8),
+    ("```\nCloses #7 never closed", None),
+    ("see `Closes #7` here", 7),
+    ("``Closes #7`` then Refs #8", None),
+    ("Closes #" + "1" * 5000, None),
+    ("Closes #12345678901", None),
+    ("````\nCloses #7\n```\nRefs #8", None),
+    ("```\nCloses #7\n~~~\nRefs #8", None),
+    ("~~~~\nCloses #7\n~~~~~\nRefs #8", 8),
+]
+
+
+@pytest.mark.parametrize(("body", "expected"), SUGGEST_CASES)
+def test_suggest_core_issue_marker_table(body: str, expected: int | None) -> None:
+    assert gate_diagnostics.suggest_core_issue_marker(body) == expected
+
+
+@pytest.mark.parametrize(("body", "expected"), SUGGEST_CASES)
+def test_issue_gate_inline_prefill_agrees_with_function(
+    tmp_path: Path, body: str, expected: int | None
+) -> None:
+    summary = tmp_path / "summary.md"
+    result = _run_bash(
+        _step_run("issue-gate", "Validate inputs and resolve Issue binding"),
+        {
+            "IN_ISSUE": "",
+            "IN_SOURCE": "ref",
+            "IN_REF": "a" * 40,
+            "IN_PATH": "",
+            "IN_CANDIDATE": "candidate",
+            "IN_PYTHON": "3.11",
+            "PR_BODY": body,
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+            "GITHUB_STEP_SUMMARY": str(summary),
+        },
+        tmp_path,
+    )
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    if expected is None:
+        assert ACTION_REMEDY_ISSUE_GATE + "\n" in result.stderr
+    else:
+        line = (
+            "PR_MISSING_CORE_ISSUE_BINDING: add this line to the PR body: "
+            f"<!-- NEXUS_CORE_ISSUE: {expected} --> then re-run the gate"
+        )
+        assert line + "\n" in result.stderr
+        assert _summary_blocks(summary) == [line]
+
+
+def test_issue_gate_multiple_markers_not_prefilled(tmp_path: Path) -> None:
+    result = _run_bash(
+        _step_run("issue-gate", "Validate inputs and resolve Issue binding"),
+        {
+            "IN_ISSUE": "",
+            "IN_SOURCE": "ref",
+            "IN_REF": "a" * 40,
+            "IN_PATH": "",
+            "IN_CANDIDATE": "candidate",
+            "IN_PYTHON": "3.11",
+            "PR_BODY": "Closes #3\n<!-- NEXUS_CORE_ISSUE: 3 -->\n<!-- NEXUS_CORE_ISSUE: 4 -->",
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+        },
+        tmp_path,
+    )
+    assert result.returncode == 1
+    assert "add exactly one line" in result.stderr
+    assert "add this line" not in result.stderr
+
+
+def test_issue_gate_inline_regexes_match_function_literals() -> None:
+    action = (ROOT / ".github" / "actions" / "issue-gate" / "action.yml").read_text(
+        encoding="utf-8"
+    )
+    keyword = gate_diagnostics._CORE_ISSUE_KEYWORD_REF_RE  # pyright: ignore[reportPrivateUsage]
+    hidden = gate_diagnostics._HIDDEN_TEXT_RES  # pyright: ignore[reportPrivateUsage]
+    head, tail = keyword.split("[ \\t]*", 1)
+    pieces = [*hidden, head, "[ \\t]*" + tail]
+    for piece in pieces:
+        assert f'r"{piece}"' in action, piece
+
+
+TIMING_BODIES = [
+    "`" * 65536,
+    "".join("`" * k + "a" for k in range(1, 360)),
+    "`" * 30000 + "a" + "`" * 30001,
+    ("`" * 17 + "a") * 3640,
+    ("`" * 40 + "a") * 1598,
+]
+
+
+@pytest.mark.parametrize("body", TIMING_BODIES)
+def test_suggest_core_issue_marker_is_fast_on_backtick_floods(body: str) -> None:
+    started = time.monotonic()
+    assert gate_diagnostics.suggest_core_issue_marker(body) is None
+    assert time.monotonic() - started < 1.0
+
+
+@pytest.mark.parametrize("body", TIMING_BODIES)
+def test_issue_gate_inline_is_fast_on_backtick_floods(tmp_path: Path, body: str) -> None:
+    started = time.monotonic()
+    result = _run_bash(
+        _step_run("issue-gate", "Validate inputs and resolve Issue binding"),
+        {
+            "IN_ISSUE": "",
+            "IN_SOURCE": "ref",
+            "IN_REF": "a" * 40,
+            "IN_PATH": "",
+            "IN_CANDIDATE": "candidate",
+            "IN_PYTHON": "3.11",
+            "PR_BODY": body,
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+        },
+        tmp_path,
+    )
+    assert time.monotonic() - started < 1.0
+    assert result.returncode == 1
+    assert ACTION_REMEDY_ISSUE_GATE + "\n" in result.stderr
