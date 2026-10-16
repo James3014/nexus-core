@@ -31,8 +31,9 @@ RECEIPT_VERIFY = REPO_ROOT / ".github" / "actions" / "receipt-verify" / "action.
 # in this repository).
 CONSUMER_EXAMPLE = REPO_ROOT / "docs" / "examples" / "nexus-core-issue-completion.consumer.yml"
 
+REPOSITORY_CHECK_EXAMPLE = REPO_ROOT / "docs" / "examples" / "github-repository-check.yml"
 SAME_REPO_GUARD = "github.event.pull_request.head.repo.full_name == github.repository"
-GATED_JOBS = ("run", "verify")
+GATED_JOBS = ("run",)
 CONSUMER_GATED_JOBS = ("run",)
 CONSUMER_PIN = "0" * 40
 CONSUMER_IDENTITY = (
@@ -211,6 +212,7 @@ def workflow_violations(text: str) -> list[str]:
         if condition is not None and re.search(r"\|\|", condition):
             violations.append(f"fork guard: job {job_id!r} if: must not be widened with '||'")
     verify = jobs.get("verify", "")
+    violations.extend(_consumer_verify_guard_violations(verify))
     identities = re.findall(r"^\s+expected-identity:\s*(\S+)\s*$", verify, flags=re.MULTILINE)
     if identities != [EXPECTED_IDENTITY]:
         violations.append(
@@ -332,6 +334,23 @@ def consumer_workflow_violations(text: str) -> list[str]:
     return violations
 
 
+def repository_check_example_violations(text: str) -> list[str]:
+    """#265: docs/examples/github-repository-check.yml (the primary consumer example)."""
+    violations: list[str] = []
+    on_block = _top_level_block(text, "on")
+    triggers = set(re.findall(r"^  ([A-Za-z_]+):", on_block, flags=re.MULTILINE))
+    if triggers != {"pull_request_target"}:
+        violations.append(
+            f"trigger: example must run only on pull_request_target, found {sorted(triggers)}"
+        )
+    jobs = _jobs(text)
+    run = jobs.get("run", "")
+    if _job_if(run) != SAME_REPO_GUARD:
+        violations.append(f"fork guard: job 'run' if: must be exactly {SAME_REPO_GUARD!r}")
+    violations.extend(_consumer_verify_guard_violations(jobs.get("verify", "")))
+    return violations
+
+
 def issue_gate_violations(text: str) -> list[str]:
     """issue-check must be invoked with --require-trusted-config (NCGF-004)."""
     calls = [
@@ -419,6 +438,10 @@ def test_consumer_example_trigger_fork_guard_conditions_and_identity() -> None:
     assert consumer_workflow_violations(_read(CONSUMER_EXAMPLE)) == []
 
 
+def test_repository_check_example_verify_fails_closed_instead_of_skipping() -> None:
+    assert repository_check_example_violations(_read(REPOSITORY_CHECK_EXAMPLE)) == []
+
+
 def test_issue_gate_runs_issue_check_with_trusted_config() -> None:
     assert issue_gate_violations(_read(ISSUE_GATE)) == []
 
@@ -472,10 +495,22 @@ def test_security_md_pr_gate_row_documents_token_steps() -> None:
 
 def test_negative_control_removed_fork_guard_is_detected() -> None:
     text = _read(WORKFLOW)
-    mutated = text.replace(f"if: always() && {SAME_REPO_GUARD}", "if: always()", 1)
+    guard = _guard_step_text(text)
+    mutated = text.replace(guard + "\n", "", 1)
     assert mutated != text
     violations = workflow_violations(mutated)
     assert any("fork guard" in v and "'verify'" in v for v in violations), violations
+    # a skippable verify job (job-level same-repository condition) is a violation
+    mutated = text.replace(
+        "    if: always()\n    runs-on: ubuntu-latest\n    timeout-minutes: 15",
+        f"    if: always() && {SAME_REPO_GUARD}\n    runs-on: ubuntu-latest\n    timeout-minutes: 15",
+        1,
+    )
+    assert mutated != text
+    assert any(v.startswith("job condition:") for v in workflow_violations(mutated))
+    # guard step without the issuer check
+    mutated = text.replace(guard, guard.replace("NEXUS_CORE_ISSUER_NOT_SUCCESSFUL", "X"), 1)
+    assert any("NEXUS_CORE_ISSUER_NOT_SUCCESSFUL" in v for v in workflow_violations(mutated))
 
     mutated = text.replace(
         f"if: {SAME_REPO_GUARD}", "if: github.event.pull_request.head.repo.fork == false", 1
@@ -484,6 +519,27 @@ def test_negative_control_removed_fork_guard_is_detected() -> None:
     violations = workflow_violations(mutated)
     assert any("'run'" in v and "same-repository guard" in v for v in violations), violations
     assert any("'run'" in v and "head.repo.fork" in v for v in violations), violations
+
+
+def test_negative_control_repository_check_example_mutations_are_detected() -> None:
+    text = _read(REPOSITORY_CHECK_EXAMPLE)
+    guard = _guard_step_text(text)
+    mutated = text.replace(guard + "\n", "", 1)
+    assert mutated != text
+    assert any("first step" in v for v in repository_check_example_violations(mutated))
+    mutated = text.replace(
+        "    if: always()\n    runs-on: ubuntu-latest\n    timeout-minutes: 15",
+        f"    if: always() && {SAME_REPO_GUARD}\n    runs-on: ubuntu-latest\n    timeout-minutes: 15",
+        1,
+    )
+    assert mutated != text
+    assert any(v.startswith("job condition:") for v in repository_check_example_violations(mutated))
+    mutated = text.replace(
+        guard, guard.replace('"$HEAD_REPO" != "$REPOSITORY"', "head.repo.fork"), 1
+    )
+    assert any("head.repo.fork" in v for v in repository_check_example_violations(mutated))
+    mutated = text.replace(guard, guard.replace("NEXUS_CORE_ISSUER_NOT_SUCCESSFUL", "X"), 1)
+    assert any("ISSUER" in v for v in repository_check_example_violations(mutated))
 
 
 def test_negative_control_trigger_and_identity_mutations_are_detected() -> None:
