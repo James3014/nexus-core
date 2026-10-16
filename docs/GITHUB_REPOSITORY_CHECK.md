@@ -106,8 +106,10 @@ The gate is two jobs, so that the required status check never rests on a bare
 exit code:
 
 - **`run`** (`Nexus Core issue run`) runs `issue-gate`. After `issue-check` it
-  signs the newest receipt, success or failure, with Sigstore keyless signing
-  (`sigstore sign`, OIDC workflow identity) and uploads the receipt and its
+  signs the receipt `issue-check` itself reported writing (success or failure; its
+  exact path comes from `issue-check --receipt-path-out`, never from a newest-by-name
+  pick), with Sigstore keyless signing
+  (`sigstore sign`, OIDC workflow identity) on a copy outside the candidate, and uploads the receipt and its
   `<receipt>.sigstore.json` bundle as one artifact. This job must grant
   `id-token: write`. Outputs: `artifact-name`, `artifact-id`, `issue-number`,
   and the action outputs `receipt-file`, `bundle-file`, `receipt-sha256`. The
@@ -293,9 +295,15 @@ trusted base checkout instead of a pinned ref.
    `uv build`, or tests) runs in a detached clone with an allowlisted environment,
    inside the container configured by `[isolation]`. The runner never runs
    candidate `uv sync`, `uv build`, `pip install`, or scripts.
-5. **Signing and artifacts.** The newest receipt is signed (even on failure) and
-   `candidate/.nexus-core/receipts/` is uploaded with the bundle; a failing run
-   prints a diagnostic of the latest receipt.
+5. **Signing and artifacts.** Before Core runs, a candidate that commits or contains
+   anything under `.nexus-core/receipts` (or whose `.nexus-core` is a symlink) is refused
+   with `NEXUS_CORE_GATE_CANDIDATE_RECEIPTS_PRESENT`. After Core runs, exactly the
+   receipt it reported through `issue-check --receipt-path-out` is validated (a regular
+   non-symlink file with a Core receipt name, directly inside
+   `candidate/.nexus-core/receipts`; otherwise `NEXUS_CORE_SIGN_RECEIPT_POINTER_INVALID`),
+   copied to a fresh runner directory, signed (even on failure) and uploaded with the
+   bundle, so the artifact holds exactly one receipt and one bundle; a failing run
+   prints a diagnostic of that receipt. No receipt written means nothing is signed.
 6. **Verify job.** A separate job with no candidate code checks the signature
    and the receipt expectations (see above).
 
