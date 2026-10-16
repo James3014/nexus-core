@@ -23,10 +23,13 @@ from product.certification.receipt import (
 )
 from product.evidence import (
     AcceptanceContract,
+    Applicability,
     ChangeSet,
     EvidenceBundle,
+    ExpectedEvidenceSubject,
     Observation,
     ObservationStatus,
+    RequirementMode,
     VerificationPlan,
     _hash,  # pyright: ignore[reportPrivateUsage]
 )
@@ -102,6 +105,63 @@ def _decode_durable_payloads(
     return receipt, envelope
 
 
+def _declares_universe(raw_contract: Any) -> bool:
+    """True when the contract declares any universe field the runtime path would drop.
+
+    Only an absent/empty-list ``expected_subjects`` with absent/int-0 generation is "no universe".
+    """
+    if not isinstance(raw_contract, dict):
+        return False
+    contract = cast("dict[str, Any]", raw_contract)
+    if "expected_subjects" in contract:
+        subjects = contract["expected_subjects"]
+        if not (isinstance(subjects, list) and not subjects):
+            return True
+    if "universe_generation" in contract:
+        gen = contract["universe_generation"]
+        if type(gen) is not int or gen != 0:
+            return True
+    return False
+
+
+_UNIVERSE_MESSAGE = (
+    "acceptance_contract declares expected_subjects/universe_generation; the runtime "
+    "certification path emits no per-subject evidence and cannot certify a declared "
+    "evidence universe"
+)
+
+
+def _universe_generation(raw: Any) -> int:
+    """A non-negative int (bool rejected), else ValueError -> RECEIPT_INVALID (#271)."""
+    if type(raw) is not int or raw < 0:
+        raise ValueError("universe_generation must be a non-negative integer")
+    return raw
+
+
+def _expected_subjects(raw: Any) -> tuple[ExpectedEvidenceSubject, ...]:
+    """Mirror generic_verification._domain_objects; absent (None) or [] gives ().
+
+    Any other non-list value raises ValueError, so FULL recomputation reports
+    RECEIPT_INVALID instead of recomputing a different contract (#271).
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("expected_subjects must be a list")
+    subjects = cast("list[dict[str, Any]]", raw)
+    if not subjects:
+        return ()
+    return tuple(
+        ExpectedEvidenceSubject(
+            subject["logical_subject_id"],
+            subject["evidence_kind"],
+            RequirementMode(subject["requirement_mode"]),
+            Applicability(subject["applicability"]),
+        )
+        for subject in subjects
+    )
+
+
 class RuntimeCertificationService:
     """Core V1 runtime service coordinating live PR acquisition, execution, trust, and ledger."""
 
@@ -175,6 +235,7 @@ class RuntimeCertificationService:
         - 202: new accepted request (PENDING/RUNNING) or non-terminal replay
         - 200: exact replay of terminal request
         - 409: IDEMPOTENCY_CONFLICT, STALE_GENERATION, STALE_SOURCE
+        - 422: also UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH (declared evidence universe)
         - 400/415/422: malformed/unsupported schema
         - 503: SERVICE_UNAVAILABLE (admission stopped or durable ledger unreadable)
         """
@@ -194,6 +255,15 @@ class RuntimeCertificationService:
                 code=code,
                 request_id=None,
                 message=errs[0],
+            )
+
+        # #271: before any replay/ledger lookup, so a universe-declaring request never
+        # gets a certified answer (an older runtime may have certified it, dropping the universe).
+        if _declares_universe(payload["acceptance_contract"]):
+            return 422, make_http_error(
+                code="UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH",
+                request_id=None,
+                message=_UNIVERSE_MESSAGE,
             )
 
         req_hash = compute_canonical_request_hash(payload)
@@ -324,6 +394,20 @@ class RuntimeCertificationService:
         )
 
         try:
+            # Fail closed (#271): this path emits a single unmapped pytest observation,
+            # so it cannot honestly cover a declared Evidence Coverage universe.
+            if _declares_universe(job.payload["acceptance_contract"]):
+                job.state = "UNVERIFIABLE"
+                job.error_code = "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
+                job.error_message = _UNIVERSE_MESSAGE
+                job.response = make_http_response(
+                    request_id=job.request_id,
+                    state="UNVERIFIABLE",
+                    generation=job.generation,
+                    claim_ceiling=CLAIM_CEILING,
+                )
+                return
+
             repo_info = job.payload["repository"]
             owner = repo_info["owner"]
             name = repo_info["name"]
@@ -695,6 +779,8 @@ class RuntimeCertificationService:
                     allowed_paths=tuple(raw_c["allowed_paths"]),
                     deletion_policy=raw_c["deletion_policy"],
                     allowed_path_prefixes=tuple(raw_c.get("allowed_path_prefixes", ())),
+                    expected_subjects=_expected_subjects(raw_c.get("expected_subjects")),
+                    universe_generation=_universe_generation(raw_c.get("universe_generation", 0)),
                 )
                 change_set = ChangeSet(
                     change_set_id=raw_cs["change_set_id"],
@@ -716,6 +802,8 @@ class RuntimeCertificationService:
                         artifact_id=item["artifact_id"],
                         artifact_hash=item["artifact_hash"],
                         status=ObservationStatus(item["status"]),
+                        logical_subject_id=item.get("logical_subject_id"),
+                        evidence_kind=item.get("evidence_kind"),
                     )
                     for item in raw_e["observations"]
                 )
