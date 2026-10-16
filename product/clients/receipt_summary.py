@@ -43,10 +43,11 @@ _MD_SPECIAL = "\\`*_{}[]()#+!|<>~&"
 
 def _md(value: Any, limit: int = MAX_VALUE) -> str:
     text = _clean(value, limit)
-    text = text.replace("&", "&#38;")
     text = "".join("\\" + ch if ch in _MD_SPECIAL and ch != "&" else ch for ch in text)
-    # Neutralise autolinks and bare www. links without changing visible text.
-    return text.replace(":", "&#58;").replace("www.", "www&#46;")
+    # Entities are inserted last so they are never re-escaped.
+    text = text.replace("&", "&#38;")
+    # Neutralise autolinks (URLs, www., email) without changing visible text.
+    return text.replace(":", "&#58;").replace("@", "&#64;").replace("www.", "www&#46;")
 
 
 def _short(value: Any, n: int = 12) -> str:

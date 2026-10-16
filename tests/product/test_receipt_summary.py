@@ -147,3 +147,13 @@ def test_cli_deeply_nested_json_exits_2(tmp_path: Path) -> None:
     deep = tmp_path / "deep.json"
     deep.write_text("[" * 100000 + "]" * 100000, encoding="utf-8")
     assert cli.main(["receipt-summary", "--receipt", str(deep)]) == 2
+
+
+def test_ampersand_entity_and_email_autolink() -> None:
+    receipt = _receipt()
+    receipt["inputs"]["request"]["change_set"]["paths"] = ["A&B", "approve@evil.invalid"]
+    text = render_markdown(receipt)
+    assert "A&#38;B" in text
+    assert "\\&" not in text and "\\#" not in text
+    assert "@" not in text
+    assert "approve&#64;evil.invalid" in text
