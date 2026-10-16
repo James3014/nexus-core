@@ -272,3 +272,19 @@ def test_protected_path_injection_cannot_start_a_command() -> None:
     receipt["owner_signature_advisory"]["protected_paths_touched"] = ["p\n::error::pwn%"]
     command = render_notice_command(receipt, "verified")
     assert "\n" not in command and command.count("::") == 2
+
+
+@pytest.mark.parametrize("fmt", ["markdown", "notice"])
+def test_lone_surrogate_in_protected_path_still_prints(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fmt: str
+) -> None:
+    receipt = tmp_path / "r.json"
+    receipt.write_text(
+        '{"owner_signature_advisory": {"reason_code": "\\ud800",'
+        ' "protected_paths_touched": ["a\\ud800b"]}}',
+        encoding="utf-8",
+    )
+    assert cli.main(["receipt-summary", "--receipt", str(receipt), "--format", fmt]) == 0
+    out = capsys.readouterr().out
+    out.encode("utf-8")
+    assert "a?b" in out

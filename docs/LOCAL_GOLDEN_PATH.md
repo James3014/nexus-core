@@ -255,7 +255,8 @@ What happens without a valid signature depends on `enforcement`:
   `DELETION_MANIFEST_SIGNATURE_MISSING` / `_INVALID`).
 - `ADVISORY`: for a change that deletes nothing and does not edit
   `deletion_policy` or `[deletion_exception]`, the run continues and can still
-  be `VERIFIED`. `outcome.reason_codes` stays empty. The finding instead goes to
+  be `VERIFIED`. The owner-signature finding adds nothing to
+  `outcome.reason_codes`. The finding instead goes to
   a `::warning` annotation in the issue run and to the receipt's
   `owner_signature_advisory` record, whose `reason_code` and
   `protected_paths_touched` / `manifest_paths_touched` lists `receipt-check`

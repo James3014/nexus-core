@@ -30,7 +30,9 @@ def _get(obj: Any, *keys: str) -> Any:
 def _clean(value: Any, limit: int = MAX_VALUE) -> str:
     if value is None or value == "":
         return DASH
-    text = _CONTROL.sub(" ", str(value)).strip()
+    # Lone surrogates parse from JSON but cannot be printed as UTF-8.
+    text = str(value).encode("utf-8", "replace").decode("utf-8")
+    text = _CONTROL.sub(" ", text).strip()
     if not text:
         return DASH
     if len(text) > limit:
