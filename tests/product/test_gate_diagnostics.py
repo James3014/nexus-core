@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -687,6 +688,9 @@ SUGGEST_CASES: list[tuple[str, int | None]] = [
     ("``Closes #7`` then Refs #8", 8),
     ("Closes #" + "1" * 5000, None),
     ("Closes #12345678901", None),
+    ("````\nCloses #7\n```\nRefs #8", None),
+    ("```\nCloses #7\n~~~\nRefs #8", None),
+    ("~~~~\nCloses #7\n~~~~~\nRefs #8", 8),
 ]
 
 
@@ -758,3 +762,39 @@ def test_issue_gate_inline_regexes_match_function_literals() -> None:
     pieces = [*hidden, head, "[ \\t]*" + tail]
     for piece in pieces:
         assert f'r"{piece}"' in action, piece
+
+
+TIMING_BODIES = [
+    "`" * 65536,
+    "".join("`" * k + "a" for k in range(1, 360)),
+    "`" * 30000 + "a" + "`" * 30001,
+]
+
+
+@pytest.mark.parametrize("body", TIMING_BODIES)
+def test_suggest_core_issue_marker_is_fast_on_backtick_floods(body: str) -> None:
+    started = time.monotonic()
+    assert gate_diagnostics.suggest_core_issue_marker(body) is None
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("body", TIMING_BODIES)
+def test_issue_gate_inline_is_fast_on_backtick_floods(tmp_path: Path, body: str) -> None:
+    started = time.monotonic()
+    result = _run_bash(
+        _step_run("issue-gate", "Validate inputs and resolve Issue binding"),
+        {
+            "IN_ISSUE": "",
+            "IN_SOURCE": "ref",
+            "IN_REF": "a" * 40,
+            "IN_PATH": "",
+            "IN_CANDIDATE": "candidate",
+            "IN_PYTHON": "3.11",
+            "PR_BODY": body,
+            "GITHUB_OUTPUT": str(tmp_path / "output"),
+        },
+        tmp_path,
+    )
+    assert time.monotonic() - started < 2
+    assert result.returncode == 1
+    assert ACTION_REMEDY_ISSUE_GATE + "\n" in result.stderr

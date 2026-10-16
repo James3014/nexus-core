@@ -39,10 +39,12 @@ _CORE_ISSUE_KEYWORD_REF_RE = (
 # Text GitHub does not render as a reference: fenced code, inline code, HTML comments
 # (an unterminated comment or fence runs to the end of the body).
 _HIDDEN_TEXT_RES = (
-    r"^[ \t]*(\x60{3}|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[^\n]*$|\Z)",
-    r"(\x60+)(?!\x60)[\s\S]*?(?<!\x60)\1(?!\x60)",
+    r"^[ \t]*(\x60{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1\x60*[ \t]*$|\Z)",
+    r"^[ \t]*(~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1~*[ \t]*$|\Z)",
+    r"(\x60{1,16})(?!\x60)[\s\S]*?(?<!\x60)\1(?!\x60)",
     r"<!--[\s\S]*?(?:-->|\Z)",
 )
+_SUGGEST_MAX_BODY_CHARS = 65536
 
 
 def suggest_core_issue_marker(body: str) -> int | None:
@@ -52,9 +54,9 @@ def suggest_core_issue_marker(body: str) -> int | None:
     binding itself is never inferred. Only digits are ever returned.
     """
 
-    text = re.sub(_HIDDEN_TEXT_RES[0], "", body, flags=re.MULTILINE)
-    text = re.sub(_HIDDEN_TEXT_RES[1], "", text)
-    text = re.sub(_HIDDEN_TEXT_RES[2], "", text)
+    text = body[:_SUGGEST_MAX_BODY_CHARS]
+    for pattern in _HIDDEN_TEXT_RES:
+        text = re.sub(pattern, "", text, flags=re.MULTILINE)
     found = {int(n) for n in re.findall(_CORE_ISSUE_KEYWORD_REF_RE, text, flags=re.IGNORECASE)}
     return next(iter(found)) if len(found) == 1 else None
 

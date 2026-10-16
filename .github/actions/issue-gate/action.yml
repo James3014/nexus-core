@@ -215,14 +215,14 @@ runs:
             )
             if not matches:
                 # Diagnostic only (#272): never infers the binding; digits only.
-                stripped = re.sub(
-                    r"^[ \t]*(\x60{3}|~~~)[^\n]*\n[\s\S]*?(?:^[ \t]*\1[^\n]*$|\Z)",
-                    "",
-                    body,
-                    flags=re.MULTILINE,
-                )
-                stripped = re.sub(r"(\x60+)(?!\x60)[\s\S]*?(?<!\x60)\1(?!\x60)", "", stripped)
-                stripped = re.sub(r"<!--[\s\S]*?(?:-->|\Z)", "", stripped)
+                stripped = body[:65536]
+                for hidden in (
+                    r"^[ \t]*(\x60{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1\x60*[ \t]*$|\Z)",
+                    r"^[ \t]*(~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]*\1~*[ \t]*$|\Z)",
+                    r"(\x60{1,16})(?!\x60)[\s\S]*?(?<!\x60)\1(?!\x60)",
+                    r"<!--[\s\S]*?(?:-->|\Z)",
+                ):
+                    stripped = re.sub(hidden, "", stripped, flags=re.MULTILINE)
                 cands = {
                     int(n)
                     for n in re.findall(
