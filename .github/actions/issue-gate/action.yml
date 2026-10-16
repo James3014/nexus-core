@@ -437,6 +437,20 @@ runs:
           echo "receipt-sha256=$sha"
         } >> "$GITHUB_OUTPUT"
 
+    - name: Publish Core receipt summary
+      if: always() && steps.sign.outputs.receipt-file != '' && steps.prstate.outputs.outcome != 'PR_ALREADY_CLOSED_SKIPPED'
+      continue-on-error: true
+      shell: bash
+      env:
+        RECEIPT: ${{ steps.sign.outputs.receipt-file }}
+        RECEIPT_SHA256: ${{ steps.sign.outputs.receipt-sha256 }}
+      run: |
+        # Display only (#273): never changes the verdict or any output.
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          nexus-certify receipt-summary --receipt "$RECEIPT" --receipt-sha256 "$RECEIPT_SHA256" --gate-verdict unverified >> "$GITHUB_STEP_SUMMARY"
+        fi
+        nexus-certify receipt-summary --receipt "$RECEIPT" --gate-verdict unverified --format notice
+
     - name: Name receipt artifact
       id: names
       if: always()

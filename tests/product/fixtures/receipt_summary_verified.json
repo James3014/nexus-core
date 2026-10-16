@@ -1,0 +1,126 @@
+{
+ "config_source": {
+  "blob": "f01cef615ac0484906782e371cceb4bf3d5f3e17",
+  "commit": "af80fad1e2c9f9f11bda1cab3126e40b9e113e7c",
+  "config_drift": false,
+  "kind": "base-ref",
+  "ref": "origin/main",
+  "worktree_config_hash": "sha256:0a2aabb8fedd2f8074156d08e303bbda4aba4fa9a8bccad3170f2efda8d40bb5"
+ },
+ "core_response": {
+  "core_identity": {
+   "build_identity": "EMBEDDED",
+   "build_source_digest": "sha256:64369036d7d35e3cb625d4e8c4b33c34d1d65fbdf30f08b63cdfb5854ff3be51",
+   "distribution": "nexus-certify",
+   "git_commit": "96513b24a7254841716a44f68a4d765ddcec201e",
+   "git_dirty": false,
+   "git_tree": "95aa62a475628ef9b6d24bdc1652a1b61289fae2",
+   "schema": "nexus.core.core-identity.v1-experimental",
+   "source_digest": "sha256:64369036d7d35e3cb625d4e8c4b33c34d1d65fbdf30f08b63cdfb5854ff3be51",
+   "source_matches_build": true,
+   "version": "0.3.0"
+  },
+  "verification": {
+   "coverage": {
+    "entries": [
+     {
+      "applicability": "APPLICABLE",
+      "category": "COVERED",
+      "evidence_kind": "resolved-dependency",
+      "logical_subject_id": "dependency/nexus-learning",
+      "observed_status": "PASS",
+      "requirement_mode": "REQUIRED"
+     },
+     {
+      "applicability": "APPLICABLE",
+      "category": "COVERED",
+      "evidence_kind": "resolved-dependency",
+      "logical_subject_id": "dependency/nexus-runtime",
+      "observed_status": "PASS",
+      "requirement_mode": "REQUIRED"
+     },
+     {
+      "applicability": "APPLICABLE",
+      "category": "COVERED",
+      "evidence_kind": "test-result",
+      "logical_subject_id": "nexus/fast-l1",
+      "observed_status": "PASS",
+      "requirement_mode": "REQUIRED"
+     }
+    ],
+    "unexpected_subjects": [],
+    "universe_generation": 2,
+    "universe_identity": "sha256:6e70ec6f37ef7ca9241806f075d5f4bc3564c2448d57bc1ec8faaf9a00181aaa"
+   }
+  }
+ },
+ "evidence_universe": {
+  "expected_subjects": [
+   {
+    "applicability": "APPLICABLE",
+    "evidence_kind": "resolved-dependency",
+    "logical_subject_id": "dependency/nexus-learning",
+    "requirement_mode": "REQUIRED"
+   },
+   {
+    "applicability": "APPLICABLE",
+    "evidence_kind": "resolved-dependency",
+    "logical_subject_id": "dependency/nexus-runtime",
+    "requirement_mode": "REQUIRED"
+   },
+   {
+    "applicability": "APPLICABLE",
+    "evidence_kind": "test-result",
+    "logical_subject_id": "nexus/fast-l1",
+    "requirement_mode": "REQUIRED"
+   }
+  ],
+  "required_verifier_ids": [
+   "canonical-learning",
+   "canonical-runtime",
+   "fast-l1"
+  ],
+  "universe_generation": 2
+ },
+ "inputs": {
+  "config": {
+   "deletion_exception": {
+    "protected_paths": [
+     ".github/workflows/nexus-core-issue-completion.yml",
+     ".github/workflows/trusted-deletion-anchor.yml"
+    ]
+   }
+  },
+  "request": {
+   "change_set": {
+    "deleted_paths": [],
+    "paths": [
+     "tests/benchmark/test_ab_lane_with_nexus_agy.py",
+     "tests/engine/test_canonical_task_seam.py",
+     "tests/integration/test_legacy_path_blocked.py",
+     "tests/services/test_mainchain_family_canary_matrix.py",
+     ".github/workflows/trusted-deletion-anchor.yml"
+    ]
+   }
+  }
+ },
+ "issue_verification": {
+  "claim_ceiling": "ISSUE_VERIFIED_NOT_RELEASED",
+  "evidence_universe": "BOUND",
+  "evidence_universe_source": "trusted-base-config",
+  "github_repository": "James3014/Nexus-new",
+  "issue_contract_hash": "sha256:8d5f783d5692df62f0a65c960fd59d44b0b41ba790cd82ca759233b4144fd091",
+  "issue_number": 2265,
+  "reason_codes": [],
+  "status": "VERIFIED"
+ },
+ "kind": "NEXUS_CORE_LOCAL_VERIFICATION_RECEIPT",
+ "outcome": {
+  "reason_codes": [],
+  "status": "VERIFIED",
+  "transport_error": false
+ },
+ "receipt_hash": "sha256:7dcedf299977ee210b5c5b6a51c6107b410598a4c3cfb4b49bbf60372bf86eb0",
+ "schema_version": 2,
+ "subject_head": "git-commit:3d7aba213fd9df0742193655ba6c6b2093431dcd"
+}
