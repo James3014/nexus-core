@@ -106,10 +106,29 @@ def _decode_durable_payloads(
 
 
 def _declares_universe(raw_contract: Any) -> bool:
+    """True when the contract declares any universe field the runtime path would drop.
+
+    Only an absent/empty-list ``expected_subjects`` with absent/int-0 generation is "no universe".
+    """
     if not isinstance(raw_contract, dict):
         return False
     contract = cast("dict[str, Any]", raw_contract)
-    return bool(contract.get("expected_subjects"))
+    if "expected_subjects" in contract:
+        subjects = contract["expected_subjects"]
+        if not (isinstance(subjects, list) and not subjects):
+            return True
+    if "universe_generation" in contract:
+        gen = contract["universe_generation"]
+        if type(gen) is not int or gen != 0:
+            return True
+    return False
+
+
+_UNIVERSE_MESSAGE = (
+    "acceptance_contract declares expected_subjects/universe_generation; the runtime "
+    "certification path emits no per-subject evidence and cannot certify a declared "
+    "evidence universe"
+)
 
 
 def _expected_subjects(raw: Any) -> tuple[ExpectedEvidenceSubject, ...]:
@@ -200,6 +219,7 @@ class RuntimeCertificationService:
         - 202: new accepted request (PENDING/RUNNING) or non-terminal replay
         - 200: exact replay of terminal request
         - 409: IDEMPOTENCY_CONFLICT, STALE_GENERATION, STALE_SOURCE
+        - 422: also UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH (declared evidence universe)
         - 400/415/422: malformed/unsupported schema
         - 503: SERVICE_UNAVAILABLE (admission stopped or durable ledger unreadable)
         """
@@ -219,6 +239,15 @@ class RuntimeCertificationService:
                 code=code,
                 request_id=None,
                 message=errs[0],
+            )
+
+        # #271: before any replay/ledger lookup, so a universe-declaring request never
+        # gets a certified answer (an older runtime may have certified it, dropping the universe).
+        if _declares_universe(payload["acceptance_contract"]):
+            return 422, make_http_error(
+                code="UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH",
+                request_id=None,
+                message=_UNIVERSE_MESSAGE,
             )
 
         req_hash = compute_canonical_request_hash(payload)
@@ -354,11 +383,7 @@ class RuntimeCertificationService:
             if _declares_universe(job.payload["acceptance_contract"]):
                 job.state = "UNVERIFIABLE"
                 job.error_code = "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
-                job.error_message = (
-                    "acceptance_contract declares expected_subjects/universe_generation; "
-                    "the runtime certification path emits no per-subject evidence and "
-                    "cannot certify a declared evidence universe"
-                )
+                job.error_message = _UNIVERSE_MESSAGE
                 job.response = make_http_response(
                     request_id=job.request_id,
                     state="UNVERIFIABLE",

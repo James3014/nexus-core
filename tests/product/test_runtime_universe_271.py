@@ -136,16 +136,86 @@ async def test_runtime_certification_rejects_declared_universe(tmp_path: Path) -
     payload["acceptance_contract"]["expected_subjects"] = SUBJECTS
     payload["acceptance_contract"]["universe_generation"] = 1
     status, body = await svc.submit_certification(payload)
-    assert status == 202
-    await _drain(svc)
-    (job,) = svc._in_flight.values()
+    assert status == 422
+    assert body["code"] == "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
+    assert svc._in_flight == {}
+    assert github_port.calls == 0 and runner_calls == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_guard_defence_in_depth(tmp_path: Path) -> None:
+    from product.runtime.service import InFlightJob
+
+    github_port = _CountingGitHubPort()
+    svc = _service(tmp_path, github_port=github_port, runner_executor=lambda *a, **k: {})
+    payload = _valid_request_payload()
+    payload["acceptance_contract"]["expected_subjects"] = SUBJECTS
+    job = InFlightJob(
+        request_id="req_x",
+        idempotency_key="k",
+        request_hash="h",
+        state="PENDING",
+        generation=0,
+        payload=payload,
+    )
+    await svc._execute_pipeline(job)
     assert job.state == "UNVERIFIABLE"
     assert job.error_code == "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
-    assert job.response is not None and job.response["state"] == "UNVERIFIABLE"
     assert github_port.calls == 0
-    assert runner_calls == []
-    code, polled = await svc.get_status(job.request_id)
-    assert code == 200 and polled["state"] == "UNVERIFIABLE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"expected_subjects": [], "universe_generation": 1},
+        {"expected_subjects": "S1"},
+        {"expected_subjects": {"a": 1}},
+        {"expected_subjects": None},
+        {"universe_generation": True},
+        {"universe_generation": "0"},
+        {"universe_generation": 0.0},
+        {"universe_generation": 2},
+    ],
+)
+async def test_falsey_or_malformed_universe_is_rejected(tmp_path: Path, fields: dict) -> None:
+    svc = _service(tmp_path, github_port=_CountingGitHubPort(), runner_executor=lambda *a, **k: {})
+    payload = _valid_request_payload()
+    payload["acceptance_contract"].update(fields)
+    status, body = await svc.submit_certification(payload)
+    assert status == 422
+    assert body["code"] == "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
+
+
+@pytest.mark.asyncio
+async def test_empty_universe_with_generation_zero_is_accepted(tmp_path: Path) -> None:
+    svc = _service(tmp_path, github_port=_CountingGitHubPort(), runner_executor=lambda *a, **k: {})
+    payload = _valid_request_payload()
+    payload["acceptance_contract"].update({"expected_subjects": [], "universe_generation": 0})
+    status, _ = await svc.submit_certification(payload)
+    assert status == 202
+    await _drain(svc)
+
+
+@pytest.mark.asyncio
+async def test_replay_cannot_return_certified_for_universe_request(tmp_path: Path) -> None:
+    """A ledger entry for the (universe-dropping) request must not be replayed as certified."""
+    svc = _service(tmp_path, github_port=_CountingGitHubPort(), runner_executor=lambda *a, **k: {})
+    payload = _valid_request_payload()
+    payload["acceptance_contract"]["expected_subjects"] = SUBJECTS
+
+    lookups: list[str] = []
+
+    def spy(ikey: str) -> Any:
+        lookups.append(ikey)
+        raise AssertionError("ledger must not be consulted before the universe guard")
+
+    svc._get_ledger_entry_by_idempotency = spy  # type: ignore[method-assign]
+    status, body = await svc.submit_certification(payload)
+    assert status == 422
+    assert body["code"] == "UNSUPPORTED_UNIVERSE_ON_RUNTIME_PATH"
+    assert "receipt" not in body
+    assert lookups == []
 
 
 @pytest.mark.asyncio
