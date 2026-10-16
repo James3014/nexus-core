@@ -754,6 +754,14 @@ def _check_issue_marker(args: argparse.Namespace, config_hash: str) -> dict[str,
     return {"status": "MATCH", "declared": declared, "remediation": None}
 
 
+def _write_receipt_pointer(args: argparse.Namespace, receipt_path: object) -> None:
+    """Record the exact receipt Core wrote for a caller that must not guess (#281)."""
+    target = getattr(args, "receipt_path_out", None)
+    if target is None or receipt_path is None:
+        return
+    Path(target).write_text(f"{Path(str(receipt_path)).resolve()}\n", encoding="utf-8")
+
+
 def cmd_issue_check(args: argparse.Namespace) -> int:
     pin = _expect_config_commit(args)
     result = check_issue(
@@ -769,6 +777,7 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
+    _write_receipt_pointer(args, result["receipt_path"])
     print_owner_signature_advisory(result)
     if result["status"] != "VERIFIED":
         gate_diagnostics.emit(_issue_check_remediations(args, result))
@@ -1058,6 +1067,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="issue-marker",
         help="must match the mode used by issue-init (default: issue-marker)",
     )
+    p_issue_check.add_argument(
+        "--receipt-path-out",
+        default=None,
+        metavar="FILE",
+        help="write the absolute path of the receipt Core wrote to FILE (one line); "
+        "not created when no receipt was written",
+    )
 
     p_pr_state = subparsers.add_parser(
         "pr-state",
@@ -1208,6 +1224,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"{exc.reason_code}: {annotation_text(exc.detail)}\n")
         if exc.receipt_path is not None:
             sys.stderr.write(f"receipt: {exc.receipt_path}\n")
+            _write_receipt_pointer(args, exc.receipt_path)
             print_failed_run_advisory(exc.receipt_path)
         if exc.remediation is not None:
             gate_diagnostics.emit([exc.remediation])

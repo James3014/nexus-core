@@ -800,3 +800,91 @@ def test_issue_gate_inline_is_fast_on_backtick_floods(tmp_path: Path, body: str)
     assert time.monotonic() - started < 1.0
     assert result.returncode == 1
     assert ACTION_REMEDY_ISSUE_GATE + "\n" in result.stderr
+
+
+# --- #281: issue-check --receipt-path-out names exactly the receipt Core wrote ------
+
+
+def _printed_receipt(text: str) -> Path:
+    found = re.search(r"^receipt: (.+)$", text, re.MULTILINE)
+    assert found is not None
+    return Path(found.group(1)).resolve()
+
+
+def test_issue_check_receipt_path_out_verified_matches_printed_receipt(
+    repo: Path,
+    tmp_path: Path,
+    summary: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _use_issue_body(monkeypatch, "Change V\n\n" + _marker(_hash(repo)))
+    assert cli.main(["issue-init", "--repo", str(repo), "--issue", "85"]) == 0
+    capsys.readouterr()
+    assert cli.main(["issue-check", "--repo", str(repo), "--issue", "85"]) == 0
+    plain = capsys.readouterr().out
+    # Same repository state, second run writes a newer receipt and the pointer.
+    pointer = tmp_path / "pointer"
+    assert (
+        cli.main(
+            ["issue-check", "--repo", str(repo), "--issue", "85", "--receipt-path-out", str(pointer)]
+        )
+        == 0
+    )
+    captured = capsys.readouterr().out
+    written = _printed_receipt(captured)
+    assert pointer.read_text(encoding="utf-8") == f"{written}\n"
+    assert written.is_file() and written.parent == (repo / ".nexus-core" / "receipts").resolve()
+    # Output text is unchanged apart from the receipt file name.
+    assert re.sub(r"receipt: .*", "receipt: X", captured) == re.sub(
+        r"receipt: .*", "receipt: X", plain
+    )
+
+
+def test_issue_check_receipt_path_out_names_receipt_of_failing_run(
+    repo: Path,
+    tmp_path: Path,
+    summary: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    body = "Change V\n\n" + _marker(_hash(repo))
+    _use_issue_body(monkeypatch, body)
+    assert cli.main(["issue-init", "--repo", str(repo), "--issue", "85"]) == 0
+    config = repo / ".nexus-core" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "timeout_seconds = 300", "timeout_seconds = 301"
+        ),
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".nexus-core/config.toml")
+    _git(repo, "commit", "-qm", "config change")
+    capsys.readouterr()
+    pointer = tmp_path / "pointer"
+
+    code = cli.main(
+        ["issue-check", "--repo", str(repo), "--issue", "85", "--receipt-path-out", str(pointer)]
+    )
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ISSUE_EVIDENCE_UNIVERSE_STALE: ")
+    written = _printed_receipt(err)
+    assert pointer.read_text(encoding="utf-8") == f"{written}\n"
+    assert written.is_file()
+
+
+def test_issue_check_receipt_path_out_absent_when_no_receipt_written(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*_a: object, **_k: object) -> dict[str, object]:
+        raise LocalCheckError("CONFIG_UNTRUSTED", "no receipt")
+
+    monkeypatch.setattr(cli, "check_issue", refuse)
+    pointer = tmp_path / "pointer"
+    code = cli.main(
+        ["issue-check", "--repo", str(repo), "--issue", "85", "--receipt-path-out", str(pointer)]
+    )
+    assert code == 2
+    assert not pointer.exists()
