@@ -47,7 +47,7 @@ def _md(value: Any, limit: int = MAX_VALUE) -> str:
     # Entities are inserted last so they are never re-escaped.
     text = text.replace("&", "&#38;")
     # Neutralise autolinks (URLs, www., email) without changing visible text.
-    return text.replace(":", "&#58;").replace("@", "&#64;").replace("www.", "www&#46;")
+    return text.replace(":", "&#58;").replace("@", "@<!-- -->").replace("www.", "www&#46;")
 
 
 def _short(value: Any, n: int = 12) -> str:

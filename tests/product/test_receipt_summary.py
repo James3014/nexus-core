@@ -155,5 +155,41 @@ def test_ampersand_entity_and_email_autolink() -> None:
     text = render_markdown(receipt)
     assert "A&#38;B" in text
     assert "\\&" not in text and "\\#" not in text
-    assert "@" not in text
-    assert "approve&#64;evil.invalid" in text
+    assert "approve@<!-- -->evil.invalid" in text
+
+
+_PAYLOADS = [
+    "approve@evil.invalid",
+    "<a@b.co>",
+    "mailto:a@b.co",
+    "xmpp:a@b.co",
+    "http://x",
+    "www.x.com",
+    "[x](http://y)",
+    "![i](http://y)",
+    "@user",
+]
+
+
+def _payload_markdown() -> str:
+    receipt = _receipt()
+    receipt["inputs"]["request"]["change_set"]["paths"] = _PAYLOADS
+    entry = receipt["core_response"]["verification"]["coverage"]["entries"][0]
+    entry["logical_subject_id"] = " ".join(_PAYLOADS)
+    return render_markdown(receipt)
+
+
+def test_no_active_links_when_rendered() -> None:
+    text = _payload_markdown()
+    try:
+        import cmarkgfm  # pyright: ignore[reportMissingImports]
+    except ImportError:
+        # Source-level invariant: every "@" is followed by an empty comment.
+        assert text.count("@") == text.count("@<!-- -->")
+        assert "://" not in text and "www." not in text
+        return
+    html = cmarkgfm.github_flavored_markdown_to_html(  # pyright: ignore[reportUnknownMemberType]
+        text,
+        options=0,
+    )
+    assert "<a " not in html and "<img" not in html
