@@ -379,8 +379,11 @@ runs:
       shell: bash
       env:
         CANDIDATE: ${{ inputs.candidate-path }}
+        RECEIPT_POINTER: ${{ runner.temp }}/nexus-core-receipt-pointer
       run: |
         set -euo pipefail
+        # No pointer from an earlier invocation in this job may survive a refusal.
+        rm -f "$RECEIPT_POINTER"
         # Core's receipts are runner-produced. A receipt that the candidate commits (or
         # plants) must never reach the signing step with the trusted workflow identity.
         fail() { echo "NEXUS_CORE_GATE_CANDIDATE_RECEIPTS_PRESENT: $1" >&2; exit 1; }
@@ -434,7 +437,9 @@ runs:
       run: |
         set -euo pipefail
         # Only the file issue-check itself reported is signed (#281): never a file
-        # picked from the candidate tree by name or timestamp.
+        # picked from the candidate tree by name or timestamp. The upload directory
+        # starts empty, so nothing from an earlier invocation is uploaded.
+        rm -rf "$RECEIPT_OUT"
         receipt="$(python3 - <<'PY'
         import os
         import re

@@ -105,7 +105,9 @@ def _candidate(tmp_path: Path) -> Path:
 
 
 def _run_refuse(tmp_path: Path, cand: Path):
-    context = {"inputs": {"candidate-path": str(cand)}}
+    temp = tmp_path / "rtemp"
+    temp.mkdir(exist_ok=True)
+    context = {"inputs": {"candidate-path": str(cand)}, "runner": {"temp": str(temp)}}
     return _run_step(_refuse_step(), context, tmp_path / "run")
 
 
@@ -275,3 +277,28 @@ def test_sign_step_rebuilds_a_stale_out_dir(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert not (stale / "old.json").exists()
     assert os.path.exists(stale / GOOD_NAME)
+
+
+def test_refuse_step_removes_a_stale_pointer_even_when_it_refuses(tmp_path: Path) -> None:
+    cand = _candidate(tmp_path)
+    temp = tmp_path / "rtemp"
+    temp.mkdir()
+    (temp / "nexus-core-receipt-pointer").write_text("/stale/receipt.json\n", encoding="utf-8")
+    (cand / ".nexus-core" / "receipts").mkdir(parents=True)
+    (tmp_path / "run").mkdir()
+    result = _run_refuse(tmp_path, cand)
+    assert result.returncode != 0
+    assert "NEXUS_CORE_GATE_CANDIDATE_RECEIPTS_PRESENT" in result.stderr
+    assert not (temp / "nexus-core-receipt-pointer").exists()
+
+
+def test_sign_step_empties_the_upload_dir_when_there_is_no_receipt(tmp_path: Path) -> None:
+    cand = _candidate(tmp_path)
+    temp = tmp_path / "rtemp"
+    stale = temp / "nexus-core-receipt-out"
+    stale.mkdir(parents=True)
+    (stale / GOOD_NAME).write_text("{}", encoding="utf-8")
+    result, _ = _sign(tmp_path, cand, None)
+    assert result.returncode == 0, result.stderr
+    assert "receipt-file" not in result.outputs
+    assert not stale.exists()
