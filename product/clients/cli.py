@@ -790,6 +790,8 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
             f"claimed items: {', '.join(result['claimed_items']) or '-'}; "
             f"remaining: {', '.join(result['remaining_items']) or '-'}"
         )
+    if "items_status" in result:
+        print(f"items status: {result['items_status']} (display only, not acceptance)")
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
