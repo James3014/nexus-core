@@ -226,6 +226,146 @@ def _issue_contract(github_repo: str, issue_number: int, raw: Mapping[str, Any])
     return contract
 
 
+# --- KEEP_OPEN intent items (#276) ---------------------------------------------
+# The PR body may carry NEXUS_ISSUE_INTENT_V1 = JSON list of
+#   {"issue": N, "on_merge": "KEEP_OPEN", "items": ["3"], "split": {"4": 2314}}.
+# `items` names the Issue items this PR completes; `split` maps an item to the
+# Issue it moved to. Both are optional and display-only: they never change the
+# verdict, only the receipt's `issue_verification` and the check-run summary.
+# Absent fields (or no PR body) leave behaviour and receipts exactly as before.
+#
+# Item list parser (deliberately small): code fences are skipped. Under the
+# headings `## Problem`, `## Proposal`, `## Done when` and `## Change` (case-insensitive,
+# until the next `## ` heading) each numbered line `1.` / `2)` is an item whose
+# id is that number. If there are none, every `- [ ]` / `- [x]` checklist line
+# in the body is an item whose id is its 1-based position.
+ISSUE_ITEMS_MALFORMED = "ISSUE_ITEMS_MALFORMED"
+ISSUE_ITEMS_UNKNOWN = "ISSUE_ITEMS_UNKNOWN"
+ISSUE_ITEMS_REQUIRE_KEEP_OPEN = "ISSUE_ITEMS_REQUIRE_KEEP_OPEN"
+_INTENT_BLOCK_RE = re.compile(
+    r"<!--\s*NEXUS_ISSUE_INTENT_V1\s*(.*?)\s*NEXUS_ISSUE_INTENT_V1\s*-->", re.DOTALL
+)
+_ITEM_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}")
+_ITEM_SECTIONS = {"problem", "proposal", "done when", "change"}
+_NUMBERED_RE = re.compile(r"\s{0,3}(\d{1,4})[.)]\s+\S")
+_CHECKLIST_RE = re.compile(r"\s{0,3}[-*]\s+\[[ xX]\]\s+\S")
+_HEADING_RE = re.compile(r"\s{0,3}##\s+(.*?)\s*#*\s*$")
+INTENT_BODY_MAX_BYTES = 65536
+
+
+def parse_issue_items(body: str) -> list[str]:
+    """Return the ordered, de-duplicated item ids of an Issue body (see above)."""
+
+    numbered: list[str] = []
+    checklist: list[str] = []
+    fence: str | None = None
+    in_section = False
+    for line in (body or "").splitlines():
+        lead = line.lstrip()
+        if lead.startswith(("```", "~~~")):
+            marker = lead[:3]
+            fence = None if fence == marker else (fence or marker)
+            continue
+        if fence is not None:
+            continue
+        heading = _HEADING_RE.fullmatch(line)
+        if heading is not None:
+            in_section = heading.group(1).strip().casefold() in _ITEM_SECTIONS
+            continue
+        if in_section:
+            match = _NUMBERED_RE.match(line)
+            if match is not None and match.group(1) not in numbered:
+                numbered.append(match.group(1))
+        if _CHECKLIST_RE.match(line):
+            checklist.append(str(len(checklist) + 1))
+    return numbered or checklist
+
+
+def _intent_for_issue(pr_body: str, issue_number: int) -> dict[str, Any] | None:
+    """The one intent entry naming `issue_number` that uses items/split, else None.
+
+    Unreadable intent blocks are ignored: their form is enforced elsewhere and
+    this reads only the optional, display-only fields.
+    """
+
+    found: list[dict[str, Any]] = []
+    for block in _INTENT_BLOCK_RE.findall(pr_body[:INTENT_BODY_MAX_BYTES]):
+        try:
+            data = json.loads(block)
+        except ValueError:
+            continue
+        if not isinstance(data, list):
+            continue
+        for entry in cast("list[Any]", data):
+            if (
+                isinstance(entry, dict)
+                and cast("dict[str, Any]", entry).get("issue") == issue_number
+                and ("items" in cast("dict[str, Any]", entry) or "split" in cast("dict[str, Any]", entry))
+            ):
+                found.append(cast("dict[str, Any]", entry))
+    if len(found) > 1:
+        raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "more than one intent entry carries items")
+    return found[0] if found else None
+
+
+def resolve_intent_items(
+    pr_body: str | None, issue_number: int, issue_body: str
+) -> dict[str, Any]:
+    """Validated {claimed_items, remaining_items, split} for the receipt, or {}."""
+
+    if not pr_body:
+        return {}
+    entry = _intent_for_issue(pr_body, issue_number)
+    if entry is None:
+        return {}
+    if entry.get("on_merge") != "KEEP_OPEN":
+        raise LocalCheckError(
+            ISSUE_ITEMS_REQUIRE_KEEP_OPEN, "items/split are only allowed with on_merge KEEP_OPEN"
+        )
+    raw_items: Any = entry.get("items", [])
+    if (
+        not isinstance(raw_items, list)
+        or len(cast("list[Any]", raw_items)) > 64
+        or not all(
+            isinstance(i, str) and _ITEM_ID_RE.fullmatch(i) for i in cast("list[Any]", raw_items)
+        )
+        or len(set(cast("list[str]", raw_items))) != len(cast("list[Any]", raw_items))
+    ):
+        raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "items must be a list of unique item ids")
+    items = cast("list[str]", raw_items)
+    raw_split: Any = entry.get("split", {})
+    if not isinstance(raw_split, dict) or len(cast("dict[Any, Any]", raw_split)) > 64:
+        raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "split must map item ids to Issue numbers")
+    split: dict[str, int] = {}
+    for key, value in cast("dict[Any, Any]", raw_split).items():
+        if (
+            not isinstance(key, str)
+            or not _ITEM_ID_RE.fullmatch(key)
+            or type(value) is not int
+            or value < 1
+            or value == issue_number
+        ):
+            raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "split must map item ids to Issue numbers")
+        split[key] = value
+    if not items and not split:
+        raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "items/split present but empty")
+    if set(items) & set(split):
+        raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "an item cannot be both claimed and split")
+    known = parse_issue_items(issue_body or "")
+    unknown = [i for i in [*items, *split] if i not in known]
+    if unknown:
+        raise LocalCheckError(
+            ISSUE_ITEMS_UNKNOWN,
+            f"item ids {', '.join(unknown)} not in the Issue item list "
+            f"({', '.join(known) if known else 'no items found'})",
+        )
+    remaining = [i for i in known if i not in items and i not in split]
+    out: dict[str, Any] = {"claimed_items": items, "remaining_items": remaining}
+    if split:
+        out["split"] = split
+    return out
+
+
 def _path(repo: Path, issue_number: int) -> Path:
     return repo / CONFIG_DIRECTORY / "issues" / f"{issue_number}.json"
 
@@ -543,6 +683,7 @@ def check_issue(
     require_trusted_config: bool = False,
     expect_config_commit: str | None = None,
     evidence_universe: str = "issue-marker",
+    pr_body: str | None = None,
 ) -> dict[str, Any]:
     _check_evidence_universe_mode(evidence_universe)
     trusted = evidence_universe == "trusted-config"
@@ -648,6 +789,20 @@ def check_issue(
         ),
     }
     try:
+        issue_verification.update(resolve_intent_items(pr_body, issue_number, current["body"]))
+    except LocalCheckError as exc:
+        effective_config, config_source, _worktree = _load_effective_config(repo)
+        _raise_with_receipt(
+            repo,
+            exc.reason_code,
+            exc.detail,
+            config=effective_config,
+            config_hash=canonical_hash(effective_config),
+            config_source=config_source,
+            requirements_context=context,
+            issue_verification=issue_verification,
+        )
+    try:
         transitions = _issue_material_transitions(current)
     except LocalCheckError as exc:
         effective_config, config_source, _worktree = _load_effective_config(repo)
@@ -706,4 +861,9 @@ def check_issue(
         "status": verdict["status"],
         "reason_codes": verdict["reason_codes"],
         "claim_ceiling": verdict["claim_ceiling"],
+        **{
+            key: verdict[key]
+            for key in ("claimed_items", "remaining_items", "split")
+            if key in verdict
+        },
     }

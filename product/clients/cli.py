@@ -762,6 +762,16 @@ def _write_receipt_pointer(args: argparse.Namespace, receipt_path: object) -> No
     Path(target).write_text(f"{Path(str(receipt_path)).resolve()}\n", encoding="utf-8")
 
 
+def _read_pr_body(path: str | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(issue_golden_path.INTENT_BODY_MAX_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return None
+
+
 def cmd_issue_check(args: argparse.Namespace) -> int:
     pin = _expect_config_commit(args)
     result = check_issue(
@@ -770,10 +780,16 @@ def cmd_issue_check(args: argparse.Namespace) -> int:
         require_trusted_config=_require_trusted_config(args),
         expect_config_commit=pin,
         evidence_universe=args.evidence_universe,
+        pr_body=_read_pr_body(args.pr_body_file),
     )
     print(f"issue verification: {result['status']} (not RELEASED)")
     _print_config_source(result, pin)
     print(f"claim ceiling: {result['claim_ceiling']}")
+    if "claimed_items" in result:
+        print(
+            f"claimed items: {', '.join(result['claimed_items']) or '-'}; "
+            f"remaining: {', '.join(result['remaining_items']) or '-'}"
+        )
     if result["reason_codes"]:
         print("reasons: " + ", ".join(result["reason_codes"]))
     print(f"receipt: {result['receipt_path']}")
@@ -1066,6 +1082,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=issue_golden_path.EVIDENCE_UNIVERSE_MODES,
         default="issue-marker",
         help="must match the mode used by issue-init (default: issue-marker)",
+    )
+    p_issue_check.add_argument(
+        "--pr-body-file",
+        default=None,
+        metavar="FILE",
+        help="PR body text; its NEXUS_ISSUE_INTENT_V1 items/split are validated against the "
+        "Issue item list and recorded in the receipt (display only; absent = no change)",
     )
     p_issue_check.add_argument(
         "--receipt-path-out",
