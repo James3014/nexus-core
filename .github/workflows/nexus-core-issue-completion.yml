@@ -5,6 +5,8 @@ name: Nexus Core issue completion
 #   semantics; the Core governance config comes from the base ref by Core
 #   construction (check/issue-check read .nexus-core/config.toml from the
 #   base_ref commit and --require-trusted-config fails closed otherwise).
+# - The evidence universe is derived from that same base-ref config
+#   (evidence-universe: trusted-config, #287), not from a marker in the Issue body.
 # - A PR that changes the gate or config is verified under generation N and
 #   takes effect as generation N+1 after an ordinary reviewed merge. No manual
 #   bypass and no byte-compare "protect inputs" step is needed.
@@ -19,6 +21,9 @@ name: Nexus Core issue completion
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
+    # #287: the gate trusts the checked-out base.sha (config, actions, tool), so only
+    # PRs into the reviewed default branch produce completion evidence.
+    branches: [main]
 
 permissions:
   contents: read
@@ -61,6 +66,11 @@ jobs:
         with:
           nexus-certify-source: path
           nexus-certify-path: ${{ github.workspace }}/trusted
+          # #287: derive the evidence universe from .nexus-core/config.toml on the
+          # trusted base ref, as Nexus-new and the consumer repos do. Issues need no
+          # NEXUS_CORE_EVIDENCE_UNIVERSE marker; a stale marker is only a warning.
+          # Pinned by tests/architecture/test_pr_gate_workflow_invariants.py.
+          evidence-universe: trusted-config
 
   verify:
     name: Nexus Core issue completion
