@@ -200,3 +200,13 @@ def test_issue_without_items_rejects_claims() -> None:
             _intent({"issue": 5, "on_merge": "KEEP_OPEN", "items": ["1"]}), 5, "nothing"
         )
     assert raised.value.reason_code == "ISSUE_ITEMS_UNKNOWN"
+
+
+def test_null_issue_body_and_proposal_heading() -> None:
+    assert parse_issue_items(None) == []  # type: ignore[arg-type]
+    assert parse_issue_items("## Proposal\n1. a\n2. b\n") == ["1", "2"]
+    with pytest.raises(LocalCheckError) as raised:
+        issue_gp.resolve_intent_items(
+            _intent({"issue": 5, "on_merge": "KEEP_OPEN", "items": ["1"]}), 5, None  # type: ignore[arg-type]
+        )
+    assert raised.value.reason_code == "ISSUE_ITEMS_UNKNOWN"

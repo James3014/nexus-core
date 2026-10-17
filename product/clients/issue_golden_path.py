@@ -235,7 +235,7 @@ def _issue_contract(github_repo: str, issue_number: int, raw: Mapping[str, Any])
 # Absent fields (or no PR body) leave behaviour and receipts exactly as before.
 #
 # Item list parser (deliberately small): code fences are skipped. Under the
-# headings `## Problem`, `## Done when` and `## Change` (case-insensitive,
+# headings `## Problem`, `## Proposal`, `## Done when` and `## Change` (case-insensitive,
 # until the next `## ` heading) each numbered line `1.` / `2)` is an item whose
 # id is that number. If there are none, every `- [ ]` / `- [x]` checklist line
 # in the body is an item whose id is its 1-based position.
@@ -246,7 +246,7 @@ _INTENT_BLOCK_RE = re.compile(
     r"<!--\s*NEXUS_ISSUE_INTENT_V1\s*(.*?)\s*NEXUS_ISSUE_INTENT_V1\s*-->", re.DOTALL
 )
 _ITEM_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}")
-_ITEM_SECTIONS = {"problem", "done when", "change"}
+_ITEM_SECTIONS = {"problem", "proposal", "done when", "change"}
 _NUMBERED_RE = re.compile(r"\s{0,3}(\d{1,4})[.)]\s+\S")
 _CHECKLIST_RE = re.compile(r"\s{0,3}[-*]\s+\[[ xX]\]\s+\S")
 _HEADING_RE = re.compile(r"\s{0,3}##\s+(.*?)\s*#*\s*$")
@@ -260,7 +260,7 @@ def parse_issue_items(body: str) -> list[str]:
     checklist: list[str] = []
     fence: str | None = None
     in_section = False
-    for line in body.splitlines():
+    for line in (body or "").splitlines():
         lead = line.lstrip()
         if lead.startswith(("```", "~~~")):
             marker = lead[:3]
@@ -351,7 +351,7 @@ def resolve_intent_items(
         raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "items/split present but empty")
     if set(items) & set(split):
         raise LocalCheckError(ISSUE_ITEMS_MALFORMED, "an item cannot be both claimed and split")
-    known = parse_issue_items(issue_body)
+    known = parse_issue_items(issue_body or "")
     unknown = [i for i in [*items, *split] if i not in known]
     if unknown:
         raise LocalCheckError(

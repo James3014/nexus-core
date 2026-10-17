@@ -1625,12 +1625,17 @@ def _valid_intent_items(value: Mapping[str, Any]) -> bool:
         return True
     if present != {"claimed_items", "remaining_items"}:
         return False
-    lists = (value["claimed_items"], value["remaining_items"])
-    if not all(isinstance(v, list) and all(isinstance(i, str) for i in v) for v in lists):
+    lists: tuple[Any, Any] = (value["claimed_items"], value["remaining_items"])
+    for item_list in lists:
+        if not isinstance(item_list, list):
+            return False
+        if not all(isinstance(i, str) for i in cast("list[Any]", item_list)):
+            return False
+    split: Any = value.get("split", {})
+    if not isinstance(split, dict):
         return False
-    split = value.get("split", {})
-    return isinstance(split, dict) and all(
-        isinstance(k, str) and type(n) is int for k, n in split.items()
+    return all(
+        isinstance(k, str) and type(n) is int for k, n in cast("dict[Any, Any]", split).items()
     )
 
 
