@@ -168,10 +168,13 @@ Your config needs container isolation for GitHub-hosted runners. See [Config ref
 
 ### 5. Require the checks
 
-For `James3014/nexus-core`, the protected `main` branch currently requires both status checks:
+For `James3014/nexus-core`, the protected `main` branch currently requires these status checks:
 
 - `test` — the `test` job in `.github/workflows/ci.yml`; covers tests, static analysis and package verification.
-- `Nexus Core issue completion` — the `verify` job in `.github/workflows/nexus-core-issue-completion.yml`; verifies the signed, Issue-bound completion receipt.
+- `Review record present (advisory)` — a commit status from `.github/workflows/sibling-merge-checks.yml`; the PR carries a review record bound to its head.
+- `Bindings preflight (default branch)` — a commit status from `.github/workflows/sibling-merge-checks.yml`; the Issue closing keywords, intent block and commit messages agree.
+
+`Nexus Core issue completion` (the `verify` job in `.github/workflows/nexus-core-issue-completion.yml`, which verifies the signed, Issue-bound completion receipt) still runs on every pull request but is not required here. `main` merges through a merge queue (#288, see `docs/governance/CANONICAL_REPOSITORY_PROTECTION.md`).
 
 When adopting Nexus Core in another repository, require its own CI checks as well as the `Nexus Core issue completion` verifier check. The latter means:
 
