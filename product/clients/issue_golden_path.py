@@ -292,7 +292,7 @@ def _intent_for_issue(pr_body: str, issue_number: int) -> dict[str, Any] | None:
     for block in _INTENT_BLOCK_RE.findall(pr_body[:INTENT_BODY_MAX_BYTES]):
         try:
             data = json.loads(block)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if not isinstance(data, list):
             continue
@@ -463,7 +463,7 @@ def _merged_claimed_items(
         for block in _INTENT_BLOCK_RE.findall(body[:INTENT_BODY_MAX_BYTES]):
             try:
                 data = json.loads(block)
-            except ValueError:
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(data, list):
                 continue
@@ -489,7 +489,7 @@ def _merged_claimed_items(
                             if isinstance(k, str) and k in known and type(v) is int and v != issue_number
                         }
                     )
-    return [i for i in known if i in claimed], sorted(i for i in split if i not in claimed)
+    return [i for i in known if i in claimed], [i for i in known if i in split and i not in claimed]
 
 
 def resolve_items_status(
@@ -509,17 +509,22 @@ def resolve_items_status(
         prs = None
     if not isinstance(prs, (list, tuple)):
         return {"items_status": ISSUE_ITEMS_SOURCE_UNAVAILABLE}
-    known = parse_issue_items(issue_body or "")
-    merged, merged_split = _merged_claimed_items(cast("Sequence[Any]", prs), issue_number, known)
-    # Same accounting as #295's remaining_items: an item is accounted for when it is
-    # claimed or split out to another Issue (by a merged PR or by this PR).
-    covered = (
-        set(merged)
-        | set(merged_split)
-        | set(cast("list[str]", verdict_items["claimed_items"]))
-        | set(cast("dict[str, int]", verdict_items.get("split", {})))
-    )
-    complete = bool(known) and all(i in covered for i in known)
+    try:
+        known = parse_issue_items(issue_body or "")
+        merged, merged_split = _merged_claimed_items(
+            cast("Sequence[Any]", prs), issue_number, known
+        )
+        # Same accounting as #295's remaining_items: an item is accounted for when it is
+        # claimed or split out to another Issue (by a merged PR or by this PR).
+        covered = (
+            set(merged)
+            | set(merged_split)
+            | set(cast("list[str]", verdict_items["claimed_items"]))
+            | set(cast("dict[str, int]", verdict_items.get("split", {})))
+        )
+        complete = bool(known) and all(i in covered for i in known)
+    except Exception:  # noqa: BLE001 - display-only: never let aggregation break the check
+        return {"items_status": ISSUE_ITEMS_SOURCE_UNAVAILABLE}
     return {
         "items_status": ISSUE_ITEMS_COMPLETE if complete else ISSUE_ITEMS_INCOMPLETE,
         "merged_claimed_items": merged,

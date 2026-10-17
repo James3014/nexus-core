@@ -355,14 +355,153 @@ def test_no_items_claim_adds_no_aggregation_fields(repo: Path) -> None:
 
 
 def test_status_without_merged_list_or_bad_value_is_malformed(repo: Path) -> None:
+    from product.clients.local_golden_path import _valid_intent_items  # pyright: ignore
+
+    base: dict[str, Any] = {"claimed_items": ["1"], "remaining_items": ["2"]}
+    complete = {**base, "items_status": "ISSUE_ITEMS_COMPLETE", "merged_claimed_items": ["2"]}
+    assert _valid_intent_items(complete) is True
+    assert _valid_intent_items({**base, "items_status": "ISSUE_ITEMS_SOURCE_UNAVAILABLE"}) is True
+    bad: list[dict[str, Any]] = [
+        {**base, "items_status": "ISSUE_DONE"},
+        {**base, "items_status": "ISSUE_ITEMS_COMPLETE"},  # COMPLETE without the list
+        {**base, "items_status": "ISSUE_ITEMS_INCOMPLETE"},
+        {**complete, "merged_claimed_items": "1"},
+        {**complete, "merged_claimed_items": [1]},
+        {**base, "items_status": "ISSUE_ITEMS_SOURCE_UNAVAILABLE", "merged_claimed_items": []},
+        {"items_status": "ISSUE_ITEMS_COMPLETE", "merged_claimed_items": []},  # no claimed/remaining
+    ]
+    for value in bad:
+        assert _valid_intent_items(value) is False
+    # A genuine receipt (with the fields) validates end to end.
     receipt = _receipt(_run_merged(repo, _intent(_claim("1")), [_merged(10, _claim("2"))]))
     assert validate_verification_receipt_payload(receipt)["valid"] is True
-    bad = json.loads(json.dumps(receipt))
-    bad["issue_verification"]["items_status"] = "ISSUE_DONE"
-    assert validate_verification_receipt_payload(bad)["valid"] is False
-    lone = json.loads(json.dumps(receipt))
-    del lone["issue_verification"]["claimed_items"], lone["issue_verification"]["remaining_items"]
-    assert validate_verification_receipt_payload(lone)["valid"] is False
+
+
+def test_recursion_error_in_merged_body_is_ignored(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = json.loads
+
+    def loads(text: Any, *a: Any, **k: Any) -> Any:
+        if "poison" in text:
+            raise RecursionError("deep")
+        return real(text, *a, **k)
+
+    monkeypatch.setattr(issue_gp.json, "loads", loads)
+    merged = [
+        {"number": 10, "body": "<!-- NEXUS_ISSUE_INTENT_V1 poison NEXUS_ISSUE_INTENT_V1 -->"},
+        _merged(11, _claim("2")),
+    ]
+    result = _run_merged(repo, _intent(_claim("3")), merged)
+    assert result["status"] == "VERIFIED"
+    assert _verdict(result)["merged_claimed_items"] == ["2"]
+
+
+def test_any_aggregation_failure_is_source_unavailable(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise RecursionError("deep")
+
+    monkeypatch.setattr(issue_gp, "_merged_claimed_items", boom)
+    result = _run_merged(repo, _intent(_claim("1")), [_merged(10, _claim("2"))])
+    assert result["status"] == "VERIFIED"
+    assert _verdict(result)["items_status"] == "ISSUE_ITEMS_SOURCE_UNAVAILABLE"
+
+
+def test_recursion_error_in_current_pr_body_does_not_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def loads(*_a: Any, **_k: Any) -> Any:
+        raise RecursionError("deep")
+
+    monkeypatch.setattr(issue_gp.json, "loads", loads)
+    assert issue_gp.resolve_intent_items(_intent(_claim("1")), 5, "## Problem\n1. a\n") == {}
+
+
+def test_split_items_are_reported_in_issue_order() -> None:
+    body = _intent(_claim("1", split={"4": 9, "2": 8, "3": 7}))
+    _claimed, split = issue_gp._merged_claimed_items(  # pyright: ignore
+        [{"number": 1, "body": body}], 85, ["1", "2", "3", "4"]
+    )
+    assert split == ["2", "3", "4"]
+
+
+class _Resp:
+    def __init__(self, payload: Any) -> None:
+        self._raw = json.dumps(payload).encode()
+
+    def __enter__(self) -> "_Resp":
+        return self
+
+    def __exit__(self, *_a: Any) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._raw
+
+
+def _pr_event(number: int) -> dict[str, Any]:
+    return {
+        "event": "cross-referenced",
+        "source": {
+            "type": "issue",
+            "issue": {
+                "number": number,
+                "body": "b",
+                "repository": {"full_name": "example/project"},
+                "pull_request": {"merged_at": "2026-10-17T00:00:00Z"},
+            },
+        },
+    }
+
+
+def _mock_pages(monkeypatch: pytest.MonkeyPatch, pages: list[Any]) -> list[str]:
+    urls: list[str] = []
+
+    def fake(request: Any, timeout: int = 0) -> Any:
+        urls.append(request.full_url)
+        page = pages[len(urls) - 1]
+        if isinstance(page, Exception):
+            raise page
+        return _Resp(page)
+
+    monkeypatch.setattr(issue_gp.urllib.request, "urlopen", fake)
+    return urls
+
+
+def test_default_reader_paginates_on_exactly_100(monkeypatch: pytest.MonkeyPatch) -> None:
+    full = [_pr_event(n) for n in range(100)]
+    urls = _mock_pages(monkeypatch, [full, [_pr_event(100)]])
+    prs = issue_gp._default_merged_claims_reader("example/project", 85)  # pyright: ignore
+    assert prs is not None and len(prs) == 101
+    assert len(urls) == 2 and "page=2" in urls[1]
+
+
+def test_default_reader_single_short_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = _mock_pages(monkeypatch, [[_pr_event(1)]])
+    prs = issue_gp._default_merged_claims_reader("example/project", 85)  # pyright: ignore
+    assert prs == [{"number": 1, "body": "b"}] and len(urls) == 1
+
+
+def test_default_reader_page_limit_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    full = [_pr_event(n) for n in range(100)]
+    urls = _mock_pages(monkeypatch, [full] * 10)
+    assert issue_gp._default_merged_claims_reader("example/project", 85) is None  # pyright: ignore
+    assert len(urls) == issue_gp.TIMELINE_MAX_PAGES
+
+
+@pytest.mark.parametrize("failure", [OSError("down"), {"not": "a list"}])
+def test_default_reader_errors_are_unavailable(
+    monkeypatch: pytest.MonkeyPatch, failure: Any
+) -> None:
+    import urllib.error
+
+    _mock_pages(monkeypatch, [failure])
+    assert issue_gp._default_merged_claims_reader("example/project", 85) is None  # pyright: ignore
+    err = urllib.error.HTTPError("u", 403, "forbidden", None, None)  # type: ignore[arg-type]
+    _mock_pages(monkeypatch, [err])
+    assert issue_gp._default_merged_claims_reader("example/project", 85) is None  # pyright: ignore
 
 
 def test_timeline_events_to_merged_prs() -> None:
