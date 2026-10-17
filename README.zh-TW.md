@@ -152,10 +152,13 @@ c293dc944fe99652ae8856d732a35b5191f52a5e
 
 ### 5. 設為必要檢查
 
-`James3014/nexus-core` 的受保護 `main` 分支目前同時要求以下兩項狀態檢查：
+`James3014/nexus-core` 的受保護 `main` 分支目前要求以下狀態檢查：
 
 - `test` — `.github/workflows/ci.yml` 的 `test` job；驗證測試、靜態分析及套件建置。
-- `Nexus Core issue completion` — `.github/workflows/nexus-core-issue-completion.yml` 的 `verify` job；驗證已簽署、綁定 Issue 的完成收據。
+- `Review record present (advisory)` — `.github/workflows/sibling-merge-checks.yml` 發布的 commit status；PR 有綁定當前 head 的審查紀錄。
+- `Bindings preflight (default branch)` — `.github/workflows/sibling-merge-checks.yml` 發布的 commit status；Issue 關閉關鍵字、intent 區塊與 commit 訊息一致。
+
+`Nexus Core issue completion`（`.github/workflows/nexus-core-issue-completion.yml` 的 `verify` job，驗證已簽署、綁定 Issue 的完成收據）每個 PR 仍會執行，但在這裡不是必要檢查。分支不必與 `main` 同步，也沒有 merge queue（見 `docs/governance/CANONICAL_REPOSITORY_PROTECTION.md`，#288）。
 
 其他 Repository 導入 Nexus Core 時，應同時要求自己的 CI 檢查與 `Nexus Core issue completion` 驗證檢查。後者的意思是：
 
