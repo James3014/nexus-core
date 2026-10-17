@@ -259,7 +259,8 @@ def _issue_gate_with_sets_evidence_universe(run_job: str) -> bool:
     ]
     if len(steps) != 1:
         return False
-    match = re.search(r"(?ms)^        with:\n((?:^          .*\n?)*)", steps[0])
+    # Only the direct children of with: (no DOTALL: the block ends at the next key).
+    match = re.search(r"(?m)^        with:\n((?:^          .*\n?)*)", steps[0])
     if match is None:
         return False
     with_block = _uncommented(match.group(1))
@@ -614,6 +615,13 @@ def test_negative_control_evidence_universe_mutations_are_detected() -> None:
         text.replace(line, "", 1).replace(
             "          persist-credentials: false\n",
             "          persist-credentials: false\n" + line,
+            1,
+        ),
+        # Moved into an env: block of the same issue-gate step (Codex r2): env is not
+        # an action input either.
+        text.replace(line, "", 1).replace(
+            "          nexus-certify-path: ${{ github.workspace }}/trusted\n",
+            "          nexus-certify-path: ${{ github.workspace }}/trusted\n        env:\n" + line,
             1,
         ),
     ):
