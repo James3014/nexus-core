@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, cast
+from typing import Any, Callable, Mapping, Sequence, cast
 
 from product.clients import gate_diagnostics
 from product.clients.local_golden_path import (
@@ -292,7 +292,7 @@ def _intent_for_issue(pr_body: str, issue_number: int) -> dict[str, Any] | None:
     for block in _INTENT_BLOCK_RE.findall(pr_body[:INTENT_BODY_MAX_BYTES]):
         try:
             data = json.loads(block)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if not isinstance(data, list):
             continue
@@ -364,6 +364,171 @@ def resolve_intent_items(
     if split:
         out["split"] = split
     return out
+
+
+ISSUE_ITEMS_COMPLETE = "ISSUE_ITEMS_COMPLETE"
+ISSUE_ITEMS_INCOMPLETE = "ISSUE_ITEMS_INCOMPLETE"
+ISSUE_ITEMS_SOURCE_UNAVAILABLE = "ISSUE_ITEMS_SOURCE_UNAVAILABLE"
+TIMELINE_MAX_PAGES = 5
+
+# --- ISSUE_ITEMS_COMPLETE (#294) -------------------------------------------------
+# Display-only aggregation. Canonical source of "which merged PR claimed which
+# item": the NEXUS_ISSUE_INTENT_V1 `items` of PRs that GitHub's own Issue timeline
+# lists as cross-referencing this Issue AND as merged in this same repository. The
+# claim text is author-written, so ISSUE_ITEMS_COMPLETE only means "every Issue item
+# is claimed"; it never changes the verdict or ceiling and is not acceptance. If
+# the source cannot be read completely the status is SOURCE_UNAVAILABLE.
+MergedClaimsReader = Callable[[str, int], "Sequence[Mapping[str, Any]] | None"]
+
+
+def merged_prs_from_timeline(
+    github_repo: str, events: Sequence[Any]
+) -> list[dict[str, Any]]:
+    """Merged same-repository PRs (number, body) found in Issue timeline events."""
+
+    prs: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        event = cast("Mapping[str, Any]", event)
+        source = event.get("source")
+        if event.get("event") != "cross-referenced" or not isinstance(source, Mapping):
+            continue
+        issue = cast("Mapping[str, Any]", source).get("issue")
+        if not isinstance(issue, Mapping):
+            continue
+        issue = cast("Mapping[str, Any]", issue)
+        pull = issue.get("pull_request")
+        repo = issue.get("repository")
+        name = cast("Mapping[str, Any]", repo).get("full_name") if isinstance(repo, Mapping) else None
+        if (
+            not isinstance(pull, Mapping)
+            or not cast("Mapping[str, Any]", pull).get("merged_at")
+            or not isinstance(name, str)
+            or name.lower() != github_repo.lower()
+            or type(issue.get("number")) is not int
+        ):
+            continue
+        body = issue.get("body")
+        prs.append({"number": issue["number"], "body": body if isinstance(body, str) else ""})
+    return prs
+
+
+def _default_merged_claims_reader(
+    github_repo: str, issue_number: int
+) -> list[dict[str, Any]] | None:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "nexus-certify",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    events: list[Any] = []
+    for page in range(1, TIMELINE_MAX_PAGES + 1):
+        url = (
+            f"https://api.github.com/repos/{github_repo}/issues/{issue_number}"
+            f"/timeline?per_page=100&page={page}"
+        )
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(url, headers=headers), timeout=15
+            ) as response:
+                batch: Any = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            return None
+        if not isinstance(batch, list):
+            return None
+        events.extend(cast("list[Any]", batch))
+        if len(cast("list[Any]", batch)) < 100:
+            return merged_prs_from_timeline(github_repo, events)
+    return None  # more pages than we read: the list is not provably complete
+
+
+def _merged_claimed_items(
+    prs: Sequence[Any], issue_number: int, known: Sequence[str]
+) -> tuple[list[str], list[str]]:
+    """(items claimed, items split out) by the merged PRs; both in Issue order."""
+
+    claimed: set[str] = set()
+    split: dict[str, int] = {}
+    for pr in prs:
+        if not isinstance(pr, Mapping):
+            continue
+        pr = cast("Mapping[str, Any]", pr)
+        body = pr.get("body")
+        if type(pr.get("number")) is not int or not isinstance(body, str):
+            continue
+        for block in _INTENT_BLOCK_RE.findall(body[:INTENT_BODY_MAX_BYTES]):
+            try:
+                data = json.loads(block)
+            except (ValueError, RecursionError):
+                continue
+            if not isinstance(data, list):
+                continue
+            for entry in cast("list[Any]", data):
+                if not isinstance(entry, dict):
+                    continue
+                entry = cast("dict[str, Any]", entry)
+                items = entry.get("items")
+                if (
+                    entry.get("issue") == issue_number
+                    and entry.get("on_merge") == "KEEP_OPEN"
+                    and isinstance(items, list)
+                ):
+                    claimed.update(
+                        i for i in cast("list[Any]", items) if isinstance(i, str) and i in known
+                    )
+                raw_split = entry.get("split")
+                if entry.get("issue") == issue_number and entry.get("on_merge") == "KEEP_OPEN" and isinstance(raw_split, dict):
+                    split.update(
+                        {
+                            k: v
+                            for k, v in cast("dict[Any, Any]", raw_split).items()
+                            if isinstance(k, str) and k in known and type(v) is int and v != issue_number
+                        }
+                    )
+    return [i for i in known if i in claimed], [i for i in known if i in split and i not in claimed]
+
+
+def resolve_items_status(
+    github_repo: str,
+    issue_number: int,
+    issue_body: str,
+    verdict_items: Mapping[str, Any],
+    reader: MergedClaimsReader | None,
+) -> dict[str, Any]:
+    """{items_status[, merged_claimed_items]} for a PR that carries items, else {}."""
+
+    if "claimed_items" not in verdict_items:
+        return {}
+    try:
+        prs = reader(github_repo, issue_number) if reader is not None else None
+    except Exception:  # noqa: BLE001 - any source failure means "unknown", never a claim
+        prs = None
+    if not isinstance(prs, (list, tuple)):
+        return {"items_status": ISSUE_ITEMS_SOURCE_UNAVAILABLE}
+    try:
+        known = parse_issue_items(issue_body or "")
+        merged, merged_split = _merged_claimed_items(
+            cast("Sequence[Any]", prs), issue_number, known
+        )
+        # Same accounting as #295's remaining_items: an item is accounted for when it is
+        # claimed or split out to another Issue (by a merged PR or by this PR).
+        covered = (
+            set(merged)
+            | set(merged_split)
+            | set(cast("list[str]", verdict_items["claimed_items"]))
+            | set(cast("dict[str, int]", verdict_items.get("split", {})))
+        )
+        complete = bool(known) and all(i in covered for i in known)
+    except Exception:  # noqa: BLE001 - display-only: never let aggregation break the check
+        return {"items_status": ISSUE_ITEMS_SOURCE_UNAVAILABLE}
+    return {
+        "items_status": ISSUE_ITEMS_COMPLETE if complete else ISSUE_ITEMS_INCOMPLETE,
+        "merged_claimed_items": merged,
+    }
 
 
 def _path(repo: Path, issue_number: int) -> Path:
@@ -684,6 +849,7 @@ def check_issue(
     expect_config_commit: str | None = None,
     evidence_universe: str = "issue-marker",
     pr_body: str | None = None,
+    merged_claims_reader: MergedClaimsReader | None = None,
 ) -> dict[str, Any]:
     _check_evidence_universe_mode(evidence_universe)
     trusted = evidence_universe == "trusted-config"
@@ -790,6 +956,16 @@ def check_issue(
     }
     try:
         issue_verification.update(resolve_intent_items(pr_body, issue_number, current["body"]))
+        issue_verification.update(
+            resolve_items_status(
+                github_repo,
+                issue_number,
+                current["body"],
+                issue_verification,
+                merged_claims_reader
+                or (_default_merged_claims_reader if issue_reader is None else None),
+            )
+        )
     except LocalCheckError as exc:
         effective_config, config_source, _worktree = _load_effective_config(repo)
         _raise_with_receipt(
@@ -863,7 +1039,13 @@ def check_issue(
         "claim_ceiling": verdict["claim_ceiling"],
         **{
             key: verdict[key]
-            for key in ("claimed_items", "remaining_items", "split")
+            for key in (
+                "claimed_items",
+                "remaining_items",
+                "split",
+                "items_status",
+                "merged_claimed_items",
+            )
             if key in verdict
         },
     }

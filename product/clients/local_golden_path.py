@@ -1570,6 +1570,13 @@ _ISSUE_OPTIONAL_VERDICT_KEYS = {
     "claimed_items",
     "remaining_items",
     "split",
+    "items_status",
+    "merged_claimed_items",
+}
+_ISSUE_ITEMS_STATUSES = {
+    "ISSUE_ITEMS_COMPLETE",
+    "ISSUE_ITEMS_INCOMPLETE",
+    "ISSUE_ITEMS_SOURCE_UNAVAILABLE",
 }
 _ISSUE_UNIVERSE_SOURCES = {"trusted-base-config"}
 
@@ -1611,7 +1618,7 @@ def derive_issue_verification(
         verdict["evidence_universe_source"] = issue_input["evidence_universe_source"]
     if issue_input.get("material_transitions"):
         verdict["material_transitions"] = [dict(item) for item in issue_input["material_transitions"]]
-    for key in ("claimed_items", "remaining_items", "split"):
+    for key in ("claimed_items", "remaining_items", "split", "items_status", "merged_claimed_items"):
         if key in issue_input:
             verdict[key] = issue_input[key]
     return verdict
@@ -1622,7 +1629,7 @@ def _valid_intent_items(value: Mapping[str, Any]) -> bool:
 
     present = {"claimed_items", "remaining_items"} & set(value)
     if not present and "split" not in value:
-        return True
+        return not {"items_status", "merged_claimed_items"} & set(value)
     if present != {"claimed_items", "remaining_items"}:
         return False
     lists: tuple[Any, Any] = (value["claimed_items"], value["remaining_items"])
@@ -1631,6 +1638,15 @@ def _valid_intent_items(value: Mapping[str, Any]) -> bool:
             return False
         if not all(isinstance(i, str) for i in cast("list[Any]", item_list)):
             return False
+    status = value.get("items_status")
+    if status is not None and status not in _ISSUE_ITEMS_STATUSES:
+        return False
+    if status in {"ISSUE_ITEMS_COMPLETE", "ISSUE_ITEMS_INCOMPLETE"}:
+        merged: Any = value.get("merged_claimed_items")
+        if not isinstance(merged, list) or not all(isinstance(i, str) for i in cast("list[Any]", merged)):
+            return False
+    elif "merged_claimed_items" in value:
+        return False
     split: Any = value.get("split", {})
     if not isinstance(split, dict):
         return False

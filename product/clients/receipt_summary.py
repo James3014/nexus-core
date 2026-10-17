@@ -138,6 +138,23 @@ def _verdict_label(verdict: str) -> str:
     return "UNVERIFIED (producer side; receipt-verify decides)"
 
 
+_ITEMS_STATUS_TEXT = {
+    "ISSUE_ITEMS_COMPLETE": (
+        "ISSUE_ITEMS_COMPLETE: every Issue item is claimed or split out by merged PRs or this PR "
+        "(display only, not acceptance; the Issue stays open)"
+    ),
+    "ISSUE_ITEMS_INCOMPLETE": "ISSUE_ITEMS_INCOMPLETE: some Issue items are not yet claimed",
+    "ISSUE_ITEMS_SOURCE_UNAVAILABLE": (
+        "ISSUE_ITEMS_SOURCE_UNAVAILABLE: merged-PR claims could not be read"
+    ),
+}
+
+
+def _items_status_text(receipt: Mapping[str, Any]) -> str | None:
+    value = _get(receipt, "issue_verification", "items_status")
+    return _ITEMS_STATUS_TEXT.get(value) if isinstance(value, str) else None
+
+
 def _item_rows(receipt: Mapping[str, Any]) -> list[tuple[str, str]]:
     claimed = _get(receipt, "issue_verification", "claimed_items")
     if not isinstance(claimed, list):
@@ -148,6 +165,9 @@ def _item_rows(receipt: Mapping[str, Any]) -> list[tuple[str, str]]:
         ("claimed items", _md(_joined(claimed)) if claimed else "none"),
         ("remaining items", _md(_joined(remaining)) if _seq(remaining) else "none"),
     ]
+    status = _items_status_text(receipt)
+    if status is not None:
+        rows.append(("items status", _md(status)))
     if isinstance(split, Mapping) and split:
         moved = ", ".join(f"{k} -> #{v}" for k, v in sorted(split.items()))  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
         rows.append(("split to other Issues", _md(moved)))
@@ -277,6 +297,9 @@ def render_notice(receipt: Mapping[str, Any], gate_verdict: str = "unverified") 
             f"items claimed {_clean(', '.join(map(str, claimed)) or 'none', 60)}"  # pyright: ignore[reportUnknownArgumentType]
             f" remaining {_clean(', '.join(map(str, remaining)) or 'none', 60)}"
         )
+        status = _items_status_text(receipt)
+        if status is not None:
+            parts.append(_clean(status, 160))
     touched = protected_paths_touched(receipt)
     if touched:
         shown = ", ".join(_clean(p, 120) for p in touched[:5])
