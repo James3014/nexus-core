@@ -21,6 +21,9 @@ name: Nexus Core issue completion
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
+    # #287: the gate trusts the checked-out base.sha (config, actions, tool), so only
+    # PRs into the reviewed default branch produce completion evidence.
+    branches: [main]
 
 permissions:
   contents: read

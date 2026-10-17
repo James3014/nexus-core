@@ -239,7 +239,36 @@ def workflow_violations(text: str) -> list[str]:
             "evidence universe: run job must pass exactly one "
             f"'evidence-universe: {EXPECTED_EVIDENCE_UNIVERSE}' to issue-gate, found {modes}"
         )
+    elif not _issue_gate_with_sets_evidence_universe(jobs.get("run", "")):
+        violations.append(
+            "evidence universe: 'evidence-universe: trusted-config' must sit in the with: "
+            "block of the issue-gate step (anywhere else the action uses its issue-marker default)"
+        )
+    # #287 (Codex review): the gate trusts the checked-out base.sha, so only PRs into the
+    # reviewed default branch may produce completion evidence.
+    if not re.search(r"(?m)^    branches:\s*\[\s*main\s*\]\s*$", _uncommented(on_block)):
+        violations.append("trigger: pull_request_target must be restricted to branches: [main]")
     return violations
+
+
+def _issue_gate_with_sets_evidence_universe(run_job: str) -> bool:
+    steps = [
+        chunk
+        for chunk in re.split(r"(?m)^      - ", run_job)[1:]
+        if re.search(r"(?m)^        uses: \./trusted/\.github/actions/issue-gate\s*$", chunk)
+    ]
+    if len(steps) != 1:
+        return False
+    match = re.search(r"(?ms)^        with:\n((?:^          .*\n?)*)", steps[0])
+    if match is None:
+        return False
+    with_block = _uncommented(match.group(1))
+    return (
+        re.search(
+            rf"(?m)^          evidence-universe:\s*{EXPECTED_EVIDENCE_UNIVERSE}\s*$", with_block
+        )
+        is not None
+    )
 
 
 def _first_workflow_step(job_text: str) -> str | None:
@@ -580,8 +609,24 @@ def test_negative_control_evidence_universe_mutations_are_detected() -> None:
         text.replace(line, "          # evidence-universe: trusted-config\n", 1),
         text.replace(line, "          evidence-universe: issue-marker\n", 1),
         text.replace(line, line + line, 1),
+        # Relocated out of the issue-gate with: block (Codex r1): the action would fall
+        # back to its issue-marker default.
+        text.replace(line, "", 1).replace(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n" + line,
+            1,
+        ),
     ):
+        assert mutated != text
         assert any(v.startswith("evidence universe:") for v in workflow_violations(mutated))
+
+
+def test_negative_control_unrestricted_target_branch_is_detected() -> None:
+    text = _read(WORKFLOW)
+    branches = "    branches: [main]\n"
+    assert text.count(branches) == 1
+    mutated = text.replace(branches, "", 1)
+    assert any("branches: [main]" in v for v in workflow_violations(mutated))
 
 
 def _guard_step_text(text: str) -> str:

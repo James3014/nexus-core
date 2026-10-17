@@ -104,7 +104,8 @@ default unless that trade is intended.
 (`.github/workflows/nexus-core-issue-completion.yml`) runs `evidence-universe: trusted-config`
 since #287, as Nexus-new and the six consumer repositories already did, so nexus-core Issues
 need no marker. The trusted input is `.nexus-core/config.toml` on `main`, which only changes
-through a reviewed pull request. The mode is pinned by
+through a reviewed pull request; the workflow only runs for pull requests into `main`
+(`branches: [main]`), because it trusts the checked-out `base.sha`. The mode is pinned by
 `tests/architecture/test_pr_gate_workflow_invariants.py::test_pr_gate_workflow_pins_trusted_config_evidence_universe`.
 Because the workflow runs on `pull_request_target`, a pull request that changes this setting is
 still checked by the mode on its base; the new mode applies from the next pull request on.
