@@ -18,7 +18,7 @@
 | Branch Deletion | Blocked | `deletion` enabled |
 | Status Checks | Required, not strict | `strict_required_status_checks_policy: false`<br>`required_status_checks: [{"context": "test"}, {"context": "Review record present (advisory)"}, {"context": "Bindings preflight (default branch)"}]` (the last two with `integration_id: 15368`, GitHub Actions) |
 | Bypass Actors | None | Empty bypass actors list |
-| Merge Queue | Required once the #288 ruleset change is applied | `merge_queue`: `merge_method: SQUASH`, `grouping_strategy: ALLGREEN`, `max_entries_to_build: 5`, `min_entries_to_merge: 1`, `max_entries_to_merge: 5`, `min_entries_to_merge_wait_minutes: 0`, `check_response_timeout_minutes: 60` |
+| Up-to-date Branch | Not required | `strict_required_status_checks_policy: false`; no merge queue (unavailable for this user-owned repository, #288) |
 
 ## Repository Required Checks
 
@@ -29,25 +29,27 @@
   - `Bindings preflight (default branch)` — commit status published by `sibling-merge-checks.yml` (Nexus-new reusable workflow, #2385)
 - `Nexus Core issue completion` (`nexus-core-issue-completion.yml` job `verify`) still runs on every pull request into `main` but is no longer required.
 
-## Merge Queue (#288)
+## Merge Flow (#288)
 
-`main` is merged through a GitHub merge queue. GitHub tests each queued pull request on a
-merge group commit built on top of the latest `main` (plus the PRs ahead of it), and merges
-only when every required check passes on that commit. A branch therefore never needs to be
-brought up to date by hand, unless it conflicts with `main` (then merge `main` first).
+There is **no merge queue** and the branch does **not** need to be up to date with `main`.
+GitHub merge queue is only available to organization-owned repositories (public, or private on
+GitHub Enterprise Cloud); `James3014/nexus-core` is owned by a personal account, and the
+ruleset API rejects a `merge_queue` rule here (`422 Invalid rule 'merge_queue'`, 2026-10-17).
 
-- Workflows that report a required check also trigger on `merge_group`: `ci.yml` (`test`) and
-  `sibling-merge-checks.yml`. The two required commit statuses are published on the PR head by
-  the trusted `pull_request_target` path; on a merge group commit the `merge-group` job copies
-  the latest status of each from the queued PR's head (missing, non-success or
-  non-`github-actions[bot]` copies as failure). GitHub admits a PR to the queue only after its
-  head passed them, so the copy keeps the queue moving and is not a separate trust boundary.
-  Pinned by `tests/architecture/test_merge_queue_triggers.py`.
-- Agent merge flow: `gh pr merge <PR> --repo James3014/nexus-core --squash --match-head-commit <head>`
-  **adds the PR to the queue** (the queue's `merge_method` decides the final method); it and
-  `gh pr merge --auto` both enqueue once the PR's required checks pass. Then wait for `state: MERGED`
-  (`gh pr view <PR> --json state,mergeCommit`). A push to a queued PR removes it from the
-  queue. Do not merge `main` into a branch only to catch up.
+- Authors self-merge once the required checks pass and the review record names the current head:
+  `gh pr merge <PR> --repo James3014/nexus-core --squash --match-head-commit <head>` (a standalone
+  command). `--match-head-commit` makes the merge fail if the head moved after review.
+- Merge `main` into a branch only when it conflicts with `main`, or when `main` changed the same
+  files; then post a short review record for the new head.
+- Backstop: `ci.yml` runs `test` on every push to `main`. What this gives up compared with an
+  up-to-date requirement or a queue: two PRs that are green separately can still break `main`
+  together (a semantic conflict without a textual one). Such a break shows up in the post-merge
+  `main` run and is fixed forward.
+- Dormant: `ci.yml` and `sibling-merge-checks.yml` still trigger on `merge_group`, and
+  `sibling-merge-checks.yml` has a `merge-group` job that copies the PR-head statuses to a merge
+  group commit (#292, pinned by `tests/architecture/test_merge_queue_triggers.py`). These events
+  never fire in this repository; the code is kept, tested, so the queue can be enabled without a
+  workflow change if the repository moves to an organization.
 
 ## Server-Side Verification
 

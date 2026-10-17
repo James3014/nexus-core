@@ -174,7 +174,7 @@ For `James3014/nexus-core`, the protected `main` branch currently requires these
 - `Review record present (advisory)` — a commit status from `.github/workflows/sibling-merge-checks.yml`; the PR carries a review record bound to its head.
 - `Bindings preflight (default branch)` — a commit status from `.github/workflows/sibling-merge-checks.yml`; the Issue closing keywords, intent block and commit messages agree.
 
-`Nexus Core issue completion` (the `verify` job in `.github/workflows/nexus-core-issue-completion.yml`, which verifies the signed, Issue-bound completion receipt) still runs on every pull request but is not required here. `main` merges through a merge queue (#288, see `docs/governance/CANONICAL_REPOSITORY_PROTECTION.md`).
+`Nexus Core issue completion` (the `verify` job in `.github/workflows/nexus-core-issue-completion.yml`, which verifies the signed, Issue-bound completion receipt) still runs on every pull request but is not required here. Branches need not be up to date with `main`, and there is no merge queue (see `docs/governance/CANONICAL_REPOSITORY_PROTECTION.md`, #288).
 
 When adopting Nexus Core in another repository, require its own CI checks as well as the `Nexus Core issue completion` verifier check. The latter means:
 
