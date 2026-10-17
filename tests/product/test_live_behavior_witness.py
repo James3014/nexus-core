@@ -190,7 +190,7 @@ def _contract(
         verifiers.append("unit")
     return AcceptanceContract(
         contract_id="issue-2453",
-        requirements_hash=H,
+        requirements_hash=promise.issue_contract_hash,
         required_verifier_ids=tuple(verifiers),
         allowed_paths=("src/gateway.py",),
         deletion_policy="FORBID",
@@ -281,7 +281,8 @@ def test_p1_full_valid_witness_is_verified_covered_sufficient_but_not_certified(
         if o.logical_subject_id == "live/gateway-route-fix/route-entered"
     ]
     assert len(live) == 1
-    assert live[0].evidence_kind == lbw.LIVE_BEHAVIOR_EVIDENCE_KIND
+    assert live[0].evidence_kind == _promise(lbw).evidence_kind
+    assert live[0].evidence_kind.startswith(lbw.LIVE_BEHAVIOR_EVIDENCE_KIND + ":")
     assert live[0].artifact_hash == outcome.witness_digest
 
 
@@ -489,7 +490,9 @@ def test_n6_partial_probe_coverage_names_the_missing_subject(lbw: ModuleType) ->
     result = outcome.result
     assert result.integrity is IntegrityStatus.MISSING
     assert "live/gateway-route-fix/receipt-emitted" in result.reason_codes
-    assert "live/gateway-route-fix/route-entered" not in result.reason_codes
+    assert not any(
+        o.status is ObservationStatus.PASS for o in outcome.observations if o.logical_subject_id
+    )
     assert _disposition(outcome) is CertificationDisposition.BLOCKED
 
 
@@ -779,3 +782,132 @@ def test_non_ready_runtime_is_missing(lbw: ModuleType) -> None:
     outcome, *_ = _run(lbw, witness=_witness(lbw, promise, readiness_status="STARTING"))
     assert outcome.result.integrity is IntegrityStatus.MISSING
     assert "MISSING:runtime_identity" in outcome.result.reason_codes
+
+
+# ------------------------------------------- review round 1 fixes (PR #298)
+
+
+def test_r1_witness_revision_must_equal_change_set_target(lbw: ModuleType) -> None:
+    # promise and witness agree on "c"*40 but the change set under review targets "a"*40
+    promise = _promise(lbw, desired_source_revision="c" * 40)
+    outcome, *_ = _run(lbw, promise=promise)
+    assert outcome.result.status is VerificationStatus.UNVERIFIABLE
+    assert outcome.result.integrity is IntegrityStatus.STALE
+    assert "STALE:subject" in outcome.result.reason_codes
+    assert _disposition(outcome) is CertificationDisposition.BLOCKED
+
+
+def test_r1_partial_with_some_probes_hit_never_passes(lbw: ModuleType) -> None:
+    promise = _promise(lbw, probe_ids=("route-entered", "receipt-emitted"))
+    witness = _witness(
+        lbw,
+        promise,
+        probes=[
+            {"probe_id": "route-entered", "hit": True},
+            {"probe_id": "receipt-emitted", "hit": False},
+        ],
+        result_class="PARTIAL",
+    )
+    outcome, *_ = _run(lbw, promise=promise, witness=witness)
+    live = [o for o in outcome.observations if o.logical_subject_id]
+    assert all(o.status is not ObservationStatus.PASS for o in live if o.verifier_id != "unit")
+    assert not any(o.logical_subject_id.startswith("live/") for o in live)
+    assert outcome.result.integrity is IntegrityStatus.MISSING
+    assert _disposition(outcome) is CertificationDisposition.BLOCKED
+
+
+def test_r1_partial_with_every_probe_hit_is_malformed(lbw: ModuleType) -> None:
+    promise = _promise(lbw)
+    outcome, *_ = _run(lbw, witness=_witness(lbw, promise, result_class="PARTIAL"))
+    assert outcome.result.integrity is IntegrityStatus.MALFORMED
+    assert _disposition(outcome) is CertificationDisposition.REJECTED
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("execution_id", "exec-other"),
+        ("desired_source_revision", "c" * 40),
+        ("expected_runtime_identity", _h("d")),
+        ("max_age_seconds", 7200),
+        ("signer_identity", OTHER_SIGNER),
+        ("expected_side_effect_ids", ()),
+        ("input_digest", _h("f")),
+    ],
+)
+def test_r1_contract_bound_to_other_promise_digest_is_rejected(
+    lbw: ModuleType, field: str, value: Any
+) -> None:
+    promise = _promise(lbw)
+    other = _promise(lbw, **{field: value})
+    assert other.subject_ids == promise.subject_ids
+    assert other.digest != promise.digest
+    contract = _contract(other)
+    assert contract.universe_generation == promise.promise_generation
+    outcome, *_ = _run(lbw, promise=promise, contract=contract)
+    assert outcome.result.integrity is IntegrityStatus.CROSS_BOUND
+    assert "CROSS_BOUND:promise_contract" in outcome.result.reason_codes
+    assert _disposition(outcome) is CertificationDisposition.REJECTED
+
+
+def test_r1_issue_a_witness_against_issue_b_contract_is_rejected(lbw: ModuleType) -> None:
+    promise_a = _promise(lbw)
+    contract_b = AcceptanceContract(
+        contract_id="issue-9999",
+        requirements_hash=_h("e"),
+        required_verifier_ids=_contract(promise_a).required_verifier_ids,
+        allowed_paths=("src/gateway.py",),
+        deletion_policy="FORBID",
+        expected_subjects=_contract(promise_a).expected_subjects,
+        universe_generation=promise_a.promise_generation,
+    )
+    outcome, *_ = _run(lbw, promise=promise_a, contract=contract_b)
+    assert outcome.result.integrity is IntegrityStatus.CROSS_BOUND
+    assert "CROSS_BOUND:promise_contract" in outcome.result.reason_codes
+    assert _disposition(outcome) is CertificationDisposition.REJECTED
+
+
+def test_r1_promise_digest_covers_every_field(lbw: ModuleType) -> None:
+    import dataclasses
+
+    base = _promise(lbw)
+    replacements: dict[str, Any] = {
+        "issue_ref": "James3014/Nexus-new#1",
+        "issue_contract_hash": _h("e"),
+        "promise_id": "p2",
+        "promise_generation": 4,
+        "entry_id": "e2",
+        "action_id": "a2",
+        "input_digest": _h("f"),
+        "probe_ids": ("route-entered", "x"),
+        "desired_source_revision": "c" * 40,
+        "expected_runtime_identity": _h("d"),
+        "execution_id": "exec-2",
+        "attempt_id": "attempt-2",
+        "expected_side_effect_ids": ("y",),
+        "max_age_seconds": 1,
+        "signer_identity": OTHER_SIGNER,
+    }
+    assert set(replacements) == {f.name for f in dataclasses.fields(base)}
+    for name, value in replacements.items():
+        assert dataclasses.replace(base, **{name: value}).digest != base.digest, name
+
+
+def test_r1_oversized_bundle_is_malformed(lbw: ModuleType) -> None:
+    promise = _promise(lbw)
+    data = _encode(_witness(lbw, promise))
+    big = _sign(data)[:-1] + b',"pad":"' + b"x" * (lbw.MAX_BUNDLE_BYTES + 1) + b'"}'
+    authenticator = FakeSigstore()
+    outcome, *_ = _run(lbw, witness_bytes=data, bundle_json=big, authenticator=authenticator)
+    assert outcome.result.integrity is IntegrityStatus.MALFORMED
+    assert authenticator.calls == 0
+
+
+@pytest.mark.parametrize(
+    "reviewer_ids",
+    [[{"secret": "x"}], [1], [""], ["x" * 200], ["ok"] * 100, [" padded "]],
+)
+def test_r1_reviewer_ids_must_be_short_strings(lbw: ModuleType, reviewer_ids: Any) -> None:
+    promise = _promise(lbw)
+    outcome, *_ = _run(lbw, witness=_witness(lbw, promise, reviewer_ids=reviewer_ids))
+    assert outcome.result.integrity is IntegrityStatus.MALFORMED
