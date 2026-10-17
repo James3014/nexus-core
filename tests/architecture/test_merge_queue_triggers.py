@@ -142,7 +142,10 @@ def test_negative_control_sibling_merge_group_job_mutations_are_detected() -> No
 _FAKE_GH = """#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  *"-X POST"*) printf '%s\\n' "$*" >> "$FAKE_LOG"; [ -z "${FAKE_POST_FAIL:-}" ] || exit 1 ;;
+  *"-X POST"*)
+    printf '%s\\n' "$*" >> "$FAKE_LOG"
+    n=$(wc -l < "$FAKE_LOG")
+    [ -z "${FAKE_POST_FAIL:-}" ] || [ "$FAKE_POST_FAIL" != "$((n))" ] || exit 1 ;;
   *"/pulls/"*) cat "$FAKE_PR" ;;
   *"/statuses?"*) cat "$FAKE_STATUSES" ;;
   *) echo "unexpected gh call: $*" >&2; exit 2 ;;
@@ -169,7 +172,7 @@ def _run(
     *,
     pr: dict | None = None,
     ref: str = f"refs/heads/gh-readonly-queue/main/pr-12-{_GROUP}",
-    post_fail: bool = False,
+    post_fail: int = 0,
 ) -> tuple[int, list[str]]:
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -208,7 +211,7 @@ def _run(
         "RUN_URL": "https://example.invalid/run",
     }
     if post_fail:
-        env["FAKE_POST_FAIL"] = "1"
+        env["FAKE_POST_FAIL"] = str(post_fail)
     result = subprocess.run(
         ["bash", "-e", str(script)], env=env, capture_output=True, text=True, check=False
     )
@@ -293,6 +296,17 @@ def test_merge_group_copy_early_exit_posts_failure_for_both(
 
 
 @_BASH
-def test_merge_group_copy_post_error_exits_nonzero(tmp_path: Path) -> None:
-    rc, _posts = _run(tmp_path, _ALL_GREEN, post_fail=True)
+@pytest.mark.parametrize("nth", [1, 2])
+def test_merge_group_copy_post_error_marks_both_failure(tmp_path: Path, nth: int) -> None:
+    # The nth POST fails (first context, or second after the first went out as
+    # success): the script exits non-zero and the EXIT trap posts failure for both.
+    rc, posts = _run(tmp_path, _ALL_GREEN, post_fail=nth)
     assert rc != 0
+    assert _posted(posts[nth:]) == dict.fromkeys(STATUS_CONTEXTS, "failure")
+
+
+@_BASH
+def test_merge_group_copy_malformed_status_line_fails_closed(tmp_path: Path) -> None:
+    rc, posts = _run(tmp_path, [*_ALL_GREEN, "{not json"])
+    assert rc != 0
+    assert _posted(posts) == dict.fromkeys(STATUS_CONTEXTS, "failure")
