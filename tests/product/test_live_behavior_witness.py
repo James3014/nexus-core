@@ -58,12 +58,8 @@ from product.protocol.runtime_handoff import (
 from product.verification import CoverageCategory, VerificationStatus
 
 MODULE = "product.adapters.live_behavior_witness"
-SIGNER = (
-    "https://github.com/James3014/Nexus-new/.github/workflows/live-witness.yml@refs/heads/main"
-)
-OTHER_SIGNER = (
-    "https://github.com/James3014/Nexus-new/.github/workflows/other.yml@refs/heads/main"
-)
+SIGNER = "https://github.com/James3014/Nexus-new/.github/workflows/live-witness.yml@refs/heads/main"
+OTHER_SIGNER = "https://github.com/James3014/Nexus-new/.github/workflows/other.yml@refs/heads/main"
 NOW = "2026-10-17T10:00:30Z"
 H = "sha256:" + "1" * 64
 
@@ -205,7 +201,9 @@ def _contract(
 
 def _binding(contract: AcceptanceContract) -> tuple[ChangeSet, VerificationPlan]:
     change_set = ChangeSet("cs-1", "b" * 40, "a" * 40, _h("8"), ("src/gateway.py",))
-    plan = VerificationPlan("plan-1", contract.hash, change_set.hash, contract.required_verifier_ids)
+    plan = VerificationPlan(
+        "plan-1", contract.hash, change_set.hash, contract.required_verifier_ids
+    )
     return change_set, plan
 
 
@@ -277,7 +275,11 @@ def test_p1_full_valid_witness_is_verified_covered_sufficient_but_not_certified(
     assert _disposition(outcome) is not CertificationDisposition.CERTIFIED
     assert _disposition(outcome) is CertificationDisposition.BLOCKED
     assert outcome.claim_ceiling == lbw.LIVE_WITNESS_CLAIM_CEILING
-    live = [o for o in outcome.observations if o.logical_subject_id == "live/gateway-route-fix/route-entered"]
+    live = [
+        o
+        for o in outcome.observations
+        if o.logical_subject_id == "live/gateway-route-fix/route-entered"
+    ]
     assert len(live) == 1
     assert live[0].evidence_kind == lbw.LIVE_BEHAVIOR_EVIDENCE_KIND
     assert live[0].artifact_hash == outcome.witness_digest
@@ -622,7 +624,7 @@ LEGACY_RECEIPT_HASH = "sha256:cf4c091e66126148be42c2aa613cc696a8cb98e374cfe9da25
 def test_c1_legacy_contract_bundle_and_receipt_hashes_are_byte_identical(
     lbw: ModuleType,
 ) -> None:
-    contract = AcceptanceContract("legacy-c1", H, ("unit",), ("src/a.py",), "FORBID")
+    contract = AcceptanceContract("legacy-c1", _h("a"), ("unit",), ("src/a.py",), "FORBID")
     change_set = ChangeSet("cs-1", "base", "head", _h("b"), ("src/a.py",))
     plan = VerificationPlan("plan-1", contract.hash, change_set.hash, ("unit",))
     bundle = EvidenceBundle(
@@ -713,3 +715,67 @@ def test_c3_adapter_source_never_mints_policy_facts(lbw: ModuleType) -> None:
         "product.clients",
     ):
         assert forbidden not in source, forbidden
+
+
+# ------------------------------------------------------------ extra hardening
+
+
+def test_caller_cannot_inject_live_subject_through_other_observations(lbw: ModuleType) -> None:
+    forged = Observation(
+        "live/gateway-route-fix/route-entered",
+        "forged",
+        _h("a"),
+        ObservationStatus.PASS,
+        "live/gateway-route-fix/route-entered",
+        lbw.LIVE_BEHAVIOR_EVIDENCE_KIND,
+    )
+    outcome, *_ = _run(lbw, witness_bytes=None, other=(_unit_observation(), forged))
+    assert outcome.result.status is VerificationStatus.UNVERIFIABLE
+    assert outcome.result.integrity is IntegrityStatus.MALFORMED
+    assert _disposition(outcome) is not CertificationDisposition.CERTIFIED
+
+
+def test_duplicate_json_keys_are_malformed(lbw: ModuleType) -> None:
+    promise = _promise(lbw)
+    data = _encode(_witness(lbw, promise))
+    duplicated = data.replace(
+        b'"result_class":"PASS"', b'"result_class":"ACTUAL_FAILED","result_class":"PASS"'
+    )
+    assert duplicated != data
+    outcome, *_ = _run(lbw, witness_bytes=duplicated)
+    assert outcome.result.integrity is IntegrityStatus.MALFORMED
+
+
+def test_undeclared_probe_is_cross_bound(lbw: ModuleType) -> None:
+    promise = _promise(lbw)
+    witness = _witness(
+        lbw,
+        promise,
+        probes=[{"probe_id": "route-entered", "hit": True}, {"probe_id": "other", "hit": True}],
+    )
+    outcome, *_ = _run(lbw, witness=witness)
+    assert outcome.result.integrity is IntegrityStatus.CROSS_BOUND
+    assert "CROSS_BOUND:promise" in outcome.result.reason_codes
+
+
+def test_not_exercised_label_with_hit_probe_is_malformed(lbw: ModuleType) -> None:
+    promise = _promise(lbw)
+    outcome, *_ = _run(lbw, witness=_witness(lbw, promise, result_class="NOT_EXERCISED"))
+    assert outcome.result.integrity is IntegrityStatus.MALFORMED
+
+
+def test_authenticator_fault_is_unknown_infra_missing(lbw: ModuleType) -> None:
+    class Exploding:
+        def authenticate(self, **_: Any) -> Any:
+            raise RuntimeError("network down")
+
+    outcome, *_ = _run(lbw, authenticator=Exploding())
+    assert outcome.result.integrity is IntegrityStatus.MISSING
+    assert _disposition(outcome) is CertificationDisposition.BLOCKED
+
+
+def test_non_ready_runtime_is_missing(lbw: ModuleType) -> None:
+    promise = _promise(lbw)
+    outcome, *_ = _run(lbw, witness=_witness(lbw, promise, readiness_status="STARTING"))
+    assert outcome.result.integrity is IntegrityStatus.MISSING
+    assert "MISSING:runtime_identity" in outcome.result.reason_codes
