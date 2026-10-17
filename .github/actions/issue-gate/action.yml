@@ -420,10 +420,15 @@ runs:
         ISSUE: ${{ steps.resolve.outputs.issue-number }}
         EVIDENCE_UNIVERSE: ${{ inputs.evidence-universe }}
         RECEIPT_POINTER: ${{ runner.temp }}/nexus-core-receipt-pointer
+        PR_BODY: ${{ github.event.pull_request.body || '' }}
+        PR_BODY_FILE: ${{ runner.temp }}/nexus-core-pr-body
       run: |
         set -euo pipefail
         rm -f "$RECEIPT_POINTER"
-        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --evidence-universe "$EVIDENCE_UNIVERSE" --receipt-path-out "$RECEIPT_POINTER" --require-trusted-config
+        # #276: the PR body (outside the candidate tree) only supplies the optional,
+        # display-only items/split of the KEEP_OPEN intent; empty in dispatch mode.
+        printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
+        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --evidence-universe "$EVIDENCE_UNIVERSE" --pr-body-file "$PR_BODY_FILE" --receipt-path-out "$RECEIPT_POINTER" --require-trusted-config
 
     - name: Sign the receipt issue-check wrote (Sigstore keyless)
       id: sign

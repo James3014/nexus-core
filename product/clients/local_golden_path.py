@@ -1564,7 +1564,13 @@ _ISSUE_VERIFICATION_KEYS = {
 }
 
 
-_ISSUE_OPTIONAL_VERDICT_KEYS = {"material_transitions", "evidence_universe_source"}
+_ISSUE_OPTIONAL_VERDICT_KEYS = {
+    "material_transitions",
+    "evidence_universe_source",
+    "claimed_items",
+    "remaining_items",
+    "split",
+}
 _ISSUE_UNIVERSE_SOURCES = {"trusted-base-config"}
 
 
@@ -1605,7 +1611,27 @@ def derive_issue_verification(
         verdict["evidence_universe_source"] = issue_input["evidence_universe_source"]
     if issue_input.get("material_transitions"):
         verdict["material_transitions"] = [dict(item) for item in issue_input["material_transitions"]]
+    for key in ("claimed_items", "remaining_items", "split"):
+        if key in issue_input:
+            verdict[key] = issue_input[key]
     return verdict
+
+
+def _valid_intent_items(value: Mapping[str, Any]) -> bool:
+    """Optional #276 fields: all-or-nothing shape check (absent is valid)."""
+
+    present = {"claimed_items", "remaining_items"} & set(value)
+    if not present and "split" not in value:
+        return True
+    if present != {"claimed_items", "remaining_items"}:
+        return False
+    lists = (value["claimed_items"], value["remaining_items"])
+    if not all(isinstance(v, list) and all(isinstance(i, str) for i in v) for v in lists):
+        return False
+    split = value.get("split", {})
+    return isinstance(split, dict) and all(
+        isinstance(k, str) and type(n) is int for k, n in split.items()
+    )
 
 
 def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
@@ -1618,6 +1644,8 @@ def _valid_issue_verification(value: Any, outcome_status: Any) -> bool:
     if "evidence_universe_source" in value and (
         value["evidence_universe_source"] not in _ISSUE_UNIVERSE_SOURCES
     ):
+        return False
+    if not _valid_intent_items(value):
         return False
     if "material_transitions" in value:
         try:

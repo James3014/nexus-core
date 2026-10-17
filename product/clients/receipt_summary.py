@@ -138,6 +138,22 @@ def _verdict_label(verdict: str) -> str:
     return "UNVERIFIED (producer side; receipt-verify decides)"
 
 
+def _item_rows(receipt: Mapping[str, Any]) -> list[tuple[str, str]]:
+    claimed = _get(receipt, "issue_verification", "claimed_items")
+    if not isinstance(claimed, list):
+        return []
+    remaining = _get(receipt, "issue_verification", "remaining_items")
+    split = _get(receipt, "issue_verification", "split")
+    rows = [
+        ("claimed items", _md(_joined(claimed)) if claimed else "none"),
+        ("remaining items", _md(_joined(remaining)) if _seq(remaining) else "none"),
+    ]
+    if isinstance(split, Mapping) and split:
+        moved = ", ".join(f"{k} -> #{v}" for k, v in sorted(split.items()))  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
+        rows.append(("split to other Issues", _md(moved)))
+    return rows
+
+
 def render_markdown(
     receipt: Mapping[str, Any],
     receipt_sha256: str | None = None,
@@ -161,6 +177,7 @@ def render_markdown(
         ("reason codes", _md(reasons) if reasons else "none"),
         ("claim ceiling", _md(_get(receipt, "issue_verification", "claim_ceiling"))),
         ("issue", issue),
+        *_item_rows(receipt),
         ("evidence universe (source, generation, identity)", universe),
         ("subject head", _short(_get(receipt, "subject_head"))),
         ("config commit", _short(_get(receipt, "config_source", "commit"), 12)),
@@ -253,6 +270,13 @@ def render_notice(receipt: Mapping[str, Any], gate_verdict: str = "unverified") 
         f"universe {universe}",
         _clean(_get(receipt, "issue_verification", "claim_ceiling")),
     ]
+    claimed = _get(receipt, "issue_verification", "claimed_items")
+    if isinstance(claimed, list):
+        remaining = _seq(_get(receipt, "issue_verification", "remaining_items"))
+        parts.append(
+            f"items claimed {_clean(', '.join(map(str, claimed)) or 'none', 60)}"  # pyright: ignore[reportUnknownArgumentType]
+            f" remaining {_clean(', '.join(map(str, remaining)) or 'none', 60)}"
+        )
     touched = protected_paths_touched(receipt)
     if touched:
         shown = ", ".join(_clean(p, 120) for p in touched[:5])
