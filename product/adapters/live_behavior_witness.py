@@ -17,14 +17,19 @@ Fail-closed mapping (G1):
   wrong -> TAMPERED;
 * replay is bound to the promise's predeclared ``execution_id``/``attempt_id``
   (no Core-issued nonce) -> CROSS_BOUND;
-* loaded source revision differs -> STALE; runtime/binary identity differs ->
+* the contract must be for this promise: ``requirements_hash`` equals the
+  promise's ``issue_contract_hash`` and the declared live subjects carry the
+  promise digest in their evidence kind; otherwise CROSS_BOUND;
+* change-set target revision or loaded source revision differs from the
+  promised revision -> STALE; runtime/binary identity differs ->
   CROSS_BOUND; expired / too old / other generation -> STALE;
 * ``UNKNOWN_INFRA`` or unknown convergence -> MISSING;
 * raw output, secret-like or unknown fields -> MALFORMED;
 * an authenticated ``ACTUAL_FAILED`` becomes a FAIL observation, so Core
   reports FAILED_VERIFICATION / EVIDENCE_CLAIM_FAILED (not a binding error);
 * a probe that was not hit yields no observation, so the subject stays
-  NOT_COVERED / MISSING.
+  NOT_COVERED / MISSING; ``PARTIAL`` yields no observation at all (and is
+  MALFORMED when every probe was hit); only ``PASS`` yields PASS.
 
 The witness never supplies acceptance, authority, approval or signing policy
 facts, and producer-supplied reviewer ids are ignored. A fully valid witness
@@ -75,6 +80,9 @@ LIVE_BEHAVIOR_EVIDENCE_KIND = "live-behavior-witness.v1"
 LIVE_WITNESS_CLAIM_CEILING = "LIVE_BEHAVIOR_OBSERVATION_ONLY_NOT_CERTIFIED"
 LIVE_SUBJECT_PREFIX = "live/"
 MAX_WITNESS_BYTES = 64 * 1024
+MAX_BUNDLE_BYTES = 64 * 1024
+_MAX_REVIEWER_IDS = 32
+_MAX_REVIEWER_ID_LENGTH = 128
 
 _AUTHENTICATED = "AUTHENTICATED"
 _UNAVAILABLE = "UNAVAILABLE"
@@ -244,6 +252,39 @@ class LiveBehaviorPromise:
         return f"{LIVE_SUBJECT_PREFIX}{self.promise_id}/{probe_id}"
 
     @property
+    def digest(self) -> str:
+        """Canonical digest over every promise field."""
+        value = {
+            "schema": LIVE_BEHAVIOR_WITNESS_SCHEMA,
+            "issue_ref": self.issue_ref,
+            "issue_contract_hash": self.issue_contract_hash,
+            "promise_id": self.promise_id,
+            "promise_generation": self.promise_generation,
+            "entry_id": self.entry_id,
+            "action_id": self.action_id,
+            "input_digest": self.input_digest,
+            "probe_ids": list(self.probe_ids),
+            "desired_source_revision": self.desired_source_revision,
+            "expected_runtime_identity": self.expected_runtime_identity,
+            "execution_id": self.execution_id,
+            "attempt_id": self.attempt_id,
+            "expected_side_effect_ids": sorted(self.expected_side_effect_ids),
+            "max_age_seconds": self.max_age_seconds,
+            "signer_identity": self.signer_identity,
+        }
+        return "sha256:" + hashlib.sha256(canonical_json(value).encode()).hexdigest()
+
+    @property
+    def evidence_kind(self) -> str:
+        """Evidence kind of this promise's subjects: ``live-behavior-witness.v1:<digest>``.
+
+        Carrying the promise digest in the declared evidence kind binds the whole
+        promise into ``AcceptanceContract.hash`` and ``universe_identity`` through
+        fields Core already hashes, without a new protocol field.
+        """
+        return f"{LIVE_BEHAVIOR_EVIDENCE_KIND}:{self.digest}"
+
+    @property
     def subject_ids(self) -> tuple[str, ...]:
         return tuple(self.subject_id(probe) for probe in self.probe_ids)
 
@@ -257,7 +298,7 @@ class LiveBehaviorPromise:
         return tuple(
             ExpectedEvidenceSubject(
                 sid,
-                LIVE_BEHAVIOR_EVIDENCE_KIND,
+                self.evidence_kind,
                 RequirementMode.REQUIRED,
                 Applicability.APPLICABLE,
             )
@@ -361,9 +402,15 @@ def _parse_witness(witness_bytes: bytes) -> dict[str, Any]:
         if type(side_effects) is not list:
             raise ValueError("side_effects")
         _ids(tuple(cast("list[object]", side_effects)), "side_effects", allow_empty=True)
-        reviewer_ids = witness.get("reviewer_ids", [])
+        reviewer_ids: object = witness.get("reviewer_ids", [])
         if type(reviewer_ids) is not list:
             raise ValueError("reviewer_ids")
+        reviewer_list = cast("list[object]", reviewer_ids)
+        if len(reviewer_list) > _MAX_REVIEWER_IDS:
+            raise ValueError("reviewer_ids")
+        for reviewer_id in reviewer_list:
+            if len(_text(reviewer_id, "reviewer_ids")) > _MAX_REVIEWER_ID_LENGTH:
+                raise ValueError("reviewer_ids")
         probes = witness["probes"]
         if type(probes) is not list or not probes:
             raise ValueError("probes")
@@ -446,8 +493,16 @@ def _authenticate(
 
 
 def _check_promise_contract(
-    promise: LiveBehaviorPromise, contract: AcceptanceContract, plan: VerificationPlan
+    promise: LiveBehaviorPromise,
+    contract: AcceptanceContract,
+    change_set: ChangeSet,
+    plan: VerificationPlan,
 ) -> None:
+    # The promise is for exactly this Issue contract: its issue_contract_hash is
+    # the contract's requirements_hash, and its full digest is carried in the
+    # declared subjects' evidence kind (covered by contract.hash).
+    if contract.requirements_hash != promise.issue_contract_hash:
+        raise _Reject(IntegrityStatus.CROSS_BOUND, "CROSS_BOUND:promise_contract")
     declared = {s.canonical_value for s in contract.expected_subjects}
     for subject in promise.expected_subjects:
         if (
@@ -458,6 +513,10 @@ def _check_promise_contract(
             raise _Reject(IntegrityStatus.CROSS_BOUND, "CROSS_BOUND:promise_contract")
     if contract.universe_generation != promise.promise_generation:
         raise _Reject(IntegrityStatus.STALE, "STALE:generation")
+    # merge HEAD under review == promised revision (G0 section 2); a source
+    # mismatch is STALE per Owner decision D5.
+    if change_set.target_revision != promise.desired_source_revision:
+        raise _Reject(IntegrityStatus.STALE, "STALE:subject")
 
 
 def _check_binding(promise: LiveBehaviorPromise, witness: dict[str, Any], now: str) -> None:
@@ -522,10 +581,17 @@ def _live_observations(
         if hits:
             raise _Reject(IntegrityStatus.MALFORMED, "MALFORMED:result_class")
         return ()
+    if result_class == "PARTIAL":
+        # A partial run asserts nothing positive: every live subject stays
+        # NOT_COVERED (MISSING). Claiming PARTIAL with every probe hit is
+        # self-contradictory.
+        if set(hits) >= set(promise.probe_ids):
+            raise _Reject(IntegrityStatus.MALFORMED, "MALFORMED:result_class")
+        return ()
     side_effects_match = set(witness["side_effects"]) == set(promise.expected_side_effect_ids)
     status = (
         ObservationStatus.PASS
-        if result_class != "ACTUAL_FAILED" and side_effects_match
+        if result_class == "PASS" and side_effects_match
         else ObservationStatus.FAIL
     )
     return tuple(
@@ -535,7 +601,7 @@ def _live_observations(
             artifact_hash=witness_digest,
             status=status,
             logical_subject_id=promise.subject_id(probe),
-            evidence_kind=LIVE_BEHAVIOR_EVIDENCE_KIND,
+            evidence_kind=promise.evidence_kind,
         )
         for probe in promise.probe_ids
         if probe in hits
@@ -598,16 +664,20 @@ def verify_live_behavior_witness(
         if any(
             o.verifier_id in live_ids
             or o.logical_subject_id in live_ids
-            or o.evidence_kind == LIVE_BEHAVIOR_EVIDENCE_KIND
+            or (o.evidence_kind or "").startswith(LIVE_BEHAVIOR_EVIDENCE_KIND)
             for o in other_observations
         ):
             raise _Reject(IntegrityStatus.MALFORMED, "MALFORMED:other_observations_live_subject")
-        _check_promise_contract(promise, contract, plan)
+        _check_promise_contract(promise, contract, change_set, plan)
         live: tuple[Observation, ...] = ()
         if witness_bytes is not None:
             if type(witness_bytes) is not bytes or len(witness_bytes) > MAX_WITNESS_BYTES:
                 raise _Reject(IntegrityStatus.MALFORMED, "MALFORMED:witness")
             digest = "sha256:" + hashlib.sha256(witness_bytes).hexdigest()
+            if bundle_json is not None and (
+                type(bundle_json) is not bytes or len(bundle_json) > MAX_BUNDLE_BYTES
+            ):
+                raise _Reject(IntegrityStatus.MALFORMED, "MALFORMED:bundle")
             if type(bundle_json) is bytes and _bundle_declares_other_digest(
                 bundle_json, witness_bytes
             ):
@@ -656,6 +726,7 @@ __all__ = [
     "LIVE_BEHAVIOR_WITNESS_SCHEMA",
     "LIVE_SUBJECT_PREFIX",
     "LIVE_WITNESS_CLAIM_CEILING",
+    "MAX_BUNDLE_BYTES",
     "MAX_WITNESS_BYTES",
     "LiveBehaviorPromise",
     "LiveWitnessVerification",

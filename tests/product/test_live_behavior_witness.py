@@ -491,7 +491,9 @@ def test_n6_partial_probe_coverage_names_the_missing_subject(lbw: ModuleType) ->
     assert result.integrity is IntegrityStatus.MISSING
     assert "live/gateway-route-fix/receipt-emitted" in result.reason_codes
     assert not any(
-        o.status is ObservationStatus.PASS for o in outcome.observations if o.logical_subject_id
+        o.status is ObservationStatus.PASS
+        for o in outcome.observations
+        if (o.logical_subject_id or "").startswith("live/")
     )
     assert _disposition(outcome) is CertificationDisposition.BLOCKED
 
