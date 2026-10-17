@@ -8,6 +8,9 @@ on:
     branches: [main]
   issue_comment:
     types: [created, edited, deleted]
+  # #288: the merge queue needs the two required statuses on its merge group commit.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: sibling-merge-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
@@ -17,7 +20,7 @@ permissions: {}
 
 jobs:
   checks:
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    if: github.event_name == 'pull_request_target' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     uses: James3014/Nexus-new/.github/workflows/sibling-merge-checks.yml@47d6c05edcc9a425bd340400f9458d7aca316cea # Nexus-new main after #2408; nexus-core requires SHA pins
     permissions:
       contents: read
@@ -28,3 +31,69 @@ jobs:
       pr: ${{ github.event.pull_request.number || github.event.issue.number }}
       head_sha: ${{ github.event.pull_request.head.sha || '' }}
       run_bindings: ${{ github.event_name == 'pull_request_target' }}
+
+  # #288 (nexus-core only, not part of the Nexus-new caller template): the merge queue
+  # builds a new commit per queued PR, and both required statuses are published on the
+  # PR head only. GitHub admits a PR to the queue only after its head already passed
+  # them; this job re-reads the latest status of each context on the queued PR's
+  # current head and copies it to the merge group commit. A missing, non-success or
+  # foreign-authored status is copied as failure, so the queue drops the PR instead
+  # of merging it. A push to the PR removes it from the queue.
+  merge-group:
+    name: Merge group statuses (from PR head)
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      GROUP_REF: ${{ github.event.merge_group.head_ref }}
+      GROUP_SHA: ${{ github.event.merge_group.head_sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Copy the PR-head statuses to the merge group commit
+        run: |
+          set -euo pipefail
+          contexts=("Review record present (advisory)" "Bindings preflight (default branch)")
+          [[ "$GROUP_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "merge group sha missing or invalid" >&2; exit 1; }
+          posted=0
+          # Any early exit (bad ref, PR lookup or API error, failed POST) marks both
+          # contexts failure, so the queue drops the PR now instead of at its timeout.
+          fail_all() {
+            for c in "${contexts[@]}"; do
+              gh api -X POST "repos/${REPO}/statuses/${GROUP_SHA}" \
+                -f state=failure -f context="$c" -f target_url="$RUN_URL" \
+                -f description="merge queue copy failed, see the run" > /dev/null || true
+            done
+          }
+          trap '[ "$posted" = 1 ] || fail_all' EXIT
+          if [[ ! "$GROUP_REF" =~ ^refs/heads/gh-readonly-queue/main/pr-([0-9]+)-[0-9a-f]{40}$ ]]; then
+            echo "unexpected merge group ref" >&2
+            exit 1
+          fi
+          pr="${BASH_REMATCH[1]}"
+          gh api "repos/${REPO}/pulls/${pr}" > "$RUNNER_TEMP/pr.json"
+          head="$(python3 -I -c 'import json,re,sys; p=json.load(open(sys.argv[1])); r=p.get("head") or {}; ok=p.get("state")=="open" and (p.get("base") or {}).get("ref")=="main" and (r.get("repo") or {}).get("full_name")==sys.argv[2] and re.fullmatch("[0-9a-f]{40}", r.get("sha") or ""); print(r["sha"] if ok else "")' "$RUNNER_TEMP/pr.json" "$REPO")"
+          [ -n "$head" ] || { echo "PR #${pr} is not an open same-repository PR into main" >&2; exit 1; }
+          # All pages, newest first, one status object per line.
+          gh api --paginate "repos/${REPO}/commits/${head}/statuses?per_page=100" --jq '.[]' > "$RUNNER_TEMP/statuses.jsonl"
+          states=()
+          for context in "${contexts[@]}"; do
+            # The first match is the latest status of this context.
+            states+=("$(python3 -I -c 'import json,sys; s=[x for x in map(json.loads, filter(str.strip, open(sys.argv[1]))) if x.get("context")==sys.argv[2]]; ok=bool(s) and s[0].get("state")=="success" and (s[0].get("creator") or {}).get("login")=="github-actions[bot]"; print("success" if ok else "failure")' "$RUNNER_TEMP/statuses.jsonl" "$context")")
+          done
+          rc=0
+          for i in "${!contexts[@]}"; do
+            context="${contexts[$i]}"
+            state="${states[$i]}"
+            echo "${context}: ${state} (PR #${pr} head ${head})"
+            gh api -X POST "repos/${REPO}/statuses/${GROUP_SHA}" \
+              -f state="$state" -f context="$context" -f target_url="$RUN_URL" \
+              -f description="${state} on PR #${pr} head ${head:0:12} (merge queue copy)" > /dev/null
+            [ "$state" = success ] || rc=1
+          done
+          posted=1
+          exit "$rc"
