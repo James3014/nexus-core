@@ -428,6 +428,41 @@ identity produced the bytes (and logs it in the public Rekor transparency log);
 it does not prove the verifier command is sufficient or that the Issue is
 semantically complete.
 
+### Multi-item Issues: `items`/`split` and `ISSUE_ITEMS_COMPLETE` (display only)
+
+A PR that delivers part of a larger Issue declares that in its intent block, as a KEEP_OPEN intent with
+`items` (the Issue items this PR claims) and optionally `split` (items moved to another Issue).
+
+```
+<!-- NEXUS_ISSUE_INTENT_V1
+[{"issue": 294, "on_merge": "KEEP_OPEN", "items": ["1", "2"], "split": ["3"]}]
+NEXUS_ISSUE_INTENT_V1 -->
+```
+
+`issue-check` records `claimed_items`, `remaining_items` and `split` in the receipt and the check-run
+summary (#276/#295). It then reports one aggregate status across the Issue's merged PRs (#294/#297):
+
+- **Source of truth.** The `NEXUS_ISSUE_INTENT_V1` `items`/`split` of the PRs that GitHub's own Issue
+  timeline lists as cross-referencing the Issue **and** as merged (`merged_at` set) in the same repository,
+  plus the current PR. Up to `TIMELINE_MAX_PAGES` (5) pages of 100 events are read. No separate
+  ledger is kept.
+- **Accounting.** It is the same as `remaining_items`. An item counts once, however many PRs claim it. A
+  split item counts as handled. PRs for another Issue, PRs with a CLOSE intent, unmerged PRs and PRs
+  from other repositories are ignored.
+- **Statuses** (receipt `items_status`, plus `merged_claimed_items`):
+  - `ISSUE_ITEMS_COMPLETE`: every item is claimed or split out.
+  - `ISSUE_ITEMS_INCOMPLETE`: some items remain.
+  - `ISSUE_ITEMS_SOURCE_UNAVAILABLE`: the timeline could not be read completely (an error, an unreadable
+    body, or more than the page limit). This status is never treated as complete.
+- **Meaning.** The status is display only. Intent blocks are author-written, so `ISSUE_ITEMS_COMPLETE`
+  means "every item is claimed", not "the Issue is done". It changes no verdict, claim ceiling or gate,
+  and it does not close the Issue. The author still flips the last PR to `on_merge: CLOSE`, or closes
+  the Issue.
+- **Compatibility.** The fields appear only when the PR carries `items`. Older receipts stay valid.
+- **Code and tests.** The code is `resolve_items_status` / `merged_prs_from_timeline` in
+  `product/clients/issue_golden_path.py`, and the tests are in `tests/product/test_issue_intent_items.py`.
+  They cover the partial, complete, duplicate, split and unavailable cases.
+
 ## Legacy request-file mode
 
 The older request-file mode remains available for existing consumers:
