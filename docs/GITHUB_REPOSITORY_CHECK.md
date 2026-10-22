@@ -431,11 +431,11 @@ semantically complete.
 ### Multi-item Issues: `items`/`split` and `ISSUE_ITEMS_COMPLETE` (display only)
 
 A PR that delivers part of a larger Issue declares that in its intent block, as a KEEP_OPEN intent with
-`items` (the Issue items this PR claims) and optionally `split` (items moved to another Issue).
+`items` (the Issue items this PR claims) and optionally `split`, a map from item to the number of the Issue it moved to.
 
 ```
 <!-- NEXUS_ISSUE_INTENT_V1
-[{"issue": 294, "on_merge": "KEEP_OPEN", "items": ["1", "2"], "split": ["3"]}]
+[{"issue": 294, "on_merge": "KEEP_OPEN", "items": ["1", "2"], "split": {"3": 312}}]
 NEXUS_ISSUE_INTENT_V1 -->
 ```
 
