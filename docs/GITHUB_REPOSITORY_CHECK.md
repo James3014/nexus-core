@@ -453,7 +453,7 @@ summary (#276/#295). It then reports one aggregate status across the Issue's mer
   - `ISSUE_ITEMS_COMPLETE`: every item is claimed or split out.
   - `ISSUE_ITEMS_INCOMPLETE`: some items remain.
   - `ISSUE_ITEMS_SOURCE_UNAVAILABLE`: the timeline could not be read completely (an error, an unreadable
-    body, or more than the page limit). This status is never treated as complete.
+    timeline response, or reaching the page limit). This status is never treated as complete.
 - **Meaning.** The status is display only. Intent blocks are author-written, so `ISSUE_ITEMS_COMPLETE`
   means "every item is claimed", not "the Issue is done". It changes no verdict, claim ceiling or gate,
   and it does not close the Issue. The author still flips the last PR to `on_merge: CLOSE`, or closes
