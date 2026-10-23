@@ -288,3 +288,151 @@ def test_lone_surrogate_in_protected_path_still_prints(
     out = capsys.readouterr().out
     out.encode("utf-8")
     assert "a?b" in out
+
+
+@pytest.mark.parametrize("gate_verdict", ["verified", "rejected", "unverified"])
+def test_notice_reason_codes_are_bounded_deduplicated_and_display_only(gate_verdict: str) -> None:
+    receipt = _receipt()
+    receipt["outcome"] = {
+        "status": "FAILED_CLOSED",
+        "reason_codes": [
+            "FORBIDDEN_DELETION",
+            "MISSING:fast-l1",
+            "FORBIDDEN_DELETION",
+            "UNVERIFIABLE",
+            "MISSING:fast-l1",
+            "FOURTH",
+            "FIFTH",
+        ],
+    }
+    before = copy.deepcopy(receipt)
+    notice = render_notice(receipt, gate_verdict)
+    assert "reasons: FORBIDDEN_DELETION, MISSING:fast-l1, UNVERIFIABLE (+2 more)" in notice
+    assert notice.count("FORBIDDEN_DELETION") == 1
+    assert "FOURTH" not in notice and "FIFTH" not in notice
+    assert "receipt claims FAILED_CLOSED" in notice
+    assert notice.split(" · ")[0] == render_notice({}, gate_verdict).split(" · ")[0]
+    command = render_notice_command(receipt, gate_verdict)
+    assert command.startswith("::warning " if gate_verdict == "rejected" else "::notice ")
+    assert receipt == before
+
+
+def _material_receipt() -> dict[str, Any]:
+    receipt = _receipt()
+    receipt["outcome"] = {"status": "UNVERIFIABLE", "reason_codes": ["MISSING", "fast-l1"]}
+    receipt["evidence_artifacts"] = [
+        {
+            "producer_kind": "material",
+            "producer_id": "canonical-runtime",
+            "expected_identity": "git-commit:" + "a" * 40,
+            "observed_identity": "git-commit:" + "b" * 40,
+            "status": "FAIL",
+        }
+    ]
+    return receipt
+
+
+def test_material_mismatch_remedy_uses_exact_marker_without_changing_verdict() -> None:
+    from product.clients.gate_diagnostics import receipt_remediations
+    from product.clients.issue_golden_path import _issue_material_transitions
+
+    receipt = _material_receipt()
+    before = copy.deepcopy(receipt)
+    marker = (
+        "<!-- NEXUS_CORE_MATERIAL_TRANSITION: canonical-runtime "
+        f"git-commit:{'a' * 40} -> git-commit:{'b' * 40} -->"
+    )
+    remedies = receipt_remediations(receipt, expect_issue=299)
+    assert marker in remedies[-1]
+    assert "tracking Issue body" in remedies[-1]
+    assert _issue_material_transitions({"body": marker})[0]["material_id"] == "canonical-runtime"
+    markdown = render_markdown(receipt)
+    assert marker.replace(":", "&#58;") in markdown.replace("\\", "")
+    assert "receipt claims UNVERIFIABLE" in markdown
+    assert render_notice(receipt).startswith("UNVERIFIED (producer side; receipt-verify decides)")
+    assert receipt == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"expected_identity": None},
+        {"observed_identity": None},
+        {"observed_identity": "git-commit:" + "a" * 40},
+        {"observed_identity": "sha256:" + "b" * 64},
+        {"observed_identity": "git-commit:bad\n::error::x"},
+        {"producer_kind": "verifier"},
+        {"producer_id": None},
+    ],
+)
+def test_no_material_transition_suggestion_without_explicit_git_mismatch(
+    change: dict[str, Any],
+) -> None:
+    from product.clients.gate_diagnostics import receipt_remediations
+
+    receipt = _material_receipt()
+    receipt["evidence_artifacts"][0].update(change)
+    assert "NEXUS_CORE_MATERIAL_TRANSITION" not in render_markdown(receipt)
+    assert not any(
+        "NEXUS_CORE_MATERIAL_TRANSITION" in r
+        for r in receipt_remediations(receipt, expect_issue=299)
+    )
+
+
+def test_no_material_transition_suggestion_without_artifacts() -> None:
+    from product.clients.gate_diagnostics import receipt_remediations
+
+    receipt = _receipt()
+    assert "NEXUS_CORE_MATERIAL_TRANSITION" not in render_markdown(receipt)
+    assert not any(
+        "NEXUS_CORE_MATERIAL_TRANSITION" in r
+        for r in receipt_remediations(receipt, expect_issue=299)
+    )
+
+
+def test_no_suggestion_when_the_transition_is_already_applied() -> None:
+    """#299 review: Issue already carries a -> b and the PR observes b: the effective expectation
+    matches, the gate passes, and the summary must not ask for a marker that is already there."""
+    from product.clients.gate_diagnostics import material_transition_remediations
+
+    receipt = _material_receipt()
+    receipt["outcome"] = {"status": "VERIFIED", "reason_codes": []}
+    receipt["evidence_artifacts"][0].update(
+        {
+            "trusted_expected_identity": "git-commit:" + "a" * 40,
+            "expected_identity": "git-commit:" + "b" * 40,
+            "observed_identity": "git-commit:" + "b" * 40,
+            "status": "PASS",
+        }
+    )
+    assert material_transition_remediations(receipt) == []
+    assert "NEXUS_CORE_MATERIAL_TRANSITION" not in render_markdown(receipt)
+
+
+def test_overlong_material_id_is_not_suggested() -> None:
+    from product.clients.gate_diagnostics import material_transition_remediations
+
+    receipt = _material_receipt()
+    receipt["evidence_artifacts"][0]["producer_id"] = "m" * 201
+    assert material_transition_remediations(receipt) == []
+    receipt["evidence_artifacts"][0]["producer_id"] = "m" * 200
+    assert len(material_transition_remediations(receipt)) == 1
+
+
+def test_transition_remedy_uses_the_trusted_pin_as_from() -> None:
+    """#299 review: with a transition already applied, <from> is the committed pin, not the effective one."""
+    from product.clients.gate_diagnostics import material_transition_remediations
+
+    receipt = {
+        "evidence_artifacts": [
+            {
+                "producer_kind": "material",
+                "producer_id": "canonical-runtime",
+                "expected_identity": "git-commit:bbbbbbb",
+                "trusted_expected_identity": "git-commit:aaaaaaa",
+                "observed_identity": "git-commit:ccccccc",
+            }
+        ]
+    }
+    (line,) = material_transition_remediations(receipt)
+    assert "canonical-runtime git-commit:aaaaaaa -> git-commit:ccccccc" in line

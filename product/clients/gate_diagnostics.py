@@ -132,6 +132,46 @@ def base_ref_not_ancestor(base_ref: str, base_sha: str) -> str:
     )
 
 
+def material_transition_remediations(receipt: Mapping[str, Any]) -> list[str]:
+    """Suggest Issue markers only for explicit material git-commit mismatches."""
+
+    lines: list[str] = []
+    for value in _as_sequence(receipt.get("evidence_artifacts")):
+        artifact = _as_mapping(value)
+        if artifact.get("producer_kind") != "material":
+            continue
+        material_id = artifact.get("producer_id")
+        # the marker's <from> must be the committed (trusted) pin, not an effective expectation that an
+        # existing transition already moved (MATERIAL_TRANSITION_STALE otherwise)
+        expected = artifact.get("trusted_expected_identity") or artifact.get("expected_identity")
+        observed = artifact.get("observed_identity")
+        # an already-applied transition makes the effective expectation equal the observed pin: no
+        # mismatch, so nothing to suggest (the marker is already in the Issue)
+        effective = artifact.get("expected_identity")
+        if (
+            not isinstance(material_id, str)
+            or re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", material_id) is None
+            or not isinstance(expected, str)
+            or not isinstance(observed, str)
+            or expected == observed
+            or observed == effective
+            or any(
+                re.fullmatch(r"git-commit:[0-9a-fA-F]{1,64}", v) is None
+                for v in (expected, observed)
+            )
+        ):
+            continue
+        line = (
+            f"Material {material_id} expected {expected}, observed {observed}; "
+            "if this pin change is intended, add (or replace the material's existing) line in the tracking Issue body, "
+            "then re-run the gate: "
+            f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: {material_id} {expected} -> {observed} -->"
+        )
+        if line not in lines:
+            lines.append(line)
+    return lines
+
+
 def receipt_remediations(payload: Any, *, expect_issue: int | None) -> list[str]:
     """Remediation lines for a receipt that failed issue/status expectations (pure)."""
 
@@ -179,6 +219,7 @@ def receipt_remediations(payload: Any, *, expect_issue: int | None) -> list[str]
             f"(reasons: {reason_text}); fix the cause shown in the issue-gate "
             "'Diagnose Core verifier failure' step, then re-run the gate"
         )
+    lines.extend(material_transition_remediations(receipt))
     return lines
 
 

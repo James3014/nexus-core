@@ -12,9 +12,12 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from product.clients.gate_diagnostics import material_transition_remediations
+
 DASH = "—"
 MAX_VALUE = 200
 MAX_PATHS = 20
+MAX_REASON_CODES = 3
 FOOTER = "*Display only — Core is an evidence notary; this summary does not change enforcement.*"
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f  ]+")
 
@@ -265,6 +268,8 @@ def render_markdown(
             f"Owner-signed manifest: {_md(_get(signed, 'manifest_path'), 120)}"
             f" (signer {_md(_get(signed, 'principal'))})"
         )
+    for remedy in material_transition_remediations(receipt):
+        out += ["", _md(remedy, len(remedy))]
     out += ["", FOOTER, ""]
     return "\n".join(out)
 
@@ -290,6 +295,19 @@ def render_notice(receipt: Mapping[str, Any], gate_verdict: str = "unverified") 
         f"universe {universe}",
         _clean(_get(receipt, "issue_verification", "claim_ceiling")),
     ]
+    reasons = list(
+        dict.fromkeys(
+            _clean(reason, 80)
+            for reason in _seq(_get(receipt, "outcome", "reason_codes"))
+            if isinstance(reason, str) and reason.strip()
+        )
+    )
+    if reasons:
+        shown = ", ".join(reasons[:MAX_REASON_CODES])
+        more = (
+            f" (+{len(reasons) - MAX_REASON_CODES} more)" if len(reasons) > MAX_REASON_CODES else ""
+        )
+        parts.append(f"reasons: {shown}{more}")
     claimed = _get(receipt, "issue_verification", "claimed_items")
     if isinstance(claimed, list):
         remaining = _seq(_get(receipt, "issue_verification", "remaining_items"))
