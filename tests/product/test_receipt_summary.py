@@ -390,6 +390,35 @@ def test_no_material_transition_suggestion_without_artifacts() -> None:
     )
 
 
+def test_no_suggestion_when_the_transition_is_already_applied() -> None:
+    """#299 review: Issue already carries a -> b and the PR observes b: the effective expectation
+    matches, the gate passes, and the summary must not ask for a marker that is already there."""
+    from product.clients.gate_diagnostics import material_transition_remediations
+
+    receipt = _material_receipt()
+    receipt["outcome"] = {"status": "VERIFIED", "reason_codes": []}
+    receipt["evidence_artifacts"][0].update(
+        {
+            "trusted_expected_identity": "git-commit:" + "a" * 40,
+            "expected_identity": "git-commit:" + "b" * 40,
+            "observed_identity": "git-commit:" + "b" * 40,
+            "status": "PASS",
+        }
+    )
+    assert material_transition_remediations(receipt) == []
+    assert "NEXUS_CORE_MATERIAL_TRANSITION" not in render_markdown(receipt)
+
+
+def test_overlong_material_id_is_not_suggested() -> None:
+    from product.clients.gate_diagnostics import material_transition_remediations
+
+    receipt = _material_receipt()
+    receipt["evidence_artifacts"][0]["producer_id"] = "m" * 201
+    assert material_transition_remediations(receipt) == []
+    receipt["evidence_artifacts"][0]["producer_id"] = "m" * 200
+    assert len(material_transition_remediations(receipt)) == 1
+
+
 def test_transition_remedy_uses_the_trusted_pin_as_from() -> None:
     """#299 review: with a transition already applied, <from> is the committed pin, not the effective one."""
     from product.clients.gate_diagnostics import material_transition_remediations

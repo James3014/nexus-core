@@ -145,12 +145,16 @@ def material_transition_remediations(receipt: Mapping[str, Any]) -> list[str]:
         # existing transition already moved (MATERIAL_TRANSITION_STALE otherwise)
         expected = artifact.get("trusted_expected_identity") or artifact.get("expected_identity")
         observed = artifact.get("observed_identity")
+        # an already-applied transition makes the effective expectation equal the observed pin: no
+        # mismatch, so nothing to suggest (the marker is already in the Issue)
+        effective = artifact.get("expected_identity")
         if (
             not isinstance(material_id, str)
-            or re.fullmatch(r"[A-Za-z0-9._/-]+", material_id) is None
+            or re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", material_id) is None
             or not isinstance(expected, str)
             or not isinstance(observed, str)
             or expected == observed
+            or observed == effective
             or any(
                 re.fullmatch(r"git-commit:[0-9a-fA-F]{1,64}", v) is None
                 for v in (expected, observed)
@@ -159,7 +163,7 @@ def material_transition_remediations(receipt: Mapping[str, Any]) -> list[str]:
             continue
         line = (
             f"Material {material_id} expected {expected}, observed {observed}; "
-            "if this pin change is intended, add this line to the tracking Issue body, "
+            "if this pin change is intended, add (or replace the material's existing) line in the tracking Issue body, "
             "then re-run the gate: "
             f"<!-- NEXUS_CORE_MATERIAL_TRANSITION: {material_id} {expected} -> {observed} -->"
         )
