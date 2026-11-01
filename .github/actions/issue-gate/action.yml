@@ -2,7 +2,8 @@ name: Nexus Core issue gate
 description: >-
   Two-stage pull-request gate. Installs a pinned nexus-certify before any
   candidate code exists on the runner, then runs issue-init and issue-check
-  --require-trusted-config against the candidate. Candidate code is never
+  --require-trusted-config --expect-config-commit <base sha> against the
+  candidate, so the trusted config is bound to the base commit. Candidate code is never
   executed on the runner; the verifier runs inside the configured isolation.
   The receipt issue-check reports having written (success or failure; Core
   hands its exact path over through --receipt-path-out, never picked by name or
@@ -422,13 +423,19 @@ runs:
         RECEIPT_POINTER: ${{ runner.temp }}/nexus-core-receipt-pointer
         PR_BODY: ${{ github.event.pull_request.body || '' }}
         PR_BODY_FILE: ${{ runner.temp }}/nexus-core-pr-body
+        BASE_SHA: ${{ steps.target.outputs.base-sha }}
       run: |
         set -euo pipefail
         rm -f "$RECEIPT_POINTER"
+        # The trusted config is pinned to the base commit this action resolved, never to
+        # a ref name inside the candidate checkout (a named ref is advisory only, see
+        # SECURITY.md). Any other config source fails closed with CONFIG_SOURCE_MISMATCH
+        # before a verifier runs; an empty or malformed base fails closed here.
+        [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "NEXUS_CORE_GATE_BASE_SHA_INVALID" >&2; exit 1; }
         # #276: the PR body (outside the candidate tree) only supplies the optional,
         # display-only items/split of the KEEP_OPEN intent; empty in dispatch mode.
         printf '%s' "$PR_BODY" > "$PR_BODY_FILE"
-        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --evidence-universe "$EVIDENCE_UNIVERSE" --pr-body-file "$PR_BODY_FILE" --receipt-path-out "$RECEIPT_POINTER" --require-trusted-config
+        nexus-certify issue-check --repo "$CANDIDATE" --issue "$ISSUE" --evidence-universe "$EVIDENCE_UNIVERSE" --pr-body-file "$PR_BODY_FILE" --receipt-path-out "$RECEIPT_POINTER" --expect-config-commit "$BASE_SHA" --require-trusted-config
 
     - name: Sign the receipt issue-check wrote (Sigstore keyless)
       id: sign

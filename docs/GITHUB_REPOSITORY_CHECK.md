@@ -303,6 +303,10 @@ trusted base checkout instead of a pinned ref.
 3. **Core.** `issue-init` and `issue-check --require-trusted-config` run with
    `GITHUB_TOKEN` available only to read the Issue. The configuration is read from
    the base ref; an untracked or base-missing config fails with `CONFIG_UNTRUSTED`.
+   `issue-check` also passes `--expect-config-commit <base sha>` (the base the action
+   resolved, never a ref name inside the candidate checkout), so any other config
+   source fails closed with `CONFIG_SOURCE_MISMATCH` before a verifier runs; an empty
+   or malformed base sha fails with `NEXUS_CORE_GATE_BASE_SHA_INVALID`.
 4. **Verifier, isolated.** The verifier command (including any `uv sync`,
    `uv build`, or tests) runs in a detached clone with an allowlisted environment,
    inside the container configured by `[isolation]`. The runner never runs
