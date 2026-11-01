@@ -68,6 +68,10 @@ EXPECTED_IDENTITY = (
     "https://github.com/James3014/nexus-core/.github/workflows/"
     "nexus-core-issue-completion.yml@refs/heads/main"
 )
+# issue-check pins the trusted config to the base commit the action resolved; a named
+# ref inside the candidate checkout is advisory only (SECURITY.md).
+ISSUE_CHECK_PIN = '--expect-config-commit "$BASE_SHA"'
+ISSUE_CHECK_PIN_ENV = "        BASE_SHA: ${{ steps.target.outputs.base-sha }}"
 RECEIPT_CHECK_EXPECTATIONS = (
     "--expect-status VERIFIED",
     "--expect-subject-head",
@@ -396,20 +400,27 @@ def repository_check_example_violations(text: str) -> list[str]:
 
 
 def issue_gate_violations(text: str) -> list[str]:
-    """issue-check must be invoked with --require-trusted-config (NCGF-004)."""
+    """issue-check must pass --require-trusted-config (NCGF-004) and pin the config to
+    the resolved base commit with --expect-config-commit "$BASE_SHA"."""
     calls = [
-        line.strip()
+        (step["text"], line.strip())
         for step in _steps(text)
         for line in _uncommented(step["text"]).splitlines()
         if "nexus-certify issue-check" in line
     ]
     if not calls:
         return ["trusted config: issue-gate must invoke 'nexus-certify issue-check'"]
-    return [
-        f"trusted config: issue-check must pass --require-trusted-config: {call!r}"
-        for call in calls
-        if "--require-trusted-config" not in call.split()
-    ]
+    violations: list[str] = []
+    for step_text, call in calls:
+        if "--require-trusted-config" not in call.split():
+            violations.append(
+                f"trusted config: issue-check must pass --require-trusted-config: {call!r}"
+            )
+        if f" {ISSUE_CHECK_PIN} " not in f" {call} ":
+            violations.append(f"config pin: issue-check must pass {ISSUE_CHECK_PIN}: {call!r}")
+        if ISSUE_CHECK_PIN_ENV not in step_text.splitlines():
+            violations.append(f"config pin: issue-check step must bind {ISSUE_CHECK_PIN_ENV!r}")
+    return violations
 
 
 def _shell_command(run_text: str, needle: str) -> str | None:
@@ -898,6 +909,17 @@ def test_negative_control_missing_expectations_are_detected() -> None:
     mutated = issue_gate.replace(" --require-trusted-config\n", "\n", 1)
     assert mutated != issue_gate
     assert issue_gate_violations(mutated)
+    mutated = issue_gate.replace(f" {ISSUE_CHECK_PIN} ", " ", 1)
+    assert mutated != issue_gate
+    assert any(v.startswith("config pin:") for v in issue_gate_violations(mutated))
+    body_file = "/nexus-core-pr-body\n"
+    mutated = issue_gate.replace(
+        body_file + ISSUE_CHECK_PIN_ENV + "\n",
+        body_file + "        BASE_SHA: ${{ inputs.head-sha }}\n",
+        1,
+    )
+    assert mutated != issue_gate
+    assert any(v.startswith("config pin:") for v in issue_gate_violations(mutated))
 
     for action in (RECEIPT_VERIFY,):
         original = _read(action)
