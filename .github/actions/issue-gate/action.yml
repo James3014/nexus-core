@@ -12,10 +12,11 @@ description: >-
   under .nexus-core/receipts is refused. The CALLER JOB MUST GRANT
   'id-token: write' (plus contents/issues/pull-requests: read) or signing fails.
   Two modes, chosen by the event: pull_request / pull_request_target (head and
-  base from the pull request), and repository_dispatch on the default branch
-  (dispatch mode: explicit head-sha and issue-number inputs; the base is the
-  run's own commit github.sha, the default-branch tip). Any other event, or a
-  dispatch that is not on the default branch, fails closed.
+  base from the pull request, whose base must be the default branch), and
+  repository_dispatch on the default branch (dispatch mode: explicit head-sha
+  and issue-number inputs; the base is the run's own commit github.sha, the
+  default-branch tip). Any other event, a pull request whose base is not the
+  default branch, or a dispatch that is not on the default branch, fails closed.
 
 inputs:
   issue-number:
@@ -122,6 +123,10 @@ runs:
             if [ -n "$IN_HEAD" ] && [ "$IN_HEAD" != "$PR_HEAD_SHA" ]; then
               fail "head-sha input must be empty or equal the pull request head sha"
             fi
+            [[ "$DEFAULT_BRANCH" =~ ^[A-Za-z0-9_./-]+$ ]] || fail "default branch unresolved"
+            # Trusted config comes from the base commit, so the pull request must
+            # target the default branch (as dispatch mode requires of its run ref).
+            [ "$PR_BASE_REF" = "$DEFAULT_BRANCH" ] || fail "pull request base must be the default branch ${DEFAULT_BRANCH}"
             head="$PR_HEAD_SHA"
             base="$PR_BASE_SHA"
             mode="pull_request"
