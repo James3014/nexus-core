@@ -20,7 +20,7 @@ from typing import Any, Callable, Mapping, Optional, cast
 
 IMAGE = "python:3.12-alpine"
 IMAGE_DIGEST = "sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
-LOCK_DIGEST = "sha256:d5ca761130e83e57874a93dabfea4905e725610f3e468038ce5aed4e6179ee86"
+LOCK_DIGEST = "sha256:87c435bcbecb443b31f9347d9e69ed1ed4bf89353157db095b6757cf80fcde49"
 PROFILE_ID = "python-oci-pytest-v1"
 MAX_OUTPUT_BYTES = 1_048_576
 DEPENDENCY_ARTIFACTS = (
