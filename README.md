@@ -150,7 +150,7 @@ nexus-certify issue-check --issue 42 --require-trusted-config
 Copy [`docs/examples/github-repository-check.yml`](docs/examples/github-repository-check.yml) to `.github/workflows/`. Replace `OWNER/REPO` in `expected-identity` with your repository and keep the workflow file name in sync. The example pins both actions to this commit:
 
 ```text
-67427c5840cd41cd1cf11fff63b710c81a813755
+a161b34c334777eced7349cd38f67836bebe85bc
 ```
 
 Always pin to a full 40-character commit, never a tag or branch.
