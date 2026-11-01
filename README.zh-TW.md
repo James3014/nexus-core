@@ -136,7 +136,7 @@ nexus-certify issue-check --issue 42 --require-trusted-config
 把 [`docs/examples/github-repository-check.yml`](docs/examples/github-repository-check.yml) 複製到 `.github/workflows/`。把 `expected-identity` 中的 `OWNER/REPO` 換成你的 repository，並讓 workflow 檔名保持一致。範例把兩個 action 都固定在這個 commit：
 
 ```text
-67427c5840cd41cd1cf11fff63b710c81a813755
+a161b34c334777eced7349cd38f67836bebe85bc
 ```
 
 一律固定到完整的 40 字元 commit，不要使用 tag 或分支。

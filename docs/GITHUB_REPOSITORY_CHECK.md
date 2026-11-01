@@ -216,6 +216,8 @@ completion hook.
   own commit (`github.sha`, the default-branch tip) and the base ref from
   `github.ref_name`. Under `pull_request`/`pull_request_target` the `head-sha`
   input must be empty or equal the PR head; any other event fails closed.
+  In `pull_request` mode the PR base must be the repository's default branch;
+  any other base fails closed.
   `repository_dispatch` needs only `contents: write` to send (an agent identity
   with `actions: read` cannot use `workflow_dispatch`), and GitHub always runs
   the default-branch workflow file for it. The dispatch run's `verify` job runs

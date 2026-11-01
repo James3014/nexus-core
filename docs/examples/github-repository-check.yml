@@ -44,9 +44,9 @@ jobs:
       issue-number: ${{ steps.gate.outputs.issue-number }}
     steps:
       - id: gate
-        uses: James3014/nexus-core/.github/actions/issue-gate@67427c5840cd41cd1cf11fff63b710c81a813755  # pin: full 40-hex nexus-core commit
+        uses: James3014/nexus-core/.github/actions/issue-gate@a161b34c334777eced7349cd38f67836bebe85bc  # pin: full 40-hex nexus-core commit
         with:
-          nexus-certify-ref: "67427c5840cd41cd1cf11fff63b710c81a813755"  # same sha as above
+          nexus-certify-ref: "a161b34c334777eced7349cd38f67836bebe85bc"  # same sha as above
 
   verify:
     name: Nexus Core issue completion   # the required status check
@@ -82,7 +82,7 @@ jobs:
             exit 1
           fi
 
-      - uses: James3014/nexus-core/.github/actions/receipt-verify@67427c5840cd41cd1cf11fff63b710c81a813755  # pin: same sha
+      - uses: James3014/nexus-core/.github/actions/receipt-verify@a161b34c334777eced7349cd38f67836bebe85bc  # pin: same sha
         with:
           artifact-name: ${{ needs.run.outputs.artifact-name }}
           artifact-id: ${{ needs.run.outputs.artifact-id }}
@@ -92,4 +92,4 @@ jobs:
           head-sha: ${{ github.event.pull_request.head.sha }}
           base-sha: ${{ github.event.pull_request.base.sha }}
           issue-number: ${{ needs.run.outputs.issue-number }}
-          nexus-certify-ref: "67427c5840cd41cd1cf11fff63b710c81a813755"  # same sha
+          nexus-certify-ref: "a161b34c334777eced7349cd38f67836bebe85bc"  # same sha
