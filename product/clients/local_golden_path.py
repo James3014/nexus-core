@@ -40,6 +40,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
+from product.runtime.trusted_git import trusted_git
 
 CONFIG_DIRECTORY = ".nexus-core"
 CONFIG_FILENAME = "config.toml"
@@ -119,9 +120,15 @@ def _run_git(
     command_env = os.environ.copy()
     if env:
         command_env.update(env)
+    command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    try:
+        git_identity = trusted_git(command_env)
+    except RuntimeError as exc:
+        raise LocalCheckError("GIT_UNAVAILABLE", str(exc)) from exc
+    executable = str(git_identity["path"])
     try:
         return subprocess.run(
-            ["git", *args],
+            [executable, *args],
             cwd=repo,
             env=command_env,
             capture_output=True,
@@ -130,6 +137,47 @@ def _run_git(
         )
     except OSError as exc:
         raise LocalCheckError("GIT_UNAVAILABLE", str(exc)) from exc
+
+
+def _resolve_executable(
+    name: str,
+    path: str | None = None,
+    *,
+    cwd: Path | None = None,
+    resolve_symlinks: bool = True,
+    config_knob: str = "PATH",
+) -> str:
+    if "/" in name:
+        target = Path(name)
+        if not target.is_absolute() and cwd is not None:
+            target = cwd / target
+        resolved = str(target) if target.is_file() and os.access(target, os.X_OK) else None
+    else:
+        search_path = path or ""
+        if cwd is not None:
+            base = cwd.resolve()
+            search_path = os.pathsep.join(
+                str((base / entry).resolve()) if not Path(entry).is_absolute() else entry
+                for entry in search_path.split(os.pathsep)
+            )
+        resolved = shutil.which(name, path=search_path)
+    if resolved is None:
+        raise LocalCheckError(
+            "EXECUTABLE_UNAVAILABLE",
+            f"{name} is not available via {config_knob} (config knob: {config_knob})",
+        )
+    target = Path(resolved)
+    return str(target.resolve() if resolve_symlinks else target.absolute())
+
+
+def _assert_no_git_replace_refs(repo: Path) -> None:
+    result = _run_git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+    if result.returncode != 0:
+        raise LocalCheckError("GIT_REPLACE_REFS_CHECK_FAILED", result.stderr.strip())
+    if result.stdout.strip():
+        raise LocalCheckError(
+            "GIT_REPLACE_REFS_PRESENT", "refs/replace/* are not permitted for verification"
+        )
 
 
 def _git_stdout(repo: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
@@ -667,13 +715,11 @@ def _load_effective_config(
 
 
 def _command_available(repo: Path, command: Sequence[str]) -> bool:
-    executable = command[0]
-    if "/" in executable:
-        target = Path(executable)
-        if not target.is_absolute():
-            target = repo / target
-        return target.is_file() and os.access(target, os.X_OK)
-    return shutil.which(executable) is not None
+    try:
+        _resolve_executable(command[0], os.environ.get("PATH"), cwd=repo)
+        return True
+    except LocalCheckError:
+        return False
 
 
 def _resolve_base_and_head(
@@ -1092,11 +1138,12 @@ def _container_argv(
     gid: int,
     *,
     name: str | None = None,
+    docker_executable: str = "docker",
 ) -> list[str]:
     """Docker argv exposing only the sandbox parent directory at /sandbox."""
 
     sandbox_parent = Path(sandbox_repo).parent
-    argv = ["docker", "run", "--rm"]
+    argv = [docker_executable, "run", "--rm"]
     if name is not None:
         argv += ["--name", name]
     argv += [
@@ -1153,12 +1200,12 @@ def _run_in_new_session(
         return subprocess.CompletedProcess(list(argv), proc.returncode, stdout, stderr)
 
 
-def _ensure_container_image(image: str) -> bool:
+def _ensure_container_image(image: str, docker_executable: str = "docker") -> bool:
     """Pull the image if absent, outside the verifier timeout. Returns whether it pulled."""
 
     try:
         present = subprocess.run(
-            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            [docker_executable, "image", "inspect", "--format", "{{.Id}}", image],
             capture_output=True,
             check=False,
             timeout=60,
@@ -1166,7 +1213,7 @@ def _ensure_container_image(image: str) -> bool:
         if present.returncode == 0:
             return False
         pulled = subprocess.run(
-            ["docker", "pull", "--quiet", image],
+            [docker_executable, "pull", "--quiet", image],
             capture_output=True,
             check=False,
             timeout=CONTAINER_IMAGE_PULL_TIMEOUT_SECONDS,
@@ -1179,7 +1226,9 @@ def _ensure_container_image(image: str) -> bool:
     return True
 
 
-def _probe_container_mount(parent: Path, image: str) -> None:
+def _probe_container_mount(
+    parent: Path, image: str, docker_executable: str = "docker"
+) -> None:
     nonce = uuid.uuid4().hex
     probe = parent / ".nexus-mount-probe"
     detail = (
@@ -1190,7 +1239,7 @@ def _probe_container_mount(parent: Path, image: str) -> None:
     try:
         result = subprocess.run(
             [
-                "docker", "run", "--rm", "--network", "none",
+                docker_executable, "run", "--rm", "--network", "none",
                 "--user", f"{os.getuid()}:{os.getgid()}",
                 "-v", f"{parent}:/sandbox",
                 image, "cat", "/sandbox/.nexus-mount-probe",
@@ -1223,18 +1272,33 @@ def _run_verifier_isolated(
     """
 
     isolation = _isolation_settings(config)
-    if isolation["mode"] == "container" and shutil.which("docker") is None:
-        raise LocalCheckError("ISOLATION_UNAVAILABLE", "docker is not installed")
+    docker_executable = None
     if isolation["mode"] == "container":
-        isolation["image_pulled"] = _ensure_container_image(isolation["image"])
+        docker_path = shutil.which("docker")
+        if docker_path is None:
+            raise LocalCheckError("ISOLATION_UNAVAILABLE", "docker is not installed")
+        docker_executable = str(Path(docker_path).resolve())
+    if isolation["mode"] == "container":
+        assert docker_executable is not None
+        isolation["image_pulled"] = _ensure_container_image(
+            isolation["image"], docker_executable
+        )
 
     source_head = _git_stdout(repo, "rev-parse", "HEAD^{commit}")
+    verifier_env = _verifier_environment(config, "", "", command)
+    resolved_command = list(command)
     execution_subject = {
         "mode": "isolated_detached_clone",
         "source_head": f"git-commit:{source_head}",
         "target_tree": f"git-tree:{snapshot.target_tree}",
         "isolation": isolation,
         "env_passthrough": _passthrough_names(config),
+        "verifier_command": list(command),
+        "executables": {
+            "git": trusted_git(os.environ),
+            **({"docker": docker_executable} if docker_executable is not None else {}),
+        },
+        "git_replace_refs_check": "PASS",
     }
     sandbox_root = os.environ.get("NEXUS_CERTIFY_SANDBOX_ROOT")
     if isolation["mode"] == "container":
@@ -1306,34 +1370,51 @@ def _run_verifier_isolated(
                 "VERIFIER_SANDBOX_PREPARE_FAILED",
                 "isolated verifier index does not match target tree",
             )
+        if isolation["mode"] != "container":
+            verifier_executable = _resolve_executable(
+                command[0],
+                verifier_env.get("PATH"),
+                cwd=verifier_repo,
+                resolve_symlinks=False,
+                config_knob="verifier_command",
+            )
+            resolved_command = [verifier_executable, *command[1:]]
+            cast(dict[str, Any], execution_subject["executables"])["verifier"] = verifier_executable
 
         sandbox_home = parent / "home"
         sandbox_tmp = parent / "tmp"
         sandbox_home.mkdir()
         sandbox_tmp.mkdir()
         if isolation["mode"] == "container":
-            _probe_container_mount(parent, isolation["image"])
+            assert docker_executable is not None
+            _probe_container_mount(parent, isolation["image"], docker_executable)
             isolation["mount_probe"] = "PASS"
         try:
             if isolation["mode"] == "container":
+                assert docker_executable is not None
                 env = _verifier_environment(
-                    config, "/sandbox/home", "/sandbox/tmp", command
+                    config, "/sandbox/home", "/sandbox/tmp", resolved_command
                 )
+                env.pop("PATH", None)
+                # Let the container runtime resolve PATH entries. A shell-based
+                # preflight would reject valid shell-less images; the image's
+                # configured PATH is the one available to its entrypoint.
                 name = f"nexus-verifier-{uuid.uuid4().hex[:16]}"
                 argv = _container_argv(
                     isolation["image"],
                     isolation["network"],
                     verifier_repo,
                     env,
-                    command,
+                    resolved_command,
                     os.getuid(),
                     os.getgid(),
                     name=name,
+                    docker_executable=docker_executable,
                 )
 
                 def _remove_container() -> None:
                     subprocess.run(
-                        ["docker", "rm", "-f", name],
+                        [docker_executable, "rm", "-f", name],
                         capture_output=True,
                         check=False,
                         timeout=30,
@@ -1348,10 +1429,10 @@ def _run_verifier_isolated(
                 )
             else:
                 env = _verifier_environment(
-                    config, str(sandbox_home), str(sandbox_tmp), command
+                    config, str(sandbox_home), str(sandbox_tmp), resolved_command
                 )
                 executed = _run_in_new_session(
-                    command,
+                    resolved_command,
                     cwd=verifier_repo,
                     env=env,
                     timeout_seconds=timeout_seconds,
@@ -1921,6 +2002,7 @@ def check_repository(
     """
 
     repo = _repo_root(path)
+    _assert_no_git_replace_refs(repo)
     config, config_source, worktree_config = _load_effective_config(repo)
     transitions: list[dict[str, str]] = []
     config_hash = canonical_hash(config)

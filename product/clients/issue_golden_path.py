@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.error
@@ -28,6 +27,7 @@ from product.clients.local_golden_path import (
     LocalCheckError,
     _load_effective_config,  # pyright: ignore[reportPrivateUsage]
     _raise_with_receipt,  # pyright: ignore[reportPrivateUsage]
+    _run_git,  # pyright: ignore[reportPrivateUsage]
     check_repository,
 )
 from product.protocol.generic_verification import canonical_hash
@@ -90,26 +90,14 @@ def _rate_limit_retry_delay(
 
 
 def _repo_root(path: str | Path) -> Path:
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=Path(path).resolve(),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_git(Path(path).resolve(), "rev-parse", "--show-toplevel")
     if result.returncode != 0:
         raise LocalCheckError("NOT_A_GIT_REPOSITORY", (result.stderr or "").strip())
     return Path(result.stdout.strip()).resolve()
 
 
 def _origin_github_repo(repo: Path) -> str | None:
-    result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_git(repo, "remote", "get-url", "origin")
     if result.returncode != 0:
         return None
     value = result.stdout.strip()

@@ -57,6 +57,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
+from product.runtime.trusted_git import trusted_git
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -208,9 +209,17 @@ def _run_git(
     cmd_env = os.environ.copy()
     if env:
         cmd_env.update(env)
+    cmd_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    try:
+        git_identity = trusted_git(cmd_env)
+    except RuntimeError as exc:
+        raise CandidateAcquisitionError(
+            "GIT_UNAVAILABLE", str(exc)
+        ) from exc
+    executable = str(git_identity["path"])
     try:
         return subprocess.run(
-            ["git", *args],
+            [executable, *args],
             cwd=cwd,
             env=cmd_env,
             capture_output=True,
@@ -222,6 +231,18 @@ def _run_git(
         raise CandidateAcquisitionError("GIT_TIMEOUT", str(exc)) from exc
     except OSError as exc:
         raise CandidateAcquisitionError("GIT_UNAVAILABLE", str(exc)) from exc
+
+
+def _assert_no_git_replace_refs(repo: Path) -> None:
+    result = _run_git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+    if result.returncode != 0:
+        raise CandidateAcquisitionError(
+            "GIT_REPLACE_REFS_CHECK_FAILED", (result.stderr or "").strip()
+        )
+    if result.stdout.strip():
+        raise CandidateAcquisitionError(
+            "GIT_REPLACE_REFS_PRESENT", "refs/replace/* are not permitted for acquisition"
+        )
 
 
 def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
@@ -986,6 +1007,7 @@ def acquire_and_verify_candidate(
         )
 
     repo = request.repo_path.resolve()
+    _assert_no_git_replace_refs(repo)
 
     # -----------------------------------------------------------------------
     # 4. Determine source tree from the expected_source_identity commit.
@@ -1150,6 +1172,8 @@ def acquire_and_verify_candidate(
         "source_identity": request.expected_source_identity,
         "contract_hash": request.expected_contract_hash,
         "profile_hash": request.expected_profile_hash,
+        "executables": {"git": trusted_git(os.environ)},
+        "git_replace_refs_check": "PASS",
         "change_set_hash": actual_cs_hash,
         "change_manifest_hash": change_manifest_hash(manifest),
         "core_response": core_response,

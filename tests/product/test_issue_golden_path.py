@@ -31,6 +31,26 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def test_issue_git_helpers_use_pinned_git_with_replacement_objects_disabled(
+    issue_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+    original_run = subprocess.run
+
+    def recording_run(args: Any, **kwargs: Any) -> Any:
+        calls.append(list(args))
+        assert Path(args[0]).is_absolute()
+        assert kwargs["env"]["GIT_NO_REPLACE_OBJECTS"] == "1"
+        return original_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", recording_run)
+
+    assert issue_gp._repo_root(issue_repo) == issue_repo.resolve()
+    assert issue_gp._origin_github_repo(issue_repo) == "example/project"
+    git_calls = [call for call in calls if "--version" not in call]
+    assert len(git_calls) == 2
+
+
 @pytest.fixture
 def issue_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
