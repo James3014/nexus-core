@@ -1254,7 +1254,38 @@ def test_run_git_uses_environment_allowlist(
     assert result.returncode == 0, result.stderr
     assert Path(result.stdout.strip()).resolve() == base_repo.resolve()
     candidate_module._run_git(base_repo, "status", "--porcelain")
+
+
+def test_run_git_ignores_repo_local_execution_config(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    from product.acquisition import candidate_materialization as candidate_module
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    marker = tmp_path / "fsmonitor-ran"
+    fsmonitor = tmp_path / "fsmonitor.sh"
+    fsmonitor.write_text(f"#!/bin/sh\nprintf ran > '{marker}'\n", encoding="utf-8")
+    fsmonitor.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.fsmonitor", str(fsmonitor)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "filter.custom.process", str(fsmonitor)],
+        check=True,
+    )
+
+    result = candidate_module._run_git(repo, "status", "--porcelain")
+
+    assert result.returncode == 0
     assert not marker.exists()
+    assert "filter.custom.process=" in candidate_module.trusted_git_argv(
+        "/usr/bin/git", "status", cwd=repo
+    )
 
 
 def test_replay_rechecks_git_replace_refs(base_repo: Path, tmp_path: Path) -> None:

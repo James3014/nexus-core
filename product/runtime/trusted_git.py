@@ -19,6 +19,49 @@ _VERSION_CACHE: dict[tuple[str, int, int, int, int], str] = {}
 
 _ENV_ALLOWLIST = ("LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "SYSTEMROOT", "TZ")
 
+_GIT_CONFIG_OVERRIDES = (
+    ("core.fsmonitor", "false"),
+    ("core.hooksPath", os.devnull),
+    ("core.sshCommand", ""),
+    ("core.pager", "cat"),
+    ("core.askPass", ""),
+    ("credential.helper", ""),
+    ("diff.external", ""),
+    ("diff.*.textconv", ""),
+    ("protocol.ext.allow", "never"),
+)
+
+
+def trusted_git_argv(
+    executable: str, *args: str, cwd: Path | None = None
+) -> list[str]:
+    """Build Git argv with repo-local command execution settings disabled."""
+    overrides = list(_GIT_CONFIG_OVERRIDES)
+    if cwd is not None:
+        # Driver names are arbitrary, so discover only the config key names;
+        # `git config` reads values as data and does not invoke configured tools.
+        discovery = subprocess.Popen(
+            trusted_git_argv(
+                executable,
+                "--no-pager", "config", "--local", "--name-only", "--get-regexp",
+                r"^(filter\..*\.(process|clean|smudge)|diff\..*\.textconv)$",
+            ),
+            cwd=cwd,
+            env=git_subprocess_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        discovered, _ = discovery.communicate()
+        for key in discovered.splitlines():
+            if key not in {configured for configured, _ in overrides}:
+                overrides.append((key, ""))
+    command = [executable]
+    for key, value in overrides:
+        command.extend(("-c", f"{key}={value}"))
+    command.extend(args)
+    return command
+
 
 def git_subprocess_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
     """Build a Git environment from an allowlist; never copy ``os.environ``."""
@@ -116,7 +159,8 @@ def trusted_git(env: Mapping[str, str] | None = None) -> dict[str, Any]:
             reported_version = _VERSION_CACHE.get(cache_key)
             if reported_version is None:
                 version = subprocess.run(
-                    [str(path), "--version"], capture_output=True, text=True, check=False,
+                    trusted_git_argv(str(path), "--version"),
+                    capture_output=True, text=True, check=False,
                     env={**values, "GIT_NO_REPLACE_OBJECTS": "1"},
                 )
                 if version.returncode != 0:

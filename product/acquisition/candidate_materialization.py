@@ -57,7 +57,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.runtime.trusted_git import git_subprocess_env, trusted_git
+from product.runtime.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -216,7 +216,7 @@ def _run_git(
     executable = str(git_identity["path"])
     try:
         return subprocess.run(
-            [executable, *args],
+            trusted_git_argv(executable, *args, cwd=cwd),
             cwd=cwd,
             env=cmd_env,
             capture_output=True,
