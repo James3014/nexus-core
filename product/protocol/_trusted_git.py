@@ -194,13 +194,14 @@ def verify_git_repository_snapshot(
             info = path.lstat()
         except FileNotFoundError:
             # Git legitimately removes worktree, ref, and reflog entries.
-            if any(part in {"refs", "logs", "worktrees"} for part in path.parts):
+            if any(part in {"refs", "logs", "worktrees", "objects"} for part in path.parts):
                 continue
             raise
         # Git legitimately atomically replaces refs/config and creates or
         # removes worktree admin files. The post-run scan validates those paths;
         # stable metadata must retain its inode.
         mutable = "worktrees" in path.parts
+        mutable = mutable or ("objects" in path.parts and path.name != "objects")
         mutable = mutable or (
             not stat.S_ISDIR(info.st_mode)
             and any(part in {"refs", "logs"} for part in path.parts)
@@ -239,9 +240,10 @@ def trusted_git_argv(
     command = [executable]
     for key, value in overrides:
         command.extend(("-c", f"{key}={value}"))
-    command.extend(args)
     if args and args[0] in {"diff", "show", "log", "whatchanged"}:
-        command.extend(("--no-ext-diff", "--no-textconv"))
+        command.extend((args[0], "--no-ext-diff", "--no-textconv", *args[1:]))
+    else:
+        command.extend(args)
     return command
 
 

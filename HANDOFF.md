@@ -1,6 +1,6 @@
 # HANDOFF
 
-更新：2026-11-15 · by Codex · HEAD `9ef81b3`
+更新：2026-11-15 · by Codex · HEAD `5e56f06`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
@@ -10,7 +10,7 @@
 - 無。
 
 ## 待確認（沒有 Issue 號）
-- trusted Git 架構修正：acquisition/client 使用各自層級 helper，維持 env allowlist 與 repo-local execution config 防護；五個指定回歸測試通過，三個指定 product modules 259 passed、1 skipped。全套 pytest 單次執行為 2345 passed、6 skipped、1 deselected、14 failed、63 errors；loopback server 測試受 sandbox 拒絕 bind (`PermissionError: [Errno 1] Operation not permitted`)。未提供 repository Issue，未執行 issue-init / issue-check。
+- trusted Git 修正續作：代表性 local receipt、tracked config、sandbox、resolved interpreter 測試通過；candidate acquisition 28 passed，candidate materialization 32 passed。六檔驗證執行一次；architecture + trusted-git structure 子集為 174 passed、1 skipped、38 errors，錯誤皆為 loopback fixture bind 被 sandbox 拒絕 (`PermissionError: [Errno 1] Operation not permitted`)。issue pinned-Git 測試已調整為只計算兩個 helper 操作，仍檢查每次 Git subprocess 的絕對路徑與 replacement objects 關閉。未提供 repository Issue，未執行 issue-init / issue-check。
 
 ## 完成
 - #243 已完成（PR #249）：local Golden Path 以 trusted base tip 綁定 config，使用唯一 merge-base 作為 source revision。

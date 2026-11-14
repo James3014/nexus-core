@@ -2691,14 +2691,14 @@ def test_sandbox_with_object_alternates_fails_closed_before_verifier(
     with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
 
-    assert raised.value.reason_code == "VERIFIER_SANDBOX_PREPARE_FAILED"
+    assert raised.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
     assert "alternates" in raised.value.detail
     assert not marker.exists(), "verifier must not run in a sandbox with object alternates"
     # Fail-closed still leaves a receipt and still cleans up the sandbox.
     assert raised.value.receipt_path is not None
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["outcome"]["status"] == "FAILED_CLOSED"
-    assert receipt["outcome"]["reason_codes"] == ["VERIFIER_SANDBOX_PREPARE_FAILED"]
+    assert receipt["outcome"]["reason_codes"] == ["GIT_REPOSITORY_UNTRUSTED"]
     assert observed["sandboxes"][0]["alternates"] is True
     assert not observed["sandboxes"][0]["parent"].exists()
 

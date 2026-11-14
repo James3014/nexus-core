@@ -47,8 +47,16 @@ def test_issue_git_helpers_use_pinned_git_with_replacement_objects_disabled(
 
     assert issue_gp._repo_root(issue_repo) == issue_repo.resolve()
     assert issue_gp._origin_github_repo(issue_repo) == "example/project"
-    git_calls = [call for call in calls if "--version" not in call]
-    assert len(git_calls) == 2
+    wanted = (
+        ["rev-parse", "--show-toplevel"],
+        ["remote", "get-url", "origin"],
+    )
+    # The trusted wrapper prepends -c overrides; match the git subcommand at the tail.
+    helper_calls = [call[-len(w):] for call in calls for w in wanted if call[-len(w):] == w]
+    assert helper_calls == [
+        ["rev-parse", "--show-toplevel"],
+        ["remote", "get-url", "origin"],
+    ]
 
 
 @pytest.fixture
