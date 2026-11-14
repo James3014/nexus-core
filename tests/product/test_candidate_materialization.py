@@ -1240,3 +1240,30 @@ def test_acquisition_refuses_git_replace_refs(
         _acquire(request)
 
     assert exc_info.value.reason_code == "GIT_REPLACE_REFS_PRESENT"
+
+
+def test_run_git_uses_environment_allowlist(
+    base_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = base_repo.parent / "fsmonitor-ran"
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", f"touch {marker}; echo")
+    monkeypatch.setenv("GIT_DIR", str(base_repo.parent / "elsewhere"))
+    result = candidate_module._run_git(base_repo, "rev-parse", "--show-toplevel")
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).resolve() == base_repo.resolve()
+    candidate_module._run_git(base_repo, "status", "--porcelain")
+    assert not marker.exists()
+
+
+def test_replay_rechecks_git_replace_refs(base_repo: Path, tmp_path: Path) -> None:
+    req = _build_request(base_repo, receipt_dir=tmp_path / "receipts")
+    first = _acquire(req)
+    assert not first.replayed
+    head = _git_out(base_repo, "rev-parse", "HEAD")
+    replacement = _git_out(base_repo, "rev-parse", "HEAD^")
+    _git(base_repo, "update-ref", f"refs/replace/{head}", replacement)
+    with pytest.raises(CandidateAcquisitionError) as exc_info:
+        _acquire(req)
+    assert exc_info.value.reason_code == "GIT_REPLACE_REFS_PRESENT"

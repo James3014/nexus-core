@@ -17,6 +17,23 @@ ADMIN_CONFIG = Path("/etc/nexus-core/trusted-executables.toml")
 _VERSION_CACHE: dict[tuple[str, int, int, int, int], str] = {}
 
 
+_ENV_ALLOWLIST = ("LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "SYSTEMROOT", "TZ")
+
+
+def git_subprocess_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Build a Git environment from an allowlist; never copy ``os.environ``."""
+    env = {k: os.environ[k] for k in _ENV_ALLOWLIST if k in os.environ}
+    env["PATH"] = os.defpath if os.name == "nt" else "/usr/bin:/bin"
+    if SETTING in os.environ:
+        env[SETTING] = os.environ[SETTING]
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    if extra:
+        env.update(extra)
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    return env
+
+
 def trusted_git(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Select Git by env, root-owned admin config, then trusted absolute defaults."""
     values = os.environ if env is None else env

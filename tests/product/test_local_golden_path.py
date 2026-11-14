@@ -2700,3 +2700,21 @@ def test_sandbox_with_object_alternates_fails_closed_before_verifier(
     assert receipt["outcome"]["reason_codes"] == ["VERIFIER_SANDBOX_PREPARE_FAILED"]
     assert observed["sandboxes"][0]["alternates"] is True
     assert not observed["sandboxes"][0]["parent"].exists()
+
+
+def test_run_git_uses_environment_allowlist(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from product.clients import local_golden_path as lgp
+
+    marker = external_repo.parent / "fsmonitor-ran"
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", f"touch {marker}; echo")
+    monkeypatch.setenv("GIT_DIR", str(external_repo.parent / "elsewhere"))
+    monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/nonexistent.dylib")
+    result = lgp._run_git(external_repo, "rev-parse", "--show-toplevel")
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).resolve() == external_repo.resolve()
+    lgp._run_git(external_repo, "status", "--porcelain")
+    assert not marker.exists()

@@ -40,7 +40,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.runtime.trusted_git import trusted_git
+from product.runtime.trusted_git import git_subprocess_env, trusted_git
 
 CONFIG_DIRECTORY = ".nexus-core"
 CONFIG_FILENAME = "config.toml"
@@ -117,10 +117,7 @@ def _run_git(
     env: Mapping[str, str] | None = None,
     text: bool = True,
 ) -> subprocess.CompletedProcess[Any]:
-    command_env = os.environ.copy()
-    if env:
-        command_env.update(env)
-    command_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    command_env = git_subprocess_env(env)
     try:
         git_identity = trusted_git(command_env)
     except RuntimeError as exc:

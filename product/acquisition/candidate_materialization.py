@@ -57,7 +57,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.runtime.trusted_git import trusted_git
+from product.runtime.trusted_git import git_subprocess_env, trusted_git
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -206,10 +206,7 @@ def _run_git(
     env: Mapping[str, str] | None = None,
     text: bool = True,
 ) -> subprocess.CompletedProcess[Any]:
-    cmd_env = os.environ.copy()
-    if env:
-        cmd_env.update(env)
-    cmd_env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    cmd_env = git_subprocess_env(env)
     try:
         git_identity = trusted_git(cmd_env)
     except RuntimeError as exc:
@@ -979,6 +976,8 @@ def acquire_and_verify_candidate(
     # G+H: Exact readback only after all caller-supplied request material has
     # been validated against its bound hashes.
     # -----------------------------------------------------------------------
+    repo = request.repo_path.resolve()
+    _assert_no_git_replace_refs(repo)
     existing = _find_receipt_by_request_hash(
         request.receipt_directory, request.request_hash
     )
@@ -1005,9 +1004,6 @@ def acquire_and_verify_candidate(
             / _receipt_path_for(existing),
             replayed=True,
         )
-
-    repo = request.repo_path.resolve()
-    _assert_no_git_replace_refs(repo)
 
     # -----------------------------------------------------------------------
     # 4. Determine source tree from the expected_source_identity commit.
