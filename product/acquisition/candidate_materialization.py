@@ -47,6 +47,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, cast
 
+from product.acquisition.trusted_git import (
+    git_subprocess_env,
+    trusted_git,
+    trusted_git_argv,
+    validate_git_repository,
+    verify_git_repository_snapshot,
+)
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -57,7 +64,6 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.acquisition.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -215,6 +221,7 @@ def _run_git(
         ) from exc
     executable = str(git_identity["path"])
     try:
+        snapshot = validate_git_repository(executable, cwd)
         command = trusted_git_argv(executable, *args, cwd=cwd)
         command[0] = "git"
         result = subprocess.run(
@@ -228,11 +235,15 @@ def _run_git(
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
         result.args = [executable, *command[1:]]
+        current = validate_git_repository(executable, cwd)
+        verify_git_repository_snapshot(snapshot, current)
         return result
     except subprocess.TimeoutExpired as exc:
         raise CandidateAcquisitionError("GIT_TIMEOUT", str(exc)) from exc
     except OSError as exc:
         raise CandidateAcquisitionError("GIT_UNAVAILABLE", str(exc)) from exc
+    except ValueError as exc:
+        raise CandidateAcquisitionError("GIT_REPOSITORY_UNTRUSTED", str(exc)) from exc
 
 
 def _assert_no_git_replace_refs(repo: Path) -> None:

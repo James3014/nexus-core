@@ -1191,6 +1191,7 @@ def test_verifier_timeout_kills_backgrounded_grandchildren(
 def test_git_timeout_is_structured_error(tmp_path: Path) -> None:
     """#167: a hung git call surfaces as CandidateAcquisitionError."""
     real_run = subprocess.run
+    subprocess.run(["git", "-C", str(tmp_path), "init"], check=True, capture_output=True)
 
     def timeout_status(args: Any, **kwargs: Any) -> Any:
         if args[-1] == "status":
@@ -1210,6 +1211,7 @@ def test_acquisition_git_resolution_ignores_path_shim(
     repo = tmp_path / "repo"
     caller.mkdir()
     repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init"], check=True, capture_output=True)
     executable = caller / "git"
     executable.write_text("#!/bin/sh\necho PATH-SHIM\n", encoding="utf-8")
     executable.chmod(0o755)
@@ -1230,16 +1232,15 @@ def test_acquisition_refuses_git_replace_refs(
     replacement = _git_out(base_repo, "rev-parse", "HEAD^")
     _git(base_repo, "update-ref", f"refs/replace/{head}", replacement)
     monkeypatch.setenv("GIT_NO_REPLACE_OBJECTS", "0")
-    expected_tree = _git_out(
-        base_repo, "--no-replace-objects", "rev-parse", "HEAD^{tree}"
-    )
-    assert candidate_module._git_stdout(base_repo, "rev-parse", "HEAD^{tree}") == expected_tree
+    with pytest.raises(CandidateAcquisitionError) as guarded:
+        candidate_module._git_stdout(base_repo, "rev-parse", "HEAD^{tree}")
+    assert guarded.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
 
     request = _build_request(base_repo, receipt_dir=base_repo.parent / "receipts")
     with pytest.raises(CandidateAcquisitionError) as exc_info:
         _acquire(request)
 
-    assert exc_info.value.reason_code == "GIT_REPLACE_REFS_PRESENT"
+    assert exc_info.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
 
 
 def test_run_git_uses_environment_allowlist(
@@ -1279,9 +1280,9 @@ def test_run_git_ignores_repo_local_execution_config(
         check=True,
     )
 
-    result = candidate_module._run_git(repo, "status", "--porcelain")
-
-    assert result.returncode == 0
+    with pytest.raises(CandidateAcquisitionError) as raised:
+        candidate_module._run_git(repo, "status", "--porcelain")
+    assert raised.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
     assert not marker.exists()
     assert "filter.custom.process=" in candidate_module.trusted_git_argv(
         "/usr/bin/git", "status", cwd=repo
@@ -1297,4 +1298,4 @@ def test_replay_rechecks_git_replace_refs(base_repo: Path, tmp_path: Path) -> No
     _git(base_repo, "update-ref", f"refs/replace/{head}", replacement)
     with pytest.raises(CandidateAcquisitionError) as exc_info:
         _acquire(req)
-    assert exc_info.value.reason_code == "GIT_REPLACE_REFS_PRESENT"
+    assert exc_info.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"

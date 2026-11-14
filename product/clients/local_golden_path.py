@@ -30,6 +30,13 @@ from typing import Any, Mapping, NoReturn, Sequence, cast
 
 from product.adapters.generic_verification import verify_generic_changeset
 from product.clients import gate_diagnostics, owner_deletion_exception
+from product.clients.trusted_git import (
+    git_subprocess_env,
+    trusted_git,
+    trusted_git_argv,
+    validate_git_repository,
+    verify_git_repository_snapshot,
+)
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -40,7 +47,6 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.clients.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
 
 CONFIG_DIRECTORY = ".nexus-core"
 CONFIG_FILENAME = "config.toml"
@@ -124,6 +130,7 @@ def _run_git(
         raise LocalCheckError("GIT_UNAVAILABLE", str(exc)) from exc
     executable = str(git_identity["path"])
     try:
+        snapshot = validate_git_repository(executable, repo)
         command = trusted_git_argv(executable, *args, cwd=repo)
         result = subprocess.run(
             command,
@@ -133,7 +140,11 @@ def _run_git(
             text=text,
             check=False,
         )
+        current = validate_git_repository(executable, repo)
+        verify_git_repository_snapshot(snapshot, current)
         return result
+    except ValueError as exc:
+        raise LocalCheckError("GIT_REPOSITORY_UNTRUSTED", str(exc)) from exc
     except OSError as exc:
         raise LocalCheckError("GIT_UNAVAILABLE", str(exc)) from exc
 
@@ -146,6 +157,17 @@ def _resolve_executable(
     resolve_symlinks: bool = True,
     config_knob: str = "PATH",
 ) -> str:
+    if name == "/usr/bin/env" or name == "env":
+        raise LocalCheckError(
+            "EXECUTABLE_UNAVAILABLE", "absolute Python interpreter required; /usr/bin/env is forbidden"
+        )
+    if Path(name).name in {"python", "python3"}:
+        interpreter = Path(name) if Path(name).is_absolute() else Path(sys.executable)
+        if not interpreter.is_absolute() or not interpreter.is_file() or not os.access(interpreter, os.X_OK):
+            raise LocalCheckError(
+                "EXECUTABLE_UNAVAILABLE", "absolute Python interpreter is unavailable"
+            )
+        return str(interpreter.absolute())
     if "/" in name:
         target = Path(name)
         if not target.is_absolute() and cwd is not None:

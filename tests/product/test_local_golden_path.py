@@ -1713,13 +1713,14 @@ def test_local_check_refuses_git_replace_refs(
 
     from product.clients import local_golden_path as lgp
 
-    expected_tree = _git(external_repo, "--no-replace-objects", "rev-parse", "HEAD^{tree}")
-    assert lgp._git_stdout(external_repo, "rev-parse", "HEAD^{tree}") == expected_tree
+    with pytest.raises(LocalCheckError) as guarded:
+        lgp._git_stdout(external_repo, "rev-parse", "HEAD^{tree}")
+    assert guarded.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
 
     with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
 
-    assert raised.value.reason_code == "GIT_REPLACE_REFS_PRESENT"
+    assert raised.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
 
 
 def test_process_verifier_records_and_runs_resolved_executable(external_repo: Path):
