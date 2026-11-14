@@ -57,7 +57,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.runtime.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
+from product.acquisition.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -215,8 +215,11 @@ def _run_git(
         ) from exc
     executable = str(git_identity["path"])
     try:
-        return subprocess.run(
-            trusted_git_argv(executable, *args, cwd=cwd),
+        command = trusted_git_argv(executable, *args, cwd=cwd)
+        command[0] = "git"
+        result = subprocess.run(
+            command,
+            executable=executable,
             cwd=cwd,
             env=cmd_env,
             capture_output=True,
@@ -224,6 +227,8 @@ def _run_git(
             check=False,
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
+        result.args = [executable, *command[1:]]
+        return result
     except subprocess.TimeoutExpired as exc:
         raise CandidateAcquisitionError("GIT_TIMEOUT", str(exc)) from exc
     except OSError as exc:

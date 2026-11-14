@@ -158,14 +158,15 @@ def trusted_git(env: Mapping[str, str] | None = None) -> dict[str, Any]:
             cache_key = (str(path), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
             reported_version = _VERSION_CACHE.get(cache_key)
             if reported_version is None:
-                version = subprocess.run(
+                version = subprocess.Popen(
                     trusted_git_argv(str(path), "--version"),
-                    capture_output=True, text=True, check=False,
-                    env={**values, "GIT_NO_REPLACE_OBJECTS": "1"},
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    env=git_subprocess_env(),
                 )
+                version_stdout, _ = version.communicate()
                 if version.returncode != 0:
                     raise ValueError("--version failed")
-                reported_version = version.stdout.strip().splitlines()[0]
+                reported_version = version_stdout.strip().splitlines()[0]
                 _VERSION_CACHE[cache_key] = reported_version
             after = path.stat()
             if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != (

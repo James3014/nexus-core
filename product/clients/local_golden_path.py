@@ -40,7 +40,7 @@ from product.protocol.generic_verification import (
     evidence_bundle_hash,
     verification_plan_hash,
 )
-from product.runtime.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
+from product.clients.trusted_git import git_subprocess_env, trusted_git, trusted_git_argv
 
 CONFIG_DIRECTORY = ".nexus-core"
 CONFIG_FILENAME = "config.toml"
@@ -124,14 +124,16 @@ def _run_git(
         raise LocalCheckError("GIT_UNAVAILABLE", str(exc)) from exc
     executable = str(git_identity["path"])
     try:
-        return subprocess.run(
-            trusted_git_argv(executable, *args, cwd=repo),
+        command = trusted_git_argv(executable, *args, cwd=repo)
+        result = subprocess.run(
+            command,
             cwd=repo,
             env=command_env,
             capture_output=True,
             text=text,
             check=False,
         )
+        return result
     except OSError as exc:
         raise LocalCheckError("GIT_UNAVAILABLE", str(exc)) from exc
 
