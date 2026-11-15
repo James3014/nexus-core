@@ -212,7 +212,7 @@ def test_python_interpreter_never_uses_path_or_env_shim(
     "name",
     [
         "python3.13t", "python3.12d", "python3.12m", "pythonw",
-        "python-config", "Python3", "PYTHON3", "Python3.14", "pypy3",
+        "python-config", "Python", "PYTHON", "Python3", "PYTHON3", "Python3.14", "pypy3",
     ],
 )
 def test_python_interpreter_name_variants_never_use_path(
