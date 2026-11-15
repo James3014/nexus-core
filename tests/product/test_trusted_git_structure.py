@@ -11,7 +11,11 @@ import pytest
 
 from product.clients import local_golden_path as lgp
 from product.clients.trusted_git import git_subprocess_env
-from product.protocol._trusted_git import validate_git_repository, verify_git_repository_snapshot
+from product.protocol._trusted_git import (
+    trusted_git_argv,
+    validate_git_repository,
+    verify_git_repository_snapshot,
+)
 
 
 def _init_repo(path: Path) -> Path:
@@ -202,6 +206,70 @@ def test_python_interpreter_never_uses_path_or_env_shim(
         _resolve_executable("/usr/bin/env", os.environ.get("PATH"))
     with pytest.raises(LocalCheckError, match="absolute Python interpreter"):
         _resolve_executable("/missing/python3.14", os.environ.get("PATH"))
+
+
+@pytest.mark.parametrize(
+    "name", ["python3.13t", "python3.12d", "python3.12m", "pythonw", "python-config", "Python3", "pypy3"]
+)
+def test_python_interpreter_name_variants_never_use_path(
+    tmp_path: Path, name: str
+) -> None:
+    from product.clients.local_golden_path import _resolve_executable
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake = fake_bin / name
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+
+    assert _resolve_executable(name, str(fake_bin)) == str(Path(sys.executable).absolute())
+
+
+@pytest.mark.parametrize("nested_name", [".GIT", ".Git"])
+def test_case_variant_nested_git_directory_is_rejected(
+    tmp_path: Path, nested_name: str
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    nested = repo / "vendor"
+    subprocess.run(["git", "-C", str(repo), "init", "-q", str(nested)], check=True)
+    (nested / ".git").rename(nested / nested_name)
+
+    with pytest.raises(lgp.LocalCheckError, match="GIT_REPOSITORY_UNTRUSTED"):
+        _run(repo)
+
+
+def test_case_variant_nested_git_metadata_file_is_rejected(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    nested = repo / "vendor"
+    nested.mkdir()
+    (nested / ".Git").write_text("gitdir: ../.git/worktrees/vendor\n", encoding="utf-8")
+
+    with pytest.raises(lgp.LocalCheckError, match="GIT_REPOSITORY_UNTRUSTED"):
+        _run(repo)
+
+
+@pytest.mark.parametrize("subcommand", ["diff", "show", "log", "whatchanged"])
+def test_history_command_safety_flags_follow_config_overrides(subcommand: str) -> None:
+    command = trusted_git_argv(
+        "/usr/bin/git", "-c", "user.name=caller", subcommand, "--stat"
+    )
+
+    subcommand_index = command.index(subcommand)
+    assert command[subcommand_index + 1 : subcommand_index + 3] == [
+        "--no-ext-diff", "--no-textconv"
+    ]
+
+
+@pytest.mark.parametrize("subcommand", ["diff", "show", "log", "whatchanged"])
+def test_history_command_safety_flags_remain_without_config_overrides(
+    subcommand: str,
+) -> None:
+    command = trusted_git_argv("/usr/bin/git", subcommand, "--stat")
+
+    subcommand_index = command.index(subcommand)
+    assert command[subcommand_index + 1 : subcommand_index + 3] == [
+        "--no-ext-diff", "--no-textconv"
+    ]
 
 
 @pytest.mark.parametrize("command", ["diff", "status", "diff-files"])

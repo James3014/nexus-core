@@ -1,6 +1,6 @@
 # HANDOFF
 
-更新：2026-11-15 · by Codex · HEAD `c877378`
+更新：2026-11-15 · by Codex · HEAD `4b6fe3b`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
@@ -10,7 +10,7 @@
 - 無。
 
 ## 待確認（沒有 Issue 號）
-- trusted Git structural fix (PR #317 follow-up): shared guard scans nested `.git` entries, allows only known local config keys case-insensitively, permits only `GIT_INDEX_FILE` from caller extras, and pins commit-graph off after caller config. Python interpreter lookup rejects all `env` paths and prevents versioned interpreter names from resolving through PATH. Regression set: `tests/product/test_trusted_git_structure.py` 103 passed. Six-file core set: 541 passed, 2 skipped, 38 architecture fixture errors because loopback binds are denied (`PermissionError: [Errno 1] Operation not permitted`). The new regression subset was red against the original guard (54 failed, 4 passed), then green after the fix. `git diff --check` clean. No repository Issue supplied; issue-init / issue-check not run.
+- #317 round-2 follow-up: nested `.git` checks are case-insensitive, history safety flags survive leading `-c` options, and Python interpreter name variants use the trusted interpreter. New regressions were red against the reviewed implementation (14 failed) and green after the fixes (18 passed). `uv run pytest -q tests/product/test_trusted_git_structure.py`: 121 passed; `uv run ruff check product tests`: passed with a workspace-local UV cache. No commit or push.
 
 ## 完成
 - #243 已完成（PR #249）：local Golden Path 以 trusted base tip 綁定 config，使用唯一 merge-base 作為 source revision。

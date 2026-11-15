@@ -100,7 +100,7 @@ def _reject_nested_git_metadata(worktree: Path) -> None:
         directory = Path(current)
         for name in (*dirs, *files):
             item = directory / name
-            if name == ".git" and item.parent != worktree:
+            if name.casefold() == ".git" and item.parent != worktree:
                 raise ValueError(f"nested Git metadata is not permitted: {item}")
         # The top-level .git directory is administrative data, not worktree content.
         if directory == worktree and ".git" in dirs:
@@ -273,11 +273,54 @@ def trusted_git_argv(
     for key, value in overrides:
         command.extend(("-c", f"{key}={value}"))
     pinned_args = _history_pinned_args(args)
-    if pinned_args and pinned_args[0] in {"diff", "show", "log", "whatchanged"}:
-        command.extend((pinned_args[0], "--no-ext-diff", "--no-textconv", *pinned_args[1:]))
+    subcommand_index = _git_subcommand_index(pinned_args)
+    if (
+        subcommand_index < len(pinned_args)
+        and pinned_args[subcommand_index] in {"diff", "show", "log", "whatchanged"}
+    ):
+        command.extend(
+            (
+                *pinned_args[:subcommand_index],
+                pinned_args[subcommand_index],
+                "--no-ext-diff",
+                "--no-textconv",
+                *pinned_args[subcommand_index + 1 :],
+            )
+        )
     else:
         command.extend(pinned_args)
     return command
+
+
+def _git_subcommand_index(args: list[str]) -> int:
+    """Find the command after Git's leading global options."""
+    takes_value = {
+        "-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace",
+        "--exec-path",
+    }
+    standalone = {
+        "--no-pager", "--paginate", "--no-replace-objects", "--bare", "--version",
+        "--help",
+    }
+    index = 0
+    while index < len(args):
+        option = args[index]
+        if option in takes_value:
+            index += 2
+        elif option in standalone:
+            index += 1
+        elif (
+            option.startswith("--config-env=")
+            or option.startswith("--git-dir=")
+            or option.startswith("--work-tree=")
+            or option.startswith("--namespace=")
+            or option.startswith("--exec-path=")
+            or (option.startswith("-c") and len(option) > 2)
+        ):
+            index += 1
+        else:
+            return index
+    return index
 
 
 def _history_pinned_args(args: tuple[str, ...]) -> list[str]:

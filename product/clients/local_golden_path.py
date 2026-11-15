@@ -161,7 +161,11 @@ def _resolve_executable(
         raise LocalCheckError(
             "EXECUTABLE_UNAVAILABLE", "absolute Python interpreter required; env is forbidden"
         )
-    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(name).name):
+    if re.fullmatch(
+        r"(?:python(?:\d+(?:\.\d+)*[a-z]*|w|-config)?|pypy\d*(?:\.\d+)*)",
+        Path(name).name,
+        flags=re.IGNORECASE,
+    ):
         interpreter = Path(name) if Path(name).is_absolute() else Path(sys.executable)
         if not interpreter.is_absolute() or not interpreter.is_file() or not os.access(interpreter, os.X_OK):
             raise LocalCheckError(
