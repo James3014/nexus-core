@@ -209,7 +209,11 @@ def test_python_interpreter_never_uses_path_or_env_shim(
 
 
 @pytest.mark.parametrize(
-    "name", ["python3.13t", "python3.12d", "python3.12m", "pythonw", "python-config", "Python3", "pypy3"]
+    "name",
+    [
+        "python3.13t", "python3.12d", "python3.12m", "pythonw",
+        "python-config", "Python3", "PYTHON3", "Python3.14", "pypy3",
+    ],
 )
 def test_python_interpreter_name_variants_never_use_path(
     tmp_path: Path, name: str
@@ -225,7 +229,7 @@ def test_python_interpreter_name_variants_never_use_path(
     assert _resolve_executable(name, str(fake_bin)) == str(Path(sys.executable).absolute())
 
 
-@pytest.mark.parametrize("nested_name", [".GIT", ".Git"])
+@pytest.mark.parametrize("nested_name", [".GIT", ".Git", ".gIt"])
 def test_case_variant_nested_git_directory_is_rejected(
     tmp_path: Path, nested_name: str
 ) -> None:
@@ -238,11 +242,34 @@ def test_case_variant_nested_git_directory_is_rejected(
         _run(repo)
 
 
-def test_case_variant_nested_git_metadata_file_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("nested_name", [".GIT", ".Git", ".gIt"])
+def test_case_variant_nested_git_metadata_file_is_rejected(
+    tmp_path: Path, nested_name: str
+) -> None:
     repo = _init_repo(tmp_path / "repo")
     nested = repo / "vendor"
     nested.mkdir()
-    (nested / ".Git").write_text("gitdir: ../.git/worktrees/vendor\n", encoding="utf-8")
+    (nested / nested_name).write_text(
+        "gitdir: ../.git/worktrees/vendor\n", encoding="utf-8"
+    )
+
+    with pytest.raises(lgp.LocalCheckError, match="GIT_REPOSITORY_UNTRUSTED"):
+        _run(repo)
+
+
+@pytest.mark.parametrize("nested_name", [".GIT", ".Git", ".gIt"])
+@pytest.mark.parametrize("metadata_kind", ["directory", "file"])
+def test_case_variant_nested_git_metadata_at_depth_is_rejected(
+    tmp_path: Path, nested_name: str, metadata_kind: str
+) -> None:
+    repo = _init_repo(tmp_path / "repo")
+    nested = repo / "vendor" / "level-two"
+    nested.mkdir(parents=True)
+    metadata = nested / nested_name
+    if metadata_kind == "directory":
+        metadata.mkdir()
+    else:
+        metadata.write_text("gitdir: ../../../.git/worktrees/vendor\n", encoding="utf-8")
 
     with pytest.raises(lgp.LocalCheckError, match="GIT_REPOSITORY_UNTRUSTED"):
         _run(repo)
@@ -252,6 +279,51 @@ def test_case_variant_nested_git_metadata_file_is_rejected(tmp_path: Path) -> No
 def test_history_command_safety_flags_follow_config_overrides(subcommand: str) -> None:
     command = trusted_git_argv(
         "/usr/bin/git", "-c", "user.name=caller", subcommand, "--stat"
+    )
+
+    subcommand_index = command.index(subcommand)
+    assert command[subcommand_index + 1 : subcommand_index + 3] == [
+        "--no-ext-diff", "--no-textconv"
+    ]
+
+
+@pytest.mark.parametrize("subcommand", ["diff", "show", "log", "whatchanged"])
+@pytest.mark.parametrize(
+    "config_key",
+    ["CORE.COMMITGRAPH", "Core.UseReplaceRefs", "Core.GraftFile"],
+)
+def test_history_safety_flags_survive_case_variant_config_keys(
+    subcommand: str, config_key: str
+) -> None:
+    command = trusted_git_argv(
+        "/usr/bin/git", "-c", f"{config_key}=true", subcommand, "--stat"
+    )
+
+    subcommand_index = command.index(subcommand)
+    assert command[subcommand_index + 1 : subcommand_index + 3] == [
+        "--no-ext-diff", "--no-textconv"
+    ]
+
+
+@pytest.mark.parametrize("subcommand", ["diff", "show", "log", "whatchanged"])
+@pytest.mark.parametrize(
+    "leading_options",
+    [
+        ("--no-pager",),
+        ("-C", "/tmp/repo"),
+        ("--git-dir=/tmp/repo/.git",),
+    ],
+)
+def test_history_safety_flags_survive_leading_options_and_config(
+    subcommand: str, leading_options: tuple[str, ...]
+) -> None:
+    command = trusted_git_argv(
+        "/usr/bin/git",
+        *leading_options,
+        "-c",
+        "user.name=caller",
+        subcommand,
+        "--stat",
     )
 
     subcommand_index = command.index(subcommand)
