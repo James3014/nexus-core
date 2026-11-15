@@ -20,6 +20,7 @@ _VERSION_CACHE: dict[tuple[str, int, int, int, int], str] = {}
 _ENV_ALLOWLIST = ("LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "SYSTEMROOT", "TZ")
 
 _GIT_CONFIG_OVERRIDES = (
+    ("core.commitGraph", "false"),
     ("core.fsmonitor", "false"),
     ("core.hooksPath", os.devnull),
     ("core.sshCommand", ""),
@@ -35,6 +36,7 @@ _GIT_CONFIG_OVERRIDES = (
 )
 
 _CONFIG_COUNT_OVERRIDES = (
+    ("core.commitGraph", "false"),
     ("core.fsmonitor", "false"),
     ("core.hooksPath", os.devnull),
     ("core.sshCommand", ""),
@@ -89,8 +91,43 @@ def _walk_no_symlinks(root: Path) -> None:
                 raise ValueError(f"symlink in Git metadata: {item}")
 
 
+def _reject_nested_git_metadata(worktree: Path) -> None:
+    """Reject nested repositories before any Git command can inspect their files."""
+    def fail_scan(error: OSError) -> None:
+        raise ValueError(f"cannot scan worktree for nested Git metadata: {error}") from error
+
+    for current, dirs, files in os.walk(worktree, followlinks=False, onerror=fail_scan):
+        directory = Path(current)
+        for name in (*dirs, *files):
+            item = directory / name
+            if name == ".git" and item.parent != worktree:
+                raise ValueError(f"nested Git metadata is not permitted: {item}")
+        # The top-level .git directory is administrative data, not worktree content.
+        if directory == worktree and ".git" in dirs:
+            dirs.remove(".git")
+
+
+def _repo_config_key_allowed(key: str) -> bool:
+    key = key.lower()
+    if key.startswith("user.") or key.startswith("branch."):
+        return True
+    return key in {
+        "core.bare",
+        "core.commitgraph",
+        "core.filemode",
+        "core.ignorecase",
+        "core.logallrefupdates",
+        "core.precomposeunicode",
+        "core.repositoryformatversion",
+        "extensions.objectformat",
+        "remote.origin.fetch",
+        "remote.origin.url",
+    }
+
+
 def validate_git_repository(executable: str, cwd: Path) -> dict[str, tuple[int, int]]:
     """Validate Git metadata and execution config around one trusted command."""
+    _reject_nested_git_metadata(Path(cwd).resolve(strict=True))
     env = _config_env(git_subprocess_env())
 
     def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -159,12 +196,7 @@ def validate_git_repository(executable: str, cwd: Path) -> dict[str, tuple[int, 
         if origin.startswith("command line:"):
             continue
         key = entry.split("=", 1)[0].lower()
-        execution_key = (
-            key.startswith(("filter.", "include.", "includeif."))
-            or key in {"core.fsmonitor", "core.hookspath", "extensions.worktreeconfig"}
-            or key.startswith("diff.") and key.rsplit(".", 1)[-1] in {"command", "textconv"}
-        )
-        if execution_key:
+        if not _repo_config_key_allowed(key):
             raise ValueError(f"execution-capable or unsupported Git config: {key}")
     before: dict[str, tuple[int, int]] = {}
     for label, root in (("@gitdir", git_dir), ("@common", common_dir)):
@@ -240,11 +272,81 @@ def trusted_git_argv(
     command = [executable]
     for key, value in overrides:
         command.extend(("-c", f"{key}={value}"))
-    if args and args[0] in {"diff", "show", "log", "whatchanged"}:
-        command.extend((args[0], "--no-ext-diff", "--no-textconv", *args[1:]))
+    pinned_args = _history_pinned_args(args)
+    if pinned_args and pinned_args[0] in {"diff", "show", "log", "whatchanged"}:
+        command.extend((pinned_args[0], "--no-ext-diff", "--no-textconv", *pinned_args[1:]))
     else:
-        command.extend(args)
+        command.extend(pinned_args)
     return command
+
+
+def _history_pinned_args(args: tuple[str, ...]) -> list[str]:
+    """Remove caller history/config-include overrides and pin them after Git options."""
+    values = [str(arg) for arg in args]
+    protected = {"core.commitgraph", "core.usereplacerefs", "core.graftfile"}
+
+    def is_protected(setting: str) -> bool:
+        key = setting.split("=", 1)[0].lower()
+        return (
+            key in protected
+            or key.startswith(("include.", "includeif."))
+        )
+
+    result: list[str] = []
+    index = 0
+    while index < len(values):
+        arg = values[index]
+        if arg == "-c" and index + 1 < len(values):
+            setting = values[index + 1]
+            if is_protected(setting):
+                index += 2
+                continue
+            result.extend((arg, setting))
+            index += 2
+            continue
+        if arg.startswith("--config-env="):
+            if is_protected(arg[len("--config-env=") :]):
+                index += 1
+                continue
+        elif arg == "--config-env" and index + 1 < len(values):
+            if is_protected(values[index + 1]):
+                index += 2
+                continue
+            result.extend((arg, values[index + 1]))
+            index += 2
+            continue
+        elif arg.startswith("-c") and len(arg) > 2:
+            if is_protected(arg[2:]):
+                index += 1
+                continue
+        result.append(arg)
+        index += 1
+
+    at = 0
+    takes_value = {"-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+    standalone = {"--no-pager", "--paginate", "--no-replace-objects", "--bare", "--version", "--help"}
+    while at < len(result):
+        option = result[at]
+        if option in takes_value and at + 1 < len(result):
+            at += 2
+        elif option in standalone:
+            # --version/--help are commands from Git's global option parser, so put
+            # our -c pins before them, not after them.
+            if option in {"--version", "--help"}:
+                break
+            at += 1
+        elif option.startswith("--git-dir=") or option.startswith("--work-tree=") or option.startswith("--namespace=") or option.startswith("--exec-path="):
+            at += 1
+        elif option.startswith("-c") and len(option) > 2:
+            at += 1
+        else:
+            break
+    result[at:at] = [
+        "-c", "core.commitGraph=false",
+        "-c", "core.useReplaceRefs=false",
+        "-c", f"core.graftFile={os.devnull}",
+    ]
+    return result
 
 
 def git_subprocess_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -255,8 +357,8 @@ def git_subprocess_env(extra: Mapping[str, str] | None = None) -> dict[str, str]
         env[SETTING] = os.environ[SETTING]
     env["GIT_CONFIG_NOSYSTEM"] = "1"
     env["GIT_CONFIG_GLOBAL"] = os.devnull
-    if extra:
-        env.update(extra)
+    if extra and "GIT_INDEX_FILE" in extra:
+        env["GIT_INDEX_FILE"] = extra["GIT_INDEX_FILE"]
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return _config_env(env)
 

@@ -1,6 +1,6 @@
 # HANDOFF
 
-更新：2026-11-15 · by Codex · HEAD `5e56f06`
+更新：2026-11-15 · by Codex · HEAD `c877378`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
@@ -10,7 +10,7 @@
 - 無。
 
 ## 待確認（沒有 Issue 號）
-- trusted Git 修正續作：代表性 local receipt、tracked config、sandbox、resolved interpreter 測試通過；candidate acquisition 28 passed，candidate materialization 32 passed。六檔驗證執行一次；architecture + trusted-git structure 子集為 174 passed、1 skipped、38 errors，錯誤皆為 loopback fixture bind 被 sandbox 拒絕 (`PermissionError: [Errno 1] Operation not permitted`)。issue pinned-Git 測試已調整為只計算兩個 helper 操作，仍檢查每次 Git subprocess 的絕對路徑與 replacement objects 關閉。未提供 repository Issue，未執行 issue-init / issue-check。
+- trusted Git structural fix (PR #317 follow-up): shared guard scans nested `.git` entries, allows only known local config keys case-insensitively, permits only `GIT_INDEX_FILE` from caller extras, and pins commit-graph off after caller config. Python interpreter lookup rejects all `env` paths and prevents versioned interpreter names from resolving through PATH. Regression set: `tests/product/test_trusted_git_structure.py` 103 passed. Six-file core set: 541 passed, 2 skipped, 38 architecture fixture errors because loopback binds are denied (`PermissionError: [Errno 1] Operation not permitted`). The new regression subset was red against the original guard (54 failed, 4 passed), then green after the fix. `git diff --check` clean. No repository Issue supplied; issue-init / issue-check not run.
 
 ## 完成
 - #243 已完成（PR #249）：local Golden Path 以 trusted base tip 綁定 config，使用唯一 merge-base 作為 source revision。

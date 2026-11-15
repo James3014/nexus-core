@@ -157,11 +157,11 @@ def _resolve_executable(
     resolve_symlinks: bool = True,
     config_knob: str = "PATH",
 ) -> str:
-    if name == "/usr/bin/env" or name == "env":
+    if Path(name).name == "env":
         raise LocalCheckError(
-            "EXECUTABLE_UNAVAILABLE", "absolute Python interpreter required; /usr/bin/env is forbidden"
+            "EXECUTABLE_UNAVAILABLE", "absolute Python interpreter required; env is forbidden"
         )
-    if Path(name).name in {"python", "python3"}:
+    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", Path(name).name):
         interpreter = Path(name) if Path(name).is_absolute() else Path(sys.executable)
         if not interpreter.is_absolute() or not interpreter.is_file() or not os.access(interpreter, os.X_OK):
             raise LocalCheckError(
