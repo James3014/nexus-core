@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -31,6 +32,81 @@ from product.protocol.generic_verification import (
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
     return result.stdout.strip()
+
+
+def test_verifier_resolution_uses_sandbox_cwd_for_relative_path_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from product.clients import local_golden_path as lgp
+
+    caller = tmp_path / "caller"
+    sandbox = tmp_path / "sandbox"
+    caller.mkdir()
+    sandbox.mkdir()
+    for directory in (caller, sandbox):
+        executable = directory / "verify"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+
+    monkeypatch.chdir(caller)
+    resolved = lgp._resolve_executable(
+        "verify", ".", cwd=sandbox, config_knob="verifier_command"
+    )
+
+    assert resolved == str(sandbox / "verify")
+
+
+def test_verifier_preflight_uses_execution_cwd_for_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from product.clients import local_golden_path as lgp
+
+    caller = tmp_path / "caller"
+    sandbox = tmp_path / "sandbox"
+    caller.mkdir()
+    sandbox.mkdir()
+    executable = sandbox / "verify"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o755)
+    monkeypatch.chdir(caller)
+    monkeypatch.setenv("PATH", ".")
+
+    assert lgp._command_available(sandbox, ["verify"])
+
+
+def test_trusted_git_uses_supported_absolute_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    from product.runtime.trusted_git import trusted_git
+
+    monkeypatch.delenv("TRUSTED_GIT_EXECUTABLE", raising=False)
+    identity = trusted_git({"PATH": "/missing"})
+    assert identity["source"] == "default"
+    assert Path(identity["path"]).is_absolute()
+    assert identity["sha256"]
+    assert identity["version"].startswith("git version")
+
+
+def test_trusted_git_ignores_path_shim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from product.runtime.trusted_git import trusted_git
+
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "git"
+    shim.write_text("#!/bin/sh\necho PATH-SHIM\n", encoding="utf-8")
+    shim.chmod(0o755)
+    monkeypatch.delenv("TRUSTED_GIT_EXECUTABLE", raising=False)
+    identity = trusted_git({"PATH": str(shim_dir)})
+    assert identity["path"] != str(shim)
+    assert identity["source"] == "default"
+
+
+def test_trusted_git_rejects_caller_writable_override(tmp_path: Path) -> None:
+    from product.runtime.trusted_git import trusted_git
+
+    shim = tmp_path / "git"
+    shim.write_text("#!/bin/sh\necho git version malicious\n", encoding="utf-8")
+    shim.chmod(0o755)
+    with pytest.raises(RuntimeError, match="TRUSTED_GIT_EXECUTABLE"):
+        trusted_git({"TRUSTED_GIT_EXECUTABLE": str(shim), "PATH": "/missing"})
 
 
 @pytest.fixture
@@ -1152,6 +1228,13 @@ def test_sandbox_has_no_origin_and_cannot_reach_original_repository(external_rep
     assert artifact["exit_code"] != 0
     assert artifact["execution_subject"]["mode"] == "isolated_detached_clone"
     assert artifact["execution_subject"]["isolation"] == {"mode": "process"}
+    git_evidence = artifact["execution_subject"]["executables"]["git"]
+    assert git_evidence["path"] == artifact["execution_subject"]["executables"]["verifier"]
+    assert git_evidence["sha256"] == hashlib.sha256(
+        Path(git_evidence["path"]).read_bytes()
+    ).hexdigest()
+    assert git_evidence["version"].startswith("git version")
+    assert git_evidence["source"] in {"default", "config", "environment"}
     assert (external_repo / ".git" / "config").read_text(encoding="utf-8") == git_config_before
     assert not (external_repo / ".nexus-core" / "planted").exists()
 
@@ -1291,7 +1374,10 @@ def test_container_mode_without_docker_fails_closed(
     _v2_config(
         external_repo,
         ["sh", "-c", "true"],
-        top=f'[isolation]\nmode = "container"\nimage = "alpine:3.20@{_FAKE_DIGEST}"',
+        top=(
+            '[isolation]\nmode = "container"\n'
+            f'image = "gcr.io/distroless/static-debian12:nonroot@{_FAKE_DIGEST}"'
+        ),
     )
     with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
@@ -1541,6 +1627,12 @@ def _probe_docker(root: Path, mode: str) -> Path:
             if mode == "right"
             else "    echo wrong-nonce;;\n"
         )
+        + '  *"-e PATH="*) echo "host-path" >> '
+        + str(calls)
+        + ";;\n"
+        + '  *"--entrypoint sh"*) echo "shell-entrypoint" >> '
+        + str(calls)
+        + '; echo "shell-less image has no /bin/sh" >&2; exit 125;;\n'
         + '  *) echo "verifier" >> '
         + str(calls)
         + "; exit 0;;\n"
@@ -1555,7 +1647,7 @@ def _probe_cfg(repo: Path) -> None:
     (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
     _v2_config(
         repo,
-        ["sh", "-c", "true"],
+        ["/usr/bin/verifier", "--run"],
         top=f'[isolation]\nmode = "container"\nimage = "alpine:3.20@{_FAKE_DIGEST}"',
     )
 
@@ -1565,6 +1657,9 @@ def test_mount_probe_wrong_nonce_fails_closed_with_receipt(
 ):
     bin_dir = _probe_docker(tmp_path / "wrong", "wrong")
     _prepend_path(monkeypatch, bin_dir)
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+    monkeypatch.setenv("NEXUS_CERTIFY_SANDBOX_ROOT", str(sandbox_root))
     _probe_cfg(external_repo)
     with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
@@ -1574,11 +1669,14 @@ def test_mount_probe_wrong_nonce_fails_closed_with_receipt(
     assert (bin_dir / "docker-calls.txt").read_text().splitlines() == ["inspect", "probe"]
 
 
-def test_mount_probe_right_nonce_proceeds_to_verifier(
+def test_shellless_container_proceeds_to_verifier_without_shell_preflight(
     external_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     bin_dir = _probe_docker(tmp_path / "right", "right")
     _prepend_path(monkeypatch, bin_dir)
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir()
+    monkeypatch.setenv("NEXUS_CERTIFY_SANDBOX_ROOT", str(sandbox_root))
     _probe_cfg(external_repo)
     result = check_repository(external_repo)
     assert result["status"] == "VERIFIED"
@@ -1587,10 +1685,52 @@ def test_mount_probe_right_nonce_proceeds_to_verifier(
         "probe",
         "verifier",
     ]
+    assert "shell-entrypoint" not in (bin_dir / "docker-calls.txt").read_text()
     receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
     assert receipt["evidence_artifacts"][0]["execution_subject"]["isolation"]["mount_probe"] == (
         "PASS"
     )
+    assert receipt["evidence_artifacts"][0]["execution_subject"]["executables"]["docker"] == str(
+        (bin_dir / "docker").resolve()
+    )
+    assert receipt["evidence_artifacts"][0]["execution_subject"]["verifier_command"] == [
+        "/usr/bin/verifier",
+        "--run",
+    ]
+
+
+def test_local_check_refuses_git_replace_refs(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _init(external_repo)
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(external_repo, "add", "app.py")
+    _git(external_repo, "commit", "-m", "candidate")
+    head = _git(external_repo, "rev-parse", "HEAD")
+    replacement = _git(external_repo, "rev-parse", "HEAD^")
+    _git(external_repo, "update-ref", f"refs/replace/{head}", replacement)
+    monkeypatch.setenv("GIT_NO_REPLACE_OBJECTS", "0")
+
+    from product.clients import local_golden_path as lgp
+
+    with pytest.raises(LocalCheckError) as guarded:
+        lgp._git_stdout(external_repo, "rev-parse", "HEAD^{tree}")
+    assert guarded.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
+
+    with pytest.raises(LocalCheckError) as raised:
+        check_repository(external_repo)
+
+    assert raised.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
+
+
+def test_process_verifier_records_and_runs_resolved_executable(external_repo: Path):
+    _v2_config(external_repo, [sys.executable, "-c", "pass"])
+    (external_repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    result = check_repository(external_repo)
+    receipt = json.loads(result["receipt_path"].read_text(encoding="utf-8"))
+    subject = receipt["evidence_artifacts"][0]["execution_subject"]
+
+    assert subject["executables"]["verifier"] == str(Path(sys.executable).absolute())
 
 
 # --- Issue #120 A: subject binding and receipt-check expectations ---------------
@@ -2551,13 +2691,31 @@ def test_sandbox_with_object_alternates_fails_closed_before_verifier(
     with pytest.raises(LocalCheckError) as raised:
         check_repository(external_repo)
 
-    assert raised.value.reason_code == "VERIFIER_SANDBOX_PREPARE_FAILED"
+    assert raised.value.reason_code == "GIT_REPOSITORY_UNTRUSTED"
     assert "alternates" in raised.value.detail
     assert not marker.exists(), "verifier must not run in a sandbox with object alternates"
     # Fail-closed still leaves a receipt and still cleans up the sandbox.
     assert raised.value.receipt_path is not None
     receipt = json.loads(raised.value.receipt_path.read_text(encoding="utf-8"))
     assert receipt["outcome"]["status"] == "FAILED_CLOSED"
-    assert receipt["outcome"]["reason_codes"] == ["VERIFIER_SANDBOX_PREPARE_FAILED"]
+    assert receipt["outcome"]["reason_codes"] == ["GIT_REPOSITORY_UNTRUSTED"]
     assert observed["sandboxes"][0]["alternates"] is True
     assert not observed["sandboxes"][0]["parent"].exists()
+
+
+def test_run_git_uses_environment_allowlist(
+    external_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from product.clients import local_golden_path as lgp
+
+    marker = external_repo.parent / "fsmonitor-ran"
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", f"touch {marker}; echo")
+    monkeypatch.setenv("GIT_DIR", str(external_repo.parent / "elsewhere"))
+    monkeypatch.setenv("DYLD_INSERT_LIBRARIES", "/nonexistent.dylib")
+    result = lgp._run_git(external_repo, "rev-parse", "--show-toplevel")
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).resolve() == external_repo.resolve()
+    lgp._run_git(external_repo, "status", "--porcelain")
+    assert not marker.exists()

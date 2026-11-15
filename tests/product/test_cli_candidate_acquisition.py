@@ -555,7 +555,11 @@ def test_exact_replay_returns_replayed_true_verifier_not_rerun(
         nonlocal verifier_call_count
         # Only count if it looks like a verifier (non-git) command.
         cmd = args[0] if args else kwargs.get("args", [])
-        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] != "git":
+        if (
+            isinstance(cmd, (list, tuple))
+            and cmd
+            and Path(str(cmd[0])).name != "git"
+        ):
             verifier_call_count += 1
         return original_subprocess_run(*args, **kwargs)
 

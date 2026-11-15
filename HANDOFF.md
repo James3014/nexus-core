@@ -1,23 +1,23 @@
 # HANDOFF
 
-更新：2026-10-13 · by Claude · HEAD `9942db7`
+更新：2026-11-15 · by Codex · HEAD `4b6fe3b`
 <!-- 規則見 AGENTS.md「Handoff」。上限 150 行；過期內容移到 docs/archive/HANDOFF-YYYY-MM.md。 -->
 
 ## ▶ 下一步（只放一件，必須帶 #Issue）
-#243 issue gate 診斷改善：`BASE_REF_NOT_ANCESTOR` 要用最新 base 還是 merge-base，等 Owner 決定；之後讓錯誤訊息直接印出 rebase 目標與正確的 evidence-universe marker。
+#233 等 Nexus-new#1750 的 authority 來源設計定案後，再處理 runtime 將 authority/approval/signing 寫死為 True 的剩餘部分。
 
 ## 進行中
-- #250：issue gate 先讀 live PR 狀態；PR 已合併/關閉時給中性 `PR_ALREADY_CLOSED_SKIPPED`（不是 PASS），receipt-verify 只在「已合併且 head 相同」時放行。PR 已開，等 Owner 審；合併後 Nexus-new 要升 Core pin 並在 run→verify 傳 `gate-outcome`。
+- 無。
 
 ## 待確認（沒有 Issue 號）
-- Nexus Verify 的 Sigstore 驗證沒有做成 `[verify]` extra：改 `uv.lock` 會破壞 `python-oci-pytest-v1` 的鎖定 digest。要加 extra 必須同時重新釘選該 profile。
+- #317 round-2 follow-up: nested `.git` checks are case-insensitive, history safety flags survive leading `-c` options, and Python interpreter name variants use the trusted interpreter. New regressions were red against the reviewed implementation (14 failed) and green after the fixes (18 passed). `uv run pytest -q tests/product/test_trusted_git_structure.py`: 121 passed; `uv run ruff check product tests`: passed with a workspace-local UV cache. No commit or push.
 
-## 卡住 / 注意
-- #231 已完成（PR #242）：Nexus Verify 只有在 receipt 的 Sigstore bundle 驗證通過時才回 APPLIES/VERIFIED（簽署者：subject repo 的 `nexus-core-issue-completion.yml@refs/heads/main`），否則回 UNVERIFIABLE（`RECEIPT_NOT_AUTHENTICATED` / `RECEIPT_AUTHENTICATION_UNAVAILABLE`）。沒有安裝 `sigstore` 時一律 fail-closed。schema 升為 v2。
-- #238 已完成（PR #239）：本機 `check` / `issue-check` 新增 `--expect-config-commit`；沒有釘選的 base-ref 標成 `base-ref, unpinned`，不再標 `trusted`。屬安全邊界變更，Owner 已同意（記錄在 #238）。
-- Golden Behavior Corpus（#236、#240）：56 個案例全部有測試覆蓋，沒有剩下的 finding。執行方式：`uv run python scripts/golden_behavior_eval.py`。
-- `test_verifier_timeout_kills_backgrounded_grandchildren` 會掃整台機器的 `sleep 31.7`。如果別的行程的 argv 剛好含這段文字，測試會誤判失敗。
-- #233 剩下的「政策條件」部分（runtime 把 authority/approval/signing 寫死為 True）：等 Nexus-new#1750 的 authority 來源設計定案再做，Owner 已決定先不動。
-- strict pyright：`product/` 下每個模組都要有 `# pyright: strict` 檔頭，新增模組也要加。全域 `typeCheckingMode` 刻意維持 `basic`。
-- #46、#47、#51、#65 是產品、法務、發佈層級的 P1，涉及公開宣稱或 release，需要 Owner 決定。
-- 本 repo 只擁有 Evidence Trust 與 Completion；其他 carrying layer 不是額外的真相權威。
+## 完成
+- #243 已完成（PR #249）：local Golden Path 以 trusted base tip 綁定 config，使用唯一 merge-base 作為 source revision。
+- #250 已完成（PR #253）：run 開始時 PR 已關閉回傳中性 `PR_ALREADY_CLOSED_SKIPPED`，不是 PASS。
+- #231 已完成（PR #242）：receipt Sigstore bundle 驗證未通過時回 UNVERIFIABLE；schema v2。
+- #238 已完成（PR #239）：本機 `check` / `issue-check` 支援 `--expect-config-commit`，未釘選的 base-ref 不標為 trusted。
+- Golden Behavior Corpus（#236、#240）：56 個案例有測試覆蓋；執行方式：`uv run python scripts/golden_behavior_eval.py`。
+- `test_verifier_timeout_kills_backgrounded_grandchildren` 會掃整台機器的 `sleep 31.7`；其他行程 argv 若含此字串，測試可能誤判。
+- #46、#47、#51、#65 涉及產品、法務或發佈層級宣稱；需要 Owner 決定。
+- nexus-core 只擁有 Evidence Trust 與 Completion；其他 carrying layer 不是額外真相權威。

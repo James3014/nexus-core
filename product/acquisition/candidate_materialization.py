@@ -47,6 +47,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, cast
 
+from product.acquisition.trusted_git import (
+    git_subprocess_env,
+    trusted_git,
+    trusted_git_argv,
+    validate_git_repository,
+    verify_git_repository_snapshot,
+)
 from product.protocol import PUBLIC_PROTOCOL_VERSION
 from product.protocol.generic_verification import (
     GENERIC_VERIFICATION_REQUEST_SCHEMA_ID,
@@ -205,12 +212,21 @@ def _run_git(
     env: Mapping[str, str] | None = None,
     text: bool = True,
 ) -> subprocess.CompletedProcess[Any]:
-    cmd_env = os.environ.copy()
-    if env:
-        cmd_env.update(env)
+    cmd_env = git_subprocess_env(env)
     try:
-        return subprocess.run(
-            ["git", *args],
+        git_identity = trusted_git(cmd_env)
+    except RuntimeError as exc:
+        raise CandidateAcquisitionError(
+            "GIT_UNAVAILABLE", str(exc)
+        ) from exc
+    executable = str(git_identity["path"])
+    try:
+        snapshot = validate_git_repository(executable, cwd)
+        command = trusted_git_argv(executable, *args, cwd=cwd)
+        command[0] = "git"
+        result = subprocess.run(
+            command,
+            executable=executable,
             cwd=cwd,
             env=cmd_env,
             capture_output=True,
@@ -218,10 +234,28 @@ def _run_git(
             check=False,
             timeout=GIT_COMMAND_TIMEOUT_SECONDS,
         )
+        result.args = [executable, *command[1:]]
+        current = validate_git_repository(executable, cwd)
+        verify_git_repository_snapshot(snapshot, current)
+        return result
     except subprocess.TimeoutExpired as exc:
         raise CandidateAcquisitionError("GIT_TIMEOUT", str(exc)) from exc
     except OSError as exc:
         raise CandidateAcquisitionError("GIT_UNAVAILABLE", str(exc)) from exc
+    except ValueError as exc:
+        raise CandidateAcquisitionError("GIT_REPOSITORY_UNTRUSTED", str(exc)) from exc
+
+
+def _assert_no_git_replace_refs(repo: Path) -> None:
+    result = _run_git(repo, "for-each-ref", "--format=%(refname)", "refs/replace/")
+    if result.returncode != 0:
+        raise CandidateAcquisitionError(
+            "GIT_REPLACE_REFS_CHECK_FAILED", (result.stderr or "").strip()
+        )
+    if result.stdout.strip():
+        raise CandidateAcquisitionError(
+            "GIT_REPLACE_REFS_PRESENT", "refs/replace/* are not permitted for acquisition"
+        )
 
 
 def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
@@ -958,6 +992,8 @@ def acquire_and_verify_candidate(
     # G+H: Exact readback only after all caller-supplied request material has
     # been validated against its bound hashes.
     # -----------------------------------------------------------------------
+    repo = request.repo_path.resolve()
+    _assert_no_git_replace_refs(repo)
     existing = _find_receipt_by_request_hash(
         request.receipt_directory, request.request_hash
     )
@@ -984,8 +1020,6 @@ def acquire_and_verify_candidate(
             / _receipt_path_for(existing),
             replayed=True,
         )
-
-    repo = request.repo_path.resolve()
 
     # -----------------------------------------------------------------------
     # 4. Determine source tree from the expected_source_identity commit.
@@ -1150,6 +1184,8 @@ def acquire_and_verify_candidate(
         "source_identity": request.expected_source_identity,
         "contract_hash": request.expected_contract_hash,
         "profile_hash": request.expected_profile_hash,
+        "executables": {"git": trusted_git(os.environ)},
+        "git_replace_refs_check": "PASS",
         "change_set_hash": actual_cs_hash,
         "change_manifest_hash": change_manifest_hash(manifest),
         "core_response": core_response,
