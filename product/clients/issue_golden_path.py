@@ -93,14 +93,14 @@ def _repo_root(path: str | Path) -> Path:
     result = _run_git(Path(path).resolve(), "rev-parse", "--show-toplevel")
     if result.returncode != 0:
         raise LocalCheckError("NOT_A_GIT_REPOSITORY", (result.stderr or "").strip())
-    return Path(result.stdout.strip()).resolve()
+    return Path(cast(str, result.stdout).strip()).resolve()
 
 
 def _origin_github_repo(repo: Path) -> str | None:
     result = _run_git(repo, "remote", "get-url", "origin")
     if result.returncode != 0:
         return None
-    value = result.stdout.strip()
+    value = cast(str, result.stdout).strip()
     if value.startswith("git@github.com:"):
         value = value.removeprefix("git@github.com:")
     elif value.startswith("ssh://git@github.com/"):

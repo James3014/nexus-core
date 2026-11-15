@@ -410,7 +410,7 @@ def trusted_git(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Select Git by env, root-owned admin config, then trusted absolute defaults."""
     values = os.environ if env is None else env
     uid = os.geteuid() if hasattr(os, "geteuid") else os.getuid()
-    groups = set(os.getgroups()) if hasattr(os, "getgroups") else set()
+    groups: set[int] = set(os.getgroups()) if hasattr(os, "getgroups") else set()
     groups.add(os.getegid() if hasattr(os, "getegid") else os.getgid())
 
     def caller_writable(info: os.stat_result) -> bool:
